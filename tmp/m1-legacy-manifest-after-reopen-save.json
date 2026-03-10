@@ -1,0 +1,69 @@
+﻿{
+
+    "id":  "doc-1772990795377-463667",
+
+    "title":  "未命名笔记M1-legacy-blank",
+
+    "documentType":  "blank",
+
+    "documentMode":  "paged",
+
+    "renderBackend":  "opengles",
+
+    "schemaVersion":  1,
+
+    "activePageId":  "page-0",
+
+    "pages":  [
+
+                  {
+
+                      "id":  "page-0",
+
+                      "pageTemplateId":  "blank",
+
+                      "pageSizeId":  "letter_optimized",
+
+                      "order":  0,
+
+                      "paperBackgroundId":  "plain_white",
+
+                      "pageKind":  "blank"
+
+                  }
+
+              ],
+
+    "pageTemplateId":  "blank",
+
+    "pageSizeId":  "letter_optimized",
+
+    "paperBackgroundId":  "plain_white",
+
+    "folderId":  "inbox",
+
+    "coverPage":  0,
+
+    "coverVersion":  1,
+
+    "isFavorite":  false,
+
+    "isTrashed":  false,
+
+    "createdAt":  1772990795377,
+
+    "updatedAt":  1772990795377,
+
+    "openedAt":  1772990795377,
+
+    "trashedAt":  0,
+
+    "tags":  [
+
+
+
+             ],
+
+    "previewSummary":  "legacy-keyword-m1"
+
+}

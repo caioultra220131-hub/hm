@@ -1,0 +1,14 @@
+{
+  "id": "preview-store.richer-payload",
+  "title": "Stored preview richer payload",
+  "documentType": "hybrid",
+  "documentMode": "paged",
+  "previewSummary": "Richer stored preview should prefer raster while keeping summary and badges stable.",
+  "previewFileState": "present",
+  "expected": {
+    "previewStatus": "ready",
+    "cardPath": "raster",
+    "searchUsesPreviewSummary": true
+  }
+}
+

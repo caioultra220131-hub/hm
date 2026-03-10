@@ -1,0 +1,30 @@
+{
+  "id": "doc-1773043282654-385361",
+  "title": "PDF 批注演示",
+  "documentType": "pdf",
+  "documentMode": "paged",
+  "renderBackend": "skia",
+  "schemaVersion": 1,
+  "activePageId": "",
+  "pages": [],
+  "pageTemplateId": "blank",
+  "pageSizeId": "letter_optimized",
+  "paperBackgroundId": "plain_white",
+  "folderId": "work",
+  "coverPage": 0,
+  "coverVersion": 1,
+  "isFavorite": false,
+  "isTrashed": false,
+  "createdAt": 1773043282654,
+  "updatedAt": 1773043282754,
+  "openedAt": 1773043282654,
+  "trashedAt": 0,
+  "tags": [
+    {
+      "id": "tag-pdf",
+      "title": "PDF",
+      "color": "#FF6B4A"
+    }
+  ],
+  "previewSummary": "PDF 批注 叠加源 PDF 页面、墨迹层和导出结果。 保留页码引用 保持导出标记同步"
+}

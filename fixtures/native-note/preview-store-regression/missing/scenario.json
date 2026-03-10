@@ -1,0 +1,14 @@
+{
+  "id": "preview-store.missing",
+  "title": "Stored preview missing",
+  "documentType": "blank",
+  "documentMode": "paged",
+  "previewSummary": "Missing preview file should fall back without breaking homepage summary search.",
+  "previewFileState": "missing",
+  "expected": {
+    "previewStatus": "fallback",
+    "cardPath": "vector-fallback",
+    "searchUsesPreviewSummary": true
+  }
+}
+

@@ -1,0 +1,135 @@
+{
+  "schemaVersion": 2,
+  "previewSchemaVersion": 2,
+  "generatedAt": 1710005000000,
+  "summary": "Hybrid card with raster thumbnail and structured page contract.",
+  "nativeSummary": "Hybrid card with raster thumbnail and structured page contract.",
+  "previewLabel": "paged/opengles",
+  "type": "hybrid",
+  "source": "hybrid",
+  "previewStatus": "ready",
+  "status": "ready",
+  "targetMode": "page0",
+  "coverPageId": "page-0",
+  "pageIds": [
+    "page-0"
+  ],
+  "layers": [
+    "pdf",
+    "ink"
+  ],
+  "coordinateSpace": "page-surface",
+  "targetBounds": {
+    "minX": 0,
+    "minY": 0,
+    "maxX": 612,
+    "maxY": 792
+  },
+  "layout": {
+    "mode": "paged",
+    "pageCount": 1,
+    "documentBounds": {
+      "minX": 0,
+      "minY": 0,
+      "maxX": 612,
+      "maxY": 792
+    },
+    "pages": [
+      {
+        "pageId": "page-0",
+        "pageIndex": 0,
+        "width": 612,
+        "height": 792,
+        "bounds": {
+          "minX": 0,
+          "minY": 0,
+          "maxX": 612,
+          "maxY": 792
+        },
+        "backgroundId": "paper/cornell",
+        "guideKind": "cornell"
+      }
+    ]
+  },
+  "checkpointCount": 6,
+  "objectCount": 4,
+  "pageIndex": 0,
+  "documentMode": "paged",
+  "renderBackend": "opengles",
+  "nativeStatus": "ready",
+  "renderWidth": 640,
+  "renderHeight": 828,
+  "raster": {
+    "mimeType": "image/png",
+    "uri": "file:///virtual-fixture/preview-card-raster.png",
+    "width": 640,
+    "height": 828
+  },
+  "pageContract": {
+    "schemaVersion": 1,
+    "pageId": "page-0",
+    "pageTemplateId": "cornell",
+    "pageSizeId": "letter_optimized",
+    "widthPt": 612,
+    "heightPt": 792,
+    "paperBackgroundId": "paper/cornell",
+    "fill": "#FFFDF8",
+    "accent": "#C47E2F",
+    "guideKind": "cornell",
+    "primitives": [
+      {
+        "id": "header",
+        "kind": "header",
+        "x": 0.06,
+        "y": 0.05,
+        "width": 0.88,
+        "height": 0.08,
+        "fill": "#F6E7D0",
+        "opacity": 0.6
+      },
+      {
+        "id": "divider",
+        "kind": "divider",
+        "x": 0.30,
+        "y": 0.15,
+        "width": 0.002,
+        "height": 0.60,
+        "stroke": "#C47E2F",
+        "strokeWidth": 1,
+        "opacity": 0.82
+      }
+    ],
+    "fillColor": "#FFFDF8",
+    "accentColor": "#C47E2F",
+    "guide": {
+      "guideKind": "cornell",
+      "contentBounds": {
+        "x": 0.06,
+        "y": 0.15,
+        "width": 0.88,
+        "height": 0.78
+      },
+      "spacingY": 0.06,
+      "secondarySpacingY": 0.10,
+      "dividerX": 0.30,
+      "dividerY": 0.76,
+      "headerHeight": 0.08
+    },
+    "cornell": {
+      "headerHeight": 0.08,
+      "cueColumnStart": 0.08,
+      "cueColumnWidth": 0.18,
+      "noteColumnStart": 0.32,
+      "noteColumnWidth": 0.60,
+      "summaryTop": 0.76,
+      "summaryHeight": 0.18,
+      "cueRuleSpacing": 0.10,
+      "noteRuleSpacing": 0.06
+    }
+  },
+  "extension": {
+    "fixtureTag": "richer-payload",
+    "notes": "Raster should win over vector on the homepage card."
+  }
+}
+

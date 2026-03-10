@@ -1,0 +1,74 @@
+{
+  "version": 1,
+  "documentMode": "paged",
+  "coordinateSpace": "legacy-page",
+  "coverPageId": "page-0",
+  "strokes": [
+    {
+      "id": "v1-paged-freehand-0",
+      "tool": "pen",
+      "color": "#1D2736",
+      "shapeType": "freehand",
+      "pageIndex": 0,
+      "pageId": "page-0",
+      "points": [
+        { "x": 82, "y": 114, "pressure": 0.42, "timestamp": 1710000000000 },
+        { "x": 104, "y": 128, "pressure": 0.46, "timestamp": 1710000000012 },
+        { "x": 138, "y": 146, "pressure": 0.48, "timestamp": 1710000000024 },
+        { "x": 172, "y": 152, "pressure": 0.44, "timestamp": 1710000000036 },
+        { "x": 206, "y": 140, "pressure": 0.40, "timestamp": 1710000000048 }
+      ]
+    },
+    {
+      "id": "v1-paged-rect-0",
+      "tool": "pen",
+      "color": "#0B57D0",
+      "shapeType": "rectangle",
+      "pageIndex": 0,
+      "pageId": "page-0",
+      "points": [
+        { "x": 292, "y": 182, "pressure": 0.50, "timestamp": 1710000000100 },
+        { "x": 456, "y": 182, "pressure": 0.50, "timestamp": 1710000000112 },
+        { "x": 456, "y": 332, "pressure": 0.50, "timestamp": 1710000000124 },
+        { "x": 292, "y": 332, "pressure": 0.50, "timestamp": 1710000000136 },
+        { "x": 292, "y": 182, "pressure": 0.50, "timestamp": 1710000000148 }
+      ]
+    },
+    {
+      "id": "v1-paged-segment-a",
+      "tool": "pen",
+      "color": "#D64545",
+      "shapeType": "freehand",
+      "pageIndex": 0,
+      "pageId": "page-0",
+      "originStrokeId": "v1-paged-erased-parent",
+      "segmentIndex": 0,
+      "segmentCount": 2,
+      "points": [
+        { "x": 104, "y": 418, "pressure": 0.38, "timestamp": 1710000000200 },
+        { "x": 132, "y": 424, "pressure": 0.40, "timestamp": 1710000000212 },
+        { "x": 164, "y": 430, "pressure": 0.43, "timestamp": 1710000000224 },
+        { "x": 196, "y": 434, "pressure": 0.39, "timestamp": 1710000000236 }
+      ]
+    },
+    {
+      "id": "v1-paged-segment-b",
+      "tool": "pen",
+      "color": "#D64545",
+      "shapeType": "freehand",
+      "pageIndex": 0,
+      "pageId": "page-0",
+      "originStrokeId": "v1-paged-erased-parent",
+      "segmentIndex": 1,
+      "segmentCount": 2,
+      "points": [
+        { "x": 246, "y": 439, "pressure": 0.41, "timestamp": 1710000000260 },
+        { "x": 278, "y": 442, "pressure": 0.43, "timestamp": 1710000000272 },
+        { "x": 308, "y": 444, "pressure": 0.39, "timestamp": 1710000000284 },
+        { "x": 338, "y": 446, "pressure": 0.37, "timestamp": 1710000000296 }
+      ]
+    }
+  ],
+  "predictions": []
+}
+

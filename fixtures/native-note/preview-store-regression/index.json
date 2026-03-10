@@ -1,0 +1,45 @@
+{
+  "scenarios": [
+    {
+      "id": "preview-store.missing",
+      "folder": "missing",
+      "state": "missing",
+      "documentType": "blank",
+      "documentMode": "paged",
+      "expectedPreviewStatus": "fallback",
+      "expectedCardPath": "vector-fallback",
+      "searchUsesPreviewSummary": true
+    },
+    {
+      "id": "preview-store.corrupt",
+      "folder": "corrupt",
+      "state": "corrupt",
+      "documentType": "blank",
+      "documentMode": "paged",
+      "expectedPreviewStatus": "fallback",
+      "expectedCardPath": "vector-fallback",
+      "searchUsesPreviewSummary": true
+    },
+    {
+      "id": "preview-store.legacy-summary-only",
+      "folder": "legacy-summary-only",
+      "state": "legacy",
+      "documentType": "blank",
+      "documentMode": "paged",
+      "expectedPreviewStatus": "ready",
+      "expectedCardPath": "vector-fallback",
+      "searchUsesPreviewSummary": true
+    },
+    {
+      "id": "preview-store.richer-payload",
+      "folder": "richer-payload",
+      "state": "rich",
+      "documentType": "hybrid",
+      "documentMode": "paged",
+      "expectedPreviewStatus": "ready",
+      "expectedCardPath": "raster",
+      "searchUsesPreviewSummary": true
+    }
+  ]
+}
+

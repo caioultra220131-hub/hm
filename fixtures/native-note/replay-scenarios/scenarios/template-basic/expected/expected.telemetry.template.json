@@ -1,0 +1,9 @@
+{
+  "artifact": "debugTelemetry",
+  "status": "placeholder",
+  "notes": [
+    "Replace with the native debug telemetry snapshot captured after replay.",
+    "Keep the telemetry expectation separate from the raw trace payload."
+  ]
+}
+

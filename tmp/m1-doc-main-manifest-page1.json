@@ -1,0 +1,49 @@
+{
+  "id": "doc-1772988557232-45128",
+  "title": "未命名笔记M1-paged-blankl",
+  "documentType": "blank",
+  "documentMode": "paged",
+  "renderBackend": "opengles",
+  "schemaVersion": 2,
+  "activePageId": "page-2",
+  "pages": [
+    {
+      "id": "page-0",
+      "order": 0,
+      "pageKind": "blank",
+      "pageTemplateId": "blank",
+      "pageSizeId": "letter_optimized",
+      "paperBackgroundId": "plain_white"
+    },
+    {
+      "id": "page-1",
+      "order": 1,
+      "pageKind": "blank",
+      "pageTemplateId": "blank",
+      "pageSizeId": "letter_optimized",
+      "paperBackgroundId": "plain_white"
+    },
+    {
+      "id": "page-2",
+      "order": 2,
+      "pageKind": "blank",
+      "pageTemplateId": "blank",
+      "pageSizeId": "letter_optimized",
+      "paperBackgroundId": "plain_white"
+    }
+  ],
+  "pageTemplateId": "blank",
+  "pageSizeId": "letter_optimized",
+  "paperBackgroundId": "plain_white",
+  "folderId": "inbox",
+  "coverPage": 2,
+  "coverVersion": 1,
+  "isFavorite": false,
+  "isTrashed": false,
+  "createdAt": 1772988557217,
+  "updatedAt": 1772989033344,
+  "openedAt": 1772988762060,
+  "trashedAt": 0,
+  "tags": [],
+  "previewSummary": "新的分页笔记本，适合结构化记录与解题。"
+}

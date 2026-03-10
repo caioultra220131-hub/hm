@@ -1,0 +1,9 @@
+{
+  "artifact": "sceneSnapshot",
+  "status": "placeholder",
+  "notes": [
+    "Replace with the exported scene snapshot captured after replay.",
+    "Bounds, page anchoring, object counts, and layering are good first compare points."
+  ]
+}
+

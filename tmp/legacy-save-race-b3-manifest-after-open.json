@@ -1,0 +1,33 @@
+{
+  "id": "doc-1773045697788-17727",
+  "title": "未命名笔记legacy-keyword-m1-race-b3",
+  "documentType": "blank",
+  "documentMode": "paged",
+  "renderBackend": "opengles",
+  "schemaVersion": 1,
+  "activePageId": "page-0",
+  "pages": [
+    {
+      "id": "page-0",
+      "pageTemplateId": "blank",
+      "pageSizeId": "letter_optimized",
+      "order": 0,
+      "paperBackgroundId": "plain_white",
+      "pageKind": "blank"
+    }
+  ],
+  "pageTemplateId": "blank",
+  "pageSizeId": "letter_optimized",
+  "paperBackgroundId": "plain_white",
+  "folderId": "inbox",
+  "coverPage": 0,
+  "coverVersion": 1,
+  "isFavorite": false,
+  "isTrashed": false,
+  "createdAt": 1773045697788,
+  "updatedAt": 1773046652274,
+  "openedAt": 1773046652274,
+  "trashedAt": 0,
+  "tags": [],
+  "previewSummary": "legacy-keyword-m1-race-b3"
+}

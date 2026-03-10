@@ -1,0 +1,44 @@
+{
+  "id": "doc-1773043282513-73465",
+  "title": "微积分笔记",
+  "documentType": "blank",
+  "documentMode": "paged",
+  "renderBackend": "opengles",
+  "schemaVersion": 2,
+  "activePageId": "page-0",
+  "pages": [
+    {
+      "id": "page-0",
+      "order": 0,
+      "pageKind": "blank",
+      "pageTemplateId": "blank",
+      "pageSizeId": "letter_optimized",
+      "paperBackgroundId": "plain_white"
+    }
+  ],
+  "pageTemplateId": "blank",
+  "pageSizeId": "letter_optimized",
+  "paperBackgroundId": "plain_white",
+  "folderId": "study",
+  "coverPage": 0,
+  "coverVersion": 1,
+  "isFavorite": true,
+  "isTrashed": false,
+  "createdAt": 1773043282513,
+  "updatedAt": 1773043282643,
+  "openedAt": 1773043282513,
+  "trashedAt": 0,
+  "tags": [
+    {
+      "id": "tag-math",
+      "title": "公式",
+      "color": "#00A3A3"
+    },
+    {
+      "id": "tag-class",
+      "title": "课堂",
+      "color": "#4C7DFF"
+    }
+  ],
+  "previewSummary": "极限与连续 重点：epsilon-delta 定义 作业：第 2 章第 3 到 8 题 [FormulaBlock]"
+}

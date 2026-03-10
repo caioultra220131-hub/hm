@@ -1,0 +1,14 @@
+{
+  "id": "preview-store.legacy-summary-only",
+  "title": "Stored preview legacy summary-only",
+  "documentType": "blank",
+  "documentMode": "paged",
+  "previewSummary": "Legacy stored preview should still resolve to a usable homepage card.",
+  "previewFileState": "present",
+  "expected": {
+    "previewStatus": "ready",
+    "cardPath": "vector-fallback",
+    "searchUsesPreviewSummary": true
+  }
+}
+

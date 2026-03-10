@@ -1,0 +1,69 @@
+{
+  "version": 2,
+  "documentMode": "infinite",
+  "coordinateSpace": "legacy-grid",
+  "strokes": [
+    {
+      "objectId": "v2-infinite-freehand-0",
+      "tool": "pen",
+      "colorHex": "#1D2736",
+      "shapeType": "freehand",
+      "pageIndex": null,
+      "points": [
+        { "x": -1260, "y": -260, "force": 0.47, "tiltX": 0.2, "tiltY": -0.1, "rollAngle": 0.01, "timeStamp": 1710003000000, "toolType": "pen" },
+        { "x": -1110, "y": -216, "force": 0.50, "tiltX": 0.2, "tiltY": -0.1, "rollAngle": 0.02, "timeStamp": 1710003000012, "toolType": "pen" },
+        { "x": -936, "y": -122, "force": 0.51, "tiltX": 0.2, "tiltY": -0.1, "rollAngle": 0.02, "timeStamp": 1710003000024, "toolType": "pen" },
+        { "x": -740, "y": 22, "force": 0.46, "tiltX": 0.1, "tiltY": 0.0, "rollAngle": 0.01, "timeStamp": 1710003000036, "toolType": "pen" },
+        { "x": -560, "y": 244, "force": 0.42, "tiltX": 0.1, "tiltY": 0.0, "rollAngle": 0.01, "timeStamp": 1710003000048, "toolType": "pen" }
+      ]
+    },
+    {
+      "objectId": "v2-infinite-rect-0",
+      "tool": "pen",
+      "colorHex": "#0B57D0",
+      "shapeType": "rectangle",
+      "pageIndex": null,
+      "points": [
+        { "x": 1320, "y": 610, "force": 0.52, "tiltX": 0.0, "tiltY": 0.0, "rollAngle": 0.00, "timeStamp": 1710003000100, "toolType": "pen" },
+        { "x": 2080, "y": 610, "force": 0.52, "tiltX": 0.0, "tiltY": 0.0, "rollAngle": 0.00, "timeStamp": 1710003000112, "toolType": "pen" },
+        { "x": 2080, "y": 1380, "force": 0.52, "tiltX": 0.0, "tiltY": 0.0, "rollAngle": 0.00, "timeStamp": 1710003000124, "toolType": "pen" },
+        { "x": 1320, "y": 1380, "force": 0.52, "tiltX": 0.0, "tiltY": 0.0, "rollAngle": 0.00, "timeStamp": 1710003000136, "toolType": "pen" },
+        { "x": 1320, "y": 610, "force": 0.52, "tiltX": 0.0, "tiltY": 0.0, "rollAngle": 0.00, "timeStamp": 1710003000148, "toolType": "pen" }
+      ]
+    },
+    {
+      "objectId": "v2-infinite-segment-a",
+      "tool": "pen",
+      "colorHex": "#D64545",
+      "shapeType": "freehand",
+      "pageIndex": null,
+      "originStrokeId": "v2-infinite-erased-parent",
+      "segmentIndex": 0,
+      "segmentCount": 2,
+      "points": [
+        { "x": -180, "y": 136, "force": 0.38, "tiltX": 0.1, "tiltY": 0.1, "rollAngle": 0.01, "timeStamp": 1710003000200, "toolType": "pen" },
+        { "x": -118, "y": 152, "force": 0.40, "tiltX": 0.1, "tiltY": 0.1, "rollAngle": 0.01, "timeStamp": 1710003000212, "toolType": "pen" },
+        { "x": -52, "y": 170, "force": 0.42, "tiltX": 0.1, "tiltY": 0.1, "rollAngle": 0.01, "timeStamp": 1710003000224, "toolType": "pen" },
+        { "x": 8, "y": 184, "force": 0.39, "tiltX": 0.1, "tiltY": 0.1, "rollAngle": 0.01, "timeStamp": 1710003000236, "toolType": "pen" }
+      ]
+    },
+    {
+      "objectId": "v2-infinite-segment-b",
+      "tool": "pen",
+      "colorHex": "#D64545",
+      "shapeType": "freehand",
+      "pageIndex": null,
+      "originStrokeId": "v2-infinite-erased-parent",
+      "segmentIndex": 1,
+      "segmentCount": 2,
+      "points": [
+        { "x": 116, "y": 210, "force": 0.40, "tiltX": 0.1, "tiltY": 0.1, "rollAngle": 0.01, "timeStamp": 1710003000260, "toolType": "pen" },
+        { "x": 202, "y": 230, "force": 0.42, "tiltX": 0.1, "tiltY": 0.1, "rollAngle": 0.01, "timeStamp": 1710003000272, "toolType": "pen" },
+        { "x": 286, "y": 248, "force": 0.40, "tiltX": 0.1, "tiltY": 0.1, "rollAngle": 0.01, "timeStamp": 1710003000284, "toolType": "pen" },
+        { "x": 372, "y": 266, "force": 0.37, "tiltX": 0.1, "tiltY": 0.1, "rollAngle": 0.01, "timeStamp": 1710003000296, "toolType": "pen" }
+      ]
+    }
+  ],
+  "predictions": []
+}
+

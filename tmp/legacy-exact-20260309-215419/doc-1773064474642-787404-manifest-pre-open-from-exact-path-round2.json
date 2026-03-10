@@ -1,0 +1,35 @@
+{
+    "id":  "doc-1773064474642-787404",
+    "title":  "未命名笔记legacy-exact-20260309-215419",
+    "documentType":  "blank",
+    "documentMode":  "paged",
+    "renderBackend":  "opengles",
+    "schemaVersion":  1,
+    "activePageId":  "page-0",
+    "pages":  [
+                  {
+                      "id":  "page-0",
+                      "pageTemplateId":  "blank",
+                      "pageSizeId":  "letter_optimized",
+                      "order":  0,
+                      "paperBackgroundId":  "plain_white",
+                      "pageKind":  "blank"
+                  }
+              ],
+    "pageTemplateId":  "blank",
+    "pageSizeId":  "letter_optimized",
+    "paperBackgroundId":  "plain_white",
+    "folderId":  "inbox",
+    "coverPage":  0,
+    "coverVersion":  1,
+    "isFavorite":  false,
+    "isTrashed":  false,
+    "createdAt":  1773064474642,
+    "updatedAt":  1773064484918,
+    "openedAt":  1773064479214,
+    "trashedAt":  0,
+    "tags":  [
+
+             ],
+    "previewSummary":  "legacy-exact-20260309-215419"
+}

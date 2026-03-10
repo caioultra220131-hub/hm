@@ -1,0 +1,9 @@
+{
+  "artifact": "previewSnapshot",
+  "status": "placeholder",
+  "notes": [
+    "Replace with the normalized preview snapshot captured after replay.",
+    "Do not treat this template as the final preview schema contract."
+  ]
+}
+

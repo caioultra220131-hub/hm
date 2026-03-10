@@ -1,0 +1,32 @@
+[
+  {
+    "caseId": "simulator.install-launch",
+    "status": "passed",
+    "lastRunAt": "2026-03-08",
+    "notes": "entry-default-unsigned.hap failed ABI mismatch on the x86_64 simulator, while entry-simulator-unsigned.hap installed successfully and aa start passed."
+  },
+  {
+    "caseId": "simulator.home-crud-search-open",
+    "status": "failed",
+    "lastRunAt": "2026-03-08",
+    "notes": "Home rendered to pages/Index, but the Documents area showed 'Failed to open the local library.' in simulator layout and screenshot capture. Routed to B-thread."
+  },
+  {
+    "caseId": "simulator.editor-source-preview-save-back",
+    "status": "blocked",
+    "lastRunAt": "2026-03-08",
+    "notes": "Blocked because the home library failure left no document list or Open entrypoint to reach the editor. Routed blocker to B-thread."
+  },
+  {
+    "caseId": "simulator.stub-ui",
+    "status": "blocked",
+    "lastRunAt": "2026-03-08",
+    "notes": "Blocked because the editor page could not be reached after the home library failure. Routed blocker to B-thread."
+  },
+  {
+    "caseId": "simulator.x86-placeholder-fixtures",
+    "status": "skipped-no-x86-placeholder",
+    "lastRunAt": "2026-03-08",
+    "notes": "No x86_64 placeholder preview/scene fixtures were provided by A-thread."
+  }
+]

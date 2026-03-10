@@ -1,0 +1,45 @@
+{
+  "documentType": "pdf",
+  "documentMode": "infinite",
+  "backend": "skia",
+  "status": "ready",
+  "previewSchemaVersion": 2,
+  "pageIndex": -1,
+  "targetMode": "scene-bounds",
+  "coordinateSpace": "scene-world",
+  "targetBounds": {
+    "minX": -240,
+    "minY": 120,
+    "maxX": 2240,
+    "maxY": 1700
+  },
+  "layout": {
+    "mode": "infinite",
+    "pageCount": 1,
+    "documentBounds": {
+      "minX": -240,
+      "minY": 120,
+      "maxX": 2240,
+      "maxY": 1700
+    },
+    "pages": [
+      {
+        "pageId": "page-0",
+        "pageIndex": 0,
+        "width": 936,
+        "height": 1328,
+        "bounds": {
+          "minX": 420,
+          "minY": 180,
+          "maxX": 1356,
+          "maxY": 1508
+        },
+        "backgroundId": "pdf/source-0",
+        "guideKind": "plain"
+      }
+    ]
+  },
+  "layers": ["pdf", "ink"],
+  "checkpointCount": 5,
+  "objectCount": 3
+}

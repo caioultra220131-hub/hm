@@ -1,0 +1,38 @@
+{
+  "caseId": "palm_rejection_with_finger_contact",
+  "traceName": "palm_rejection_with_finger_contact",
+  "title": "Device capture round 1 - palm rejection with finger contact",
+  "status": "blocked-by-device",
+  "captureRound": 1,
+  "tags": [
+    "device-capture",
+    "round1",
+    "palm-rejection",
+    "finger"
+  ],
+  "traceCapture": {
+    "schemaLock": "open",
+    "acceptedFormats": [
+      "json",
+      "jsonl",
+      "bin",
+      "opaque"
+    ],
+    "pathPattern": "recordings/*",
+    "source": "arkts-trace-button"
+  },
+  "expectedArtifacts": {
+    "previewSnapshot": "expected/replay.preview.json",
+    "sceneSnapshot": "expected/replay.scene.json",
+    "debugTelemetry": "expected/replay.telemetry.json"
+  },
+  "comparePlan": {
+    "stepsDocument": "compare/README.md"
+  },
+  "lastAttempt": {
+    "date": "2026-03-08",
+    "recording": "blocked-by-device",
+    "replay": "blocked-by-device",
+    "reason": "The active thread has moved to simulator smoke regression. Real stylus trace capture remains blocked by device."
+  }
+}

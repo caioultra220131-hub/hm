@@ -1,0 +1,46 @@
+{
+  "documentType": "hybrid",
+  "documentMode": "infinite",
+  "backend": "opengles",
+  "status": "ready",
+  "previewSchemaVersion": 2,
+  "pageIndex": -1,
+  "targetMode": "scene-bounds",
+  "coordinateSpace": "scene-world",
+  "targetBounds": {
+    "minX": -300,
+    "minY": -220,
+    "maxX": 2450,
+    "maxY": 1620
+  },
+  "layout": {
+    "mode": "infinite",
+    "pageCount": 1,
+    "documentBounds": {
+      "minX": -300,
+      "minY": -220,
+      "maxX": 2450,
+      "maxY": 1620
+    },
+    "pages": [
+      {
+        "pageId": "page-0",
+        "pageIndex": 0,
+        "width": 612,
+        "height": 792,
+        "bounds": {
+          "minX": 0,
+          "minY": 0,
+          "maxX": 612,
+          "maxY": 792
+        },
+        "backgroundId": "paper/grid",
+        "guideKind": "grid"
+      }
+    ]
+  },
+  "layers": ["pdf", "ink"],
+  "checkpointCount": 6,
+  "objectCount": 4
+}
+

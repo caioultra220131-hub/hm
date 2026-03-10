@@ -1,0 +1,130 @@
+{
+  "status": "ready",
+  "version": 1,
+  "engineId": "fixture-engine-hybrid-infinite",
+  "documentId": "fixture-doc-hybrid-infinite",
+  "title": "Hybrid Infinite Scene Bounds",
+  "documentType": "hybrid",
+  "mode": "infinite",
+  "backend": "opengles",
+  "coordinateSpace": "scene-world",
+  "checkpointCount": 6,
+  "objectCount": 4,
+  "layout": {
+    "mode": "infinite",
+    "pageCount": 1,
+    "documentBounds": {
+      "minX": -300,
+      "minY": -220,
+      "maxX": 2450,
+      "maxY": 1620
+    },
+    "pages": [
+      {
+        "pageId": "page-0",
+        "pageIndex": 0,
+        "width": 612,
+        "height": 792,
+        "bounds": {
+          "minX": 0,
+          "minY": 0,
+          "maxX": 612,
+          "maxY": 792
+        },
+        "backgroundId": "paper/grid",
+        "guideKind": "grid"
+      }
+    ]
+  },
+  "pages": [
+    {
+      "pageId": "page-0",
+      "pageIndex": 0,
+      "width": 612,
+      "height": 792,
+      "bounds": {
+        "minX": 0,
+        "minY": 0,
+        "maxX": 612,
+        "maxY": 792
+      },
+      "backgroundId": "paper/grid",
+      "guideKind": "grid"
+    }
+  ],
+  "objects": [
+    {
+      "id": "hybrid-inf-pdf",
+      "nodeType": "pdf-fragment",
+      "shapeType": "page",
+      "tool": "pdf",
+      "colorHex": "#FFFFFF",
+      "selected": false,
+      "pointCount": 0,
+      "closed": true,
+      "bounds": {
+        "minX": 640,
+        "minY": -120,
+        "maxX": 1490,
+        "maxY": 760
+      },
+      "layer": "pdf",
+      "pageIndex": null
+    },
+    {
+      "id": "hybrid-inf-freehand",
+      "nodeType": "ink",
+      "shapeType": "freehand",
+      "tool": "pen",
+      "colorHex": "#1D2736",
+      "selected": false,
+      "pointCount": 15,
+      "closed": false,
+      "bounds": {
+        "minX": -240,
+        "minY": 100,
+        "maxX": 180,
+        "maxY": 420
+      },
+      "layer": "ink",
+      "pageIndex": null
+    },
+    {
+      "id": "hybrid-inf-rect",
+      "nodeType": "ink",
+      "shapeType": "rectangle",
+      "tool": "pen",
+      "colorHex": "#0B57D0",
+      "selected": false,
+      "pointCount": 5,
+      "closed": true,
+      "bounds": {
+        "minX": 980,
+        "minY": 810,
+        "maxX": 1680,
+        "maxY": 1360
+      },
+      "layer": "ink",
+      "pageIndex": null
+    },
+    {
+      "id": "hybrid-inf-arrow",
+      "nodeType": "ink",
+      "shapeType": "arrow",
+      "tool": "pen",
+      "colorHex": "#D64545",
+      "selected": false,
+      "pointCount": 7,
+      "closed": false,
+      "bounds": {
+        "minX": 1880,
+        "minY": 240,
+        "maxX": 2320,
+        "maxY": 420
+      },
+      "layer": "ink",
+      "pageIndex": null
+    }
+  ]
+}
+

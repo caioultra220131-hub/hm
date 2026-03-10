@@ -1,0 +1,57 @@
+{
+  "status": "ready",
+  "version": 1,
+  "engineId": "fixture-engine-blank-paged",
+  "documentId": "fixture-doc-blank-paged",
+  "title": "Blank Paged Empty Scene",
+  "documentType": "blank",
+  "mode": "paged",
+  "backend": "opengles",
+  "coordinateSpace": "page-surface",
+  "checkpointCount": 0,
+  "objectCount": 0,
+  "layout": {
+    "mode": "paged",
+    "pageCount": 1,
+    "documentBounds": {
+      "minX": 0,
+      "minY": 0,
+      "maxX": 612,
+      "maxY": 792
+    },
+    "pages": [
+      {
+        "pageId": "page-0",
+        "pageIndex": 0,
+        "width": 612,
+        "height": 792,
+        "bounds": {
+          "minX": 0,
+          "minY": 0,
+          "maxX": 612,
+          "maxY": 792
+        },
+        "backgroundId": "paper/lined",
+        "guideKind": "lined"
+      }
+    ]
+  },
+  "pages": [
+    {
+      "pageId": "page-0",
+      "pageIndex": 0,
+      "width": 612,
+      "height": 792,
+      "bounds": {
+        "minX": 0,
+        "minY": 0,
+        "maxX": 612,
+        "maxY": 792
+      },
+      "backgroundId": "paper/lined",
+      "guideKind": "lined"
+    }
+  ],
+  "objects": []
+}
+

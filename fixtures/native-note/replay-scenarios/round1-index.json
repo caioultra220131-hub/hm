@@ -1,0 +1,67 @@
+[
+  {
+    "caseId": "pen_pressure_light_to_heavy",
+    "traceName": "pen_pressure_light_to_heavy",
+    "folder": "scenarios/pen-pressure-light-to-heavy",
+    "status": "blocked-by-device",
+    "captureRound": 1,
+    "artifacts": {
+      "recordings": "recordings/",
+      "previewSnapshot": "expected/replay.preview.json",
+      "sceneSnapshot": "expected/replay.scene.json",
+      "debugTelemetry": "expected/replay.telemetry.json"
+    }
+  },
+  {
+    "caseId": "pencil_tilt_shading",
+    "traceName": "pencil_tilt_shading",
+    "folder": "scenarios/pencil-tilt-shading",
+    "status": "blocked-by-device",
+    "captureRound": 1,
+    "artifacts": {
+      "recordings": "recordings/",
+      "previewSnapshot": "expected/replay.preview.json",
+      "sceneSnapshot": "expected/replay.scene.json",
+      "debugTelemetry": "expected/replay.telemetry.json"
+    }
+  },
+  {
+    "caseId": "double_tap_pen_eraser",
+    "traceName": "double_tap_pen_eraser",
+    "folder": "scenarios/double-tap-pen-eraser",
+    "status": "blocked-by-device",
+    "captureRound": 1,
+    "artifacts": {
+      "recordings": "recordings/",
+      "previewSnapshot": "expected/replay.preview.json",
+      "sceneSnapshot": "expected/replay.scene.json",
+      "debugTelemetry": "expected/replay.telemetry.json"
+    }
+  },
+  {
+    "caseId": "palm_rejection_with_finger_contact",
+    "traceName": "palm_rejection_with_finger_contact",
+    "folder": "scenarios/palm-rejection-with-finger-contact",
+    "status": "blocked-by-device",
+    "captureRound": 1,
+    "artifacts": {
+      "recordings": "recordings/",
+      "previewSnapshot": "expected/replay.preview.json",
+      "sceneSnapshot": "expected/replay.scene.json",
+      "debugTelemetry": "expected/replay.telemetry.json"
+    }
+  },
+  {
+    "caseId": "prediction_fast_zigzag",
+    "traceName": "prediction_fast_zigzag",
+    "folder": "scenarios/prediction-fast-zigzag",
+    "status": "blocked-by-device",
+    "captureRound": 1,
+    "artifacts": {
+      "recordings": "recordings/",
+      "previewSnapshot": "expected/replay.preview.json",
+      "sceneSnapshot": "expected/replay.scene.json",
+      "debugTelemetry": "expected/replay.telemetry.json"
+    }
+  }
+]

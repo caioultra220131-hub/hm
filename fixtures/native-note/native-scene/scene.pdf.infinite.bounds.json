@@ -1,0 +1,113 @@
+{
+  "status": "ready",
+  "version": 1,
+  "engineId": "fixture-engine-pdf-infinite",
+  "documentId": "fixture-doc-pdf-infinite",
+  "title": "PDF Infinite Scene Bounds",
+  "documentType": "pdf",
+  "mode": "infinite",
+  "backend": "skia",
+  "coordinateSpace": "scene-world",
+  "checkpointCount": 5,
+  "objectCount": 3,
+  "layout": {
+    "mode": "infinite",
+    "pageCount": 1,
+    "documentBounds": {
+      "minX": -240,
+      "minY": 120,
+      "maxX": 2240,
+      "maxY": 1700
+    },
+    "pages": [
+      {
+        "pageId": "page-0",
+        "pageIndex": 0,
+        "width": 936,
+        "height": 1328,
+        "bounds": {
+          "minX": 420,
+          "minY": 180,
+          "maxX": 1356,
+          "maxY": 1508
+        },
+        "backgroundId": "pdf/source-0",
+        "guideKind": "plain"
+      }
+    ]
+  },
+  "pages": [
+    {
+      "pageId": "page-0",
+      "pageIndex": 0,
+      "width": 936,
+      "height": 1328,
+      "bounds": {
+        "minX": 420,
+        "minY": 180,
+        "maxX": 1356,
+        "maxY": 1508
+      },
+      "backgroundId": "pdf/source-0",
+      "guideKind": "plain"
+    }
+  ],
+  "objects": [
+    {
+      "id": "pdf-page-0",
+      "nodeType": "pdf-page",
+      "shapeType": "page",
+      "tool": "pdf",
+      "colorHex": "#FFFFFF",
+      "selected": false,
+      "pointCount": 0,
+      "closed": true,
+      "bounds": {
+        "minX": 420,
+        "minY": 180,
+        "maxX": 1356,
+        "maxY": 1508
+      },
+      "layer": "pdf",
+      "pageIndex": 0,
+      "pageId": "page-0"
+    },
+    {
+      "id": "pdf-inf-ink-note",
+      "nodeType": "ink",
+      "shapeType": "freehand",
+      "tool": "pen",
+      "colorHex": "#1D2736",
+      "selected": false,
+      "pointCount": 14,
+      "closed": false,
+      "bounds": {
+        "minX": 560,
+        "minY": 320,
+        "maxX": 880,
+        "maxY": 480
+      },
+      "layer": "ink",
+      "pageIndex": 0,
+      "pageId": "page-0"
+    },
+    {
+      "id": "pdf-inf-callout",
+      "nodeType": "ink",
+      "shapeType": "arrow",
+      "tool": "pen",
+      "colorHex": "#D64545",
+      "selected": false,
+      "pointCount": 7,
+      "closed": false,
+      "bounds": {
+        "minX": -220,
+        "minY": 420,
+        "maxX": 320,
+        "maxY": 780
+      },
+      "layer": "ink",
+      "pageIndex": null
+    }
+  ]
+}

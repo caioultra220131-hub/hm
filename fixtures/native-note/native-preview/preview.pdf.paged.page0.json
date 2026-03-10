@@ -1,0 +1,47 @@
+{
+  "documentType": "pdf",
+  "documentMode": "paged",
+  "backend": "skia",
+  "status": "ready",
+  "previewSchemaVersion": 2,
+  "pageIndex": 0,
+  "pageId": "page-0",
+  "targetMode": "page0",
+  "coordinateSpace": "page-surface",
+  "targetBounds": {
+    "minX": 0,
+    "minY": 0,
+    "maxX": 612,
+    "maxY": 792
+  },
+  "layout": {
+    "mode": "paged",
+    "pageCount": 1,
+    "documentBounds": {
+      "minX": 0,
+      "minY": 0,
+      "maxX": 612,
+      "maxY": 792
+    },
+    "pages": [
+      {
+        "pageId": "page-0",
+        "pageIndex": 0,
+        "width": 612,
+        "height": 792,
+        "bounds": {
+          "minX": 0,
+          "minY": 0,
+          "maxX": 612,
+          "maxY": 792
+        },
+        "backgroundId": "pdf/source-0",
+        "guideKind": "plain"
+      }
+    ]
+  },
+  "layers": ["pdf", "ink"],
+  "checkpointCount": 4,
+  "objectCount": 3
+}
+

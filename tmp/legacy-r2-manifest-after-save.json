@@ -1,0 +1,33 @@
+﻿{
+  "id": "doc-1773041025181-689314",
+  "title": "未命名笔记legacy-keyword-m1-r2",
+  "documentType": "blank",
+  "documentMode": "infinite",
+  "renderBackend": "opengles",
+  "schemaVersion": 1,
+  "activePageId": "page-0",
+  "pages": [
+    {
+      "id": "page-0",
+      "pageTemplateId": "blank",
+      "pageSizeId": "letter_optimized",
+      "order": 0,
+      "paperBackgroundId": "plain_white",
+      "pageKind": "blank"
+    }
+  ],
+  "pageTemplateId": "blank",
+  "pageSizeId": "letter_optimized",
+  "paperBackgroundId": "plain_white",
+  "folderId": "inbox",
+  "coverPage": 0,
+  "coverVersion": 1,
+  "isFavorite": false,
+  "isTrashed": false,
+  "createdAt": 1773041025181,
+  "updatedAt": 1773041314306,
+  "openedAt": 1773041280410,
+  "trashedAt": 0,
+  "tags": [],
+  "previewSummary": "legacy-keyword-m1"
+}

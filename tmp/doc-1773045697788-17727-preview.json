@@ -1,0 +1,58 @@
+{
+  "schemaVersion": 2,
+  "previewSchemaVersion": 0,
+  "generatedAt": 1773045697788,
+  "summary": "新的分页笔记本，适合结构化记录与解题。",
+  "previewLabel": "paged/opengles",
+  "type": "blank",
+  "source": "markdown",
+  "previewStatus": "fallback",
+  "status": "summary-only",
+  "targetMode": "summary-only",
+  "coverPageId": "page-0",
+  "pageIds": [
+    "page-0"
+  ],
+  "layers": [
+    "ink"
+  ],
+  "pageIndex": 0,
+  "documentMode": "paged",
+  "renderBackend": "opengles",
+  "pageContract": {
+    "schemaVersion": 1,
+    "pageId": "page-0",
+    "pageTemplateId": "blank",
+    "pageSizeId": "letter_optimized",
+    "widthPt": 612.283,
+    "heightPt": 790.866,
+    "paperBackgroundId": "plain_white",
+    "fill": "#FFFFFF",
+    "accent": "#D0D5DD",
+    "guideKind": "plain",
+    "primitives": [
+      {
+        "id": "blank-safe-area",
+        "kind": "header",
+        "x": 0.04,
+        "y": 0.03,
+        "width": 0.92,
+        "height": 0.94,
+        "stroke": "#E5E7EB",
+        "strokeWidth": 0.5,
+        "opacity": 0.2
+      }
+    ],
+    "fillColor": "#FFFFFF",
+    "accentColor": "#D0D5DD",
+    "guide": {
+      "guideKind": "plain",
+      "contentBounds": {
+        "x": 0.04,
+        "y": 0.03,
+        "width": 0.92,
+        "height": 0.94
+      }
+    }
+  }
+}

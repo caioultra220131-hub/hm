@@ -1,0 +1,35 @@
+{
+    "id":  "doc-1773080836327-1374",
+    "title":  "未命名笔记",
+    "documentType":  "blank",
+    "documentMode":  "paged",
+    "renderBackend":  "opengles",
+    "schemaVersion":  1,
+    "activePageId":  "page-0",
+    "pages":  [
+                  {
+                      "id":  "page-0",
+                      "order":  0,
+                      "pageKind":  "blank",
+                      "pageTemplateId":  "blank",
+                      "pageSizeId":  "letter_optimized",
+                      "paperBackgroundId":  "plain_white"
+                  }
+              ],
+    "pageTemplateId":  "blank",
+    "pageSizeId":  "letter_optimized",
+    "paperBackgroundId":  "plain_white",
+    "folderId":  "inbox",
+    "coverPage":  0,
+    "coverVersion":  1,
+    "isFavorite":  false,
+    "isTrashed":  false,
+    "createdAt":  1773080836327,
+    "updatedAt":  1773080836327,
+    "openedAt":  1773080836327,
+    "trashedAt":  0,
+    "tags":  [
+
+             ],
+    "previewSummary":  "legacy-minimal-content-20260310"
+}

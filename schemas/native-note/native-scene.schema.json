@@ -1,0 +1,201 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.local/schemas/native-note/native-scene.schema.json",
+  "title": "Native scene fixture",
+  "type": "object",
+  "required": [
+    "status",
+    "version",
+    "engineId",
+    "documentId",
+    "title",
+    "documentType",
+    "mode",
+    "backend",
+    "checkpointCount",
+    "objectCount",
+    "pages",
+    "objects"
+  ],
+  "properties": {
+    "status": {
+      "type": "string"
+    },
+    "version": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "engineId": {
+      "type": "string"
+    },
+    "documentId": {
+      "type": "string"
+    },
+    "title": {
+      "type": "string"
+    },
+    "documentType": {
+      "type": "string",
+      "enum": ["blank", "pdf", "hybrid"]
+    },
+    "mode": {
+      "type": "string",
+      "enum": ["paged", "infinite"]
+    },
+    "backend": {
+      "type": "string"
+    },
+    "coordinateSpace": {
+      "type": "string"
+    },
+    "checkpointCount": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "objectCount": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "layout": {
+      "$ref": "#/$defs/layout"
+    },
+    "pages": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/page"
+      }
+    },
+    "objects": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/object"
+      }
+    }
+  },
+  "$defs": {
+    "bounds": {
+      "type": "object",
+      "required": ["minX", "minY", "maxX", "maxY"],
+      "properties": {
+        "minX": {
+          "type": "number"
+        },
+        "minY": {
+          "type": "number"
+        },
+        "maxX": {
+          "type": "number"
+        },
+        "maxY": {
+          "type": "number"
+        }
+      }
+    },
+    "page": {
+      "type": "object",
+      "required": ["pageId", "pageIndex"],
+      "properties": {
+        "pageId": {
+          "type": "string"
+        },
+        "pageIndex": {
+          "type": "integer"
+        },
+        "width": {
+          "type": "number"
+        },
+        "height": {
+          "type": "number"
+        },
+        "bounds": {
+          "$ref": "#/$defs/bounds"
+        },
+        "backgroundId": {
+          "type": "string"
+        },
+        "guideKind": {
+          "type": "string"
+        }
+      }
+    },
+    "layout": {
+      "type": "object",
+      "required": ["mode", "pageCount", "pages"],
+      "properties": {
+        "mode": {
+          "type": "string",
+          "enum": ["paged", "infinite"]
+        },
+        "pageCount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "documentBounds": {
+          "$ref": "#/$defs/bounds"
+        },
+        "pages": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/page"
+          }
+        }
+      }
+    },
+    "object": {
+      "type": "object",
+      "required": [
+        "id",
+        "nodeType",
+        "shapeType",
+        "tool",
+        "colorHex",
+        "selected",
+        "pointCount",
+        "closed",
+        "bounds",
+        "layer"
+      ],
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "nodeType": {
+          "type": "string"
+        },
+        "shapeType": {
+          "type": "string"
+        },
+        "tool": {
+          "type": "string"
+        },
+        "colorHex": {
+          "type": "string"
+        },
+        "selected": {
+          "type": "boolean"
+        },
+        "pointCount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "closed": {
+          "type": "boolean"
+        },
+        "bounds": {
+          "$ref": "#/$defs/bounds"
+        },
+        "layer": {
+          "type": "string",
+          "enum": ["pdf", "ink", "transient"]
+        },
+        "pageIndex": {
+          "type": ["integer", "null"]
+        },
+        "pageId": {
+          "type": "string"
+        }
+      }
+    }
+  }
+}
+

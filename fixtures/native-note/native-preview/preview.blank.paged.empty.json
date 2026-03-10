@@ -1,0 +1,47 @@
+{
+  "documentType": "blank",
+  "documentMode": "paged",
+  "backend": "opengles",
+  "status": "ready",
+  "previewSchemaVersion": 2,
+  "pageIndex": 0,
+  "pageId": "page-0",
+  "targetMode": "empty-scene",
+  "coordinateSpace": "page-surface",
+  "targetBounds": {
+    "minX": 0,
+    "minY": 0,
+    "maxX": 612,
+    "maxY": 792
+  },
+  "layout": {
+    "mode": "paged",
+    "pageCount": 1,
+    "documentBounds": {
+      "minX": 0,
+      "minY": 0,
+      "maxX": 612,
+      "maxY": 792
+    },
+    "pages": [
+      {
+        "pageId": "page-0",
+        "pageIndex": 0,
+        "width": 612,
+        "height": 792,
+        "bounds": {
+          "minX": 0,
+          "minY": 0,
+          "maxX": 612,
+          "maxY": 792
+        },
+        "backgroundId": "paper/lined",
+        "guideKind": "lined"
+      }
+    ]
+  },
+  "layers": ["ink"],
+  "checkpointCount": 0,
+  "objectCount": 0
+}
+

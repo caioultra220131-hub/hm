@@ -1,0 +1,207 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.local/schemas/native-note/legacy-strokes.schema.json",
+  "title": "Legacy strokes fixture",
+  "type": "object",
+  "required": [
+    "version",
+    "documentMode",
+    "coordinateSpace",
+    "strokes",
+    "predictions"
+  ],
+  "properties": {
+    "version": {
+      "type": "integer",
+      "enum": [1, 2]
+    },
+    "documentMode": {
+      "type": "string",
+      "enum": ["paged", "infinite"]
+    },
+    "coordinateSpace": {
+      "type": "string",
+      "enum": ["legacy-page", "legacy-grid"]
+    },
+    "coverPageId": {
+      "type": "string"
+    },
+    "strokes": {
+      "type": "array",
+      "minItems": 3
+    },
+    "predictions": {
+      "type": "array"
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "version": {
+            "const": 1
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "strokes": {
+            "items": {
+              "$ref": "#/$defs/legacyStrokeV1"
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "version": {
+            "const": 2
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "strokes": {
+            "items": {
+              "$ref": "#/$defs/legacyStrokeV2"
+            }
+          }
+        }
+      }
+    }
+  ],
+  "$defs": {
+    "baseStroke": {
+      "type": "object",
+      "required": ["tool", "shapeType", "points"],
+      "properties": {
+        "tool": {
+          "type": "string"
+        },
+        "shapeType": {
+          "type": "string"
+        },
+        "pageIndex": {
+          "type": ["integer", "null"]
+        },
+        "pageId": {
+          "type": "string"
+        },
+        "originStrokeId": {
+          "type": "string"
+        },
+        "segmentIndex": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "segmentCount": {
+          "type": "integer",
+          "minimum": 2
+        },
+        "points": {
+          "type": "array",
+          "minItems": 2
+        }
+      }
+    },
+    "pointV1": {
+      "type": "object",
+      "required": ["x", "y", "pressure", "timestamp"],
+      "properties": {
+        "x": {
+          "type": "number"
+        },
+        "y": {
+          "type": "number"
+        },
+        "pressure": {
+          "type": "number"
+        },
+        "timestamp": {
+          "type": "integer"
+        }
+      }
+    },
+    "pointV2": {
+      "type": "object",
+      "required": ["x", "y", "force", "tiltX", "tiltY", "rollAngle", "timeStamp", "toolType"],
+      "properties": {
+        "x": {
+          "type": "number"
+        },
+        "y": {
+          "type": "number"
+        },
+        "force": {
+          "type": "number"
+        },
+        "tiltX": {
+          "type": "number"
+        },
+        "tiltY": {
+          "type": "number"
+        },
+        "rollAngle": {
+          "type": "number"
+        },
+        "timeStamp": {
+          "type": "integer"
+        },
+        "toolType": {
+          "type": "string"
+        }
+      }
+    },
+    "legacyStrokeV1": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/baseStroke"
+        },
+        {
+          "type": "object",
+          "required": ["id", "color", "points"],
+          "properties": {
+            "id": {
+              "type": "string"
+            },
+            "color": {
+              "type": "string"
+            },
+            "points": {
+              "items": {
+                "$ref": "#/$defs/pointV1"
+              }
+            }
+          }
+        }
+      ]
+    },
+    "legacyStrokeV2": {
+      "allOf": [
+        {
+          "$ref": "#/$defs/baseStroke"
+        },
+        {
+          "type": "object",
+          "required": ["objectId", "colorHex", "points"],
+          "properties": {
+            "objectId": {
+              "type": "string"
+            },
+            "colorHex": {
+              "type": "string"
+            },
+            "points": {
+              "items": {
+                "$ref": "#/$defs/pointV2"
+              }
+            }
+          }
+        }
+      ]
+    }
+  }
+}
+

@@ -1,0 +1,16 @@
+{
+  "string": [
+    {
+      "name": "module_desc",
+      "value": "Advanced handwriting notebook module"
+    },
+    {
+      "name": "EntryAbility_desc",
+      "value": "Library and editor workspace"
+    },
+    {
+      "name": "EntryAbility_label",
+      "value": "Noteability"
+    }
+  ]
+}

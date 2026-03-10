@@ -1,0 +1,64 @@
+{
+  "status": "ready",
+  "version": 1,
+  "engineId": "fixture-engine-blank-infinite",
+  "documentId": "fixture-doc-blank-infinite",
+  "title": "Blank Infinite Scene Bounds",
+  "documentType": "blank",
+  "mode": "infinite",
+  "backend": "opengles",
+  "coordinateSpace": "scene-world",
+  "checkpointCount": 3,
+  "objectCount": 2,
+  "layout": {
+    "mode": "infinite",
+    "pageCount": 0,
+    "documentBounds": {
+      "minX": -2400,
+      "minY": -1600,
+      "maxX": 3600,
+      "maxY": 2800
+    },
+    "pages": []
+  },
+  "pages": [],
+  "objects": [
+    {
+      "id": "blank-inf-freehand",
+      "nodeType": "ink",
+      "shapeType": "freehand",
+      "tool": "pen",
+      "colorHex": "#1D2736",
+      "selected": false,
+      "pointCount": 16,
+      "closed": false,
+      "bounds": {
+        "minX": -1180,
+        "minY": -320,
+        "maxX": -620,
+        "maxY": 240
+      },
+      "layer": "ink",
+      "pageIndex": null
+    },
+    {
+      "id": "blank-inf-rect",
+      "nodeType": "ink",
+      "shapeType": "rectangle",
+      "tool": "pen",
+      "colorHex": "#0B57D0",
+      "selected": false,
+      "pointCount": 5,
+      "closed": true,
+      "bounds": {
+        "minX": 1400,
+        "minY": 600,
+        "maxX": 2150,
+        "maxY": 1380
+      },
+      "layer": "ink",
+      "pageIndex": null
+    }
+  ]
+}
+

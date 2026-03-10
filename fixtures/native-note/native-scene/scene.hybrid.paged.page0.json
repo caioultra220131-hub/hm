@@ -1,0 +1,134 @@
+{
+  "status": "ready",
+  "version": 1,
+  "engineId": "fixture-engine-hybrid-paged",
+  "documentId": "fixture-doc-hybrid-paged",
+  "title": "Hybrid Paged Page0 Scene",
+  "documentType": "hybrid",
+  "mode": "paged",
+  "backend": "opengles",
+  "coordinateSpace": "page-surface",
+  "checkpointCount": 5,
+  "objectCount": 4,
+  "layout": {
+    "mode": "paged",
+    "pageCount": 1,
+    "documentBounds": {
+      "minX": 0,
+      "minY": 0,
+      "maxX": 612,
+      "maxY": 792
+    },
+    "pages": [
+      {
+        "pageId": "page-0",
+        "pageIndex": 0,
+        "width": 612,
+        "height": 792,
+        "bounds": {
+          "minX": 0,
+          "minY": 0,
+          "maxX": 612,
+          "maxY": 792
+        },
+        "backgroundId": "paper/cornell",
+        "guideKind": "cornell"
+      }
+    ]
+  },
+  "pages": [
+    {
+      "pageId": "page-0",
+      "pageIndex": 0,
+      "width": 612,
+      "height": 792,
+      "bounds": {
+        "minX": 0,
+        "minY": 0,
+        "maxX": 612,
+        "maxY": 792
+      },
+      "backgroundId": "paper/cornell",
+      "guideKind": "cornell"
+    }
+  ],
+  "objects": [
+    {
+      "id": "hybrid-pdf-fragment",
+      "nodeType": "pdf-fragment",
+      "shapeType": "page",
+      "tool": "pdf",
+      "colorHex": "#FFFFFF",
+      "selected": false,
+      "pointCount": 0,
+      "closed": true,
+      "bounds": {
+        "minX": 84,
+        "minY": 120,
+        "maxX": 262,
+        "maxY": 312
+      },
+      "layer": "pdf",
+      "pageIndex": 0,
+      "pageId": "page-0"
+    },
+    {
+      "id": "hybrid-ink-note",
+      "nodeType": "ink",
+      "shapeType": "freehand",
+      "tool": "pen",
+      "colorHex": "#1D2736",
+      "selected": false,
+      "pointCount": 11,
+      "closed": false,
+      "bounds": {
+        "minX": 112,
+        "minY": 402,
+        "maxX": 274,
+        "maxY": 468
+      },
+      "layer": "ink",
+      "pageIndex": 0,
+      "pageId": "page-0"
+    },
+    {
+      "id": "hybrid-ink-ellipse",
+      "nodeType": "ink",
+      "shapeType": "ellipse",
+      "tool": "pen",
+      "colorHex": "#0B57D0",
+      "selected": false,
+      "pointCount": 5,
+      "closed": true,
+      "bounds": {
+        "minX": 318,
+        "minY": 188,
+        "maxX": 480,
+        "maxY": 338
+      },
+      "layer": "ink",
+      "pageIndex": 0,
+      "pageId": "page-0"
+    },
+    {
+      "id": "hybrid-ink-callout",
+      "nodeType": "ink",
+      "shapeType": "arrow",
+      "tool": "pen",
+      "colorHex": "#D64545",
+      "selected": false,
+      "pointCount": 6,
+      "closed": false,
+      "bounds": {
+        "minX": 342,
+        "minY": 486,
+        "maxX": 532,
+        "maxY": 602
+      },
+      "layer": "ink",
+      "pageIndex": 0,
+      "pageId": "page-0"
+    }
+  ]
+}
+

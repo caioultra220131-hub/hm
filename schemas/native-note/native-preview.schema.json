@@ -1,0 +1,142 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.local/schemas/native-note/native-preview.schema.json",
+  "title": "Native preview fixture",
+  "type": "object",
+  "required": [
+    "documentType",
+    "documentMode",
+    "status",
+    "previewSchemaVersion",
+    "pageIndex",
+    "targetMode",
+    "layers",
+    "checkpointCount",
+    "objectCount"
+  ],
+  "properties": {
+    "documentType": {
+      "type": "string",
+      "enum": ["blank", "pdf", "hybrid"]
+    },
+    "documentMode": {
+      "type": "string",
+      "enum": ["paged", "infinite"]
+    },
+    "backend": {
+      "type": "string"
+    },
+    "status": {
+      "type": "string"
+    },
+    "previewSchemaVersion": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "pageIndex": {
+      "type": "integer"
+    },
+    "pageId": {
+      "type": "string"
+    },
+    "targetMode": {
+      "type": "string",
+      "enum": ["empty-scene", "page0", "scene-bounds"]
+    },
+    "coordinateSpace": {
+      "type": "string"
+    },
+    "targetBounds": {
+      "$ref": "#/$defs/bounds"
+    },
+    "layout": {
+      "$ref": "#/$defs/layout"
+    },
+    "layers": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "enum": ["pdf", "ink", "transient"]
+      }
+    },
+    "checkpointCount": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "objectCount": {
+      "type": "integer",
+      "minimum": 0
+    }
+  },
+  "$defs": {
+    "bounds": {
+      "type": "object",
+      "required": ["minX", "minY", "maxX", "maxY"],
+      "properties": {
+        "minX": {
+          "type": "number"
+        },
+        "minY": {
+          "type": "number"
+        },
+        "maxX": {
+          "type": "number"
+        },
+        "maxY": {
+          "type": "number"
+        }
+      }
+    },
+    "page": {
+      "type": "object",
+      "required": ["pageId", "pageIndex"],
+      "properties": {
+        "pageId": {
+          "type": "string"
+        },
+        "pageIndex": {
+          "type": "integer"
+        },
+        "width": {
+          "type": "number"
+        },
+        "height": {
+          "type": "number"
+        },
+        "bounds": {
+          "$ref": "#/$defs/bounds"
+        },
+        "backgroundId": {
+          "type": "string"
+        },
+        "guideKind": {
+          "type": "string"
+        }
+      }
+    },
+    "layout": {
+      "type": "object",
+      "required": ["mode", "pageCount", "pages"],
+      "properties": {
+        "mode": {
+          "type": "string",
+          "enum": ["paged", "infinite"]
+        },
+        "pageCount": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "documentBounds": {
+          "$ref": "#/$defs/bounds"
+        },
+        "pages": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/page"
+          }
+        }
+      }
+    }
+  }
+}
+

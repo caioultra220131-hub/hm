@@ -1,0 +1,30 @@
+{
+  "id": "doc-1773043282772-946761",
+  "title": "无限画布草稿",
+  "documentType": "hybrid",
+  "documentMode": "infinite",
+  "renderBackend": "opengles",
+  "schemaVersion": 1,
+  "activePageId": "",
+  "pages": [],
+  "pageTemplateId": "blank",
+  "pageSizeId": "letter_optimized",
+  "paperBackgroundId": "plain_white",
+  "folderId": "inbox",
+  "coverPage": 0,
+  "coverVersion": 1,
+  "isFavorite": false,
+  "isTrashed": false,
+  "createdAt": 1773043282772,
+  "updatedAt": 1773043282869,
+  "openedAt": 1773043282772,
+  "trashedAt": 0,
+  "tags": [
+    {
+      "id": "tag-draft",
+      "title": "草稿",
+      "color": "#A069FF"
+    }
+  ],
+  "previewSummary": "灵感池 低时延笔迹预测 自动图形修正 Markdown 文本框 调色板与标签"
+}

@@ -1,0 +1,37 @@
+{
+  "caseId": "pen_pressure_light_to_heavy",
+  "traceName": "pen_pressure_light_to_heavy",
+  "title": "Device capture round 1 - pen pressure light to heavy",
+  "status": "blocked-by-device",
+  "captureRound": 1,
+  "tags": [
+    "device-capture",
+    "round1",
+    "pressure"
+  ],
+  "traceCapture": {
+    "schemaLock": "open",
+    "acceptedFormats": [
+      "json",
+      "jsonl",
+      "bin",
+      "opaque"
+    ],
+    "pathPattern": "recordings/*",
+    "source": "arkts-trace-button"
+  },
+  "expectedArtifacts": {
+    "previewSnapshot": "expected/replay.preview.json",
+    "sceneSnapshot": "expected/replay.scene.json",
+    "debugTelemetry": "expected/replay.telemetry.json"
+  },
+  "comparePlan": {
+    "stepsDocument": "compare/README.md"
+  },
+  "lastAttempt": {
+    "date": "2026-03-08",
+    "recording": "blocked-by-device",
+    "replay": "blocked-by-device",
+    "reason": "The active thread has moved to simulator smoke regression. Real stylus trace capture remains blocked by device."
+  }
+}

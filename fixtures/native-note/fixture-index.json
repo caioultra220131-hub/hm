@@ -1,0 +1,260 @@
+{
+  "legacyStrokes": [
+    {
+      "id": "strokes.v1.paged",
+      "file": "legacy-strokes/strokes.v1.paged.json",
+      "version": 1,
+      "mode": "paged",
+      "covers": [
+        "freehand",
+        "shape",
+        "segmented-after-partial-erase"
+      ]
+    },
+    {
+      "id": "strokes.v1.infinite",
+      "file": "legacy-strokes/strokes.v1.infinite.json",
+      "version": 1,
+      "mode": "infinite",
+      "covers": [
+        "freehand",
+        "shape",
+        "segmented-after-partial-erase"
+      ]
+    },
+    {
+      "id": "strokes.v2.paged",
+      "file": "legacy-strokes/strokes.v2.paged.json",
+      "version": 2,
+      "mode": "paged",
+      "covers": [
+        "freehand",
+        "shape",
+        "segmented-after-partial-erase"
+      ]
+    },
+    {
+      "id": "strokes.v2.infinite",
+      "file": "legacy-strokes/strokes.v2.infinite.json",
+      "version": 2,
+      "mode": "infinite",
+      "covers": [
+        "freehand",
+        "shape",
+        "segmented-after-partial-erase"
+      ]
+    }
+  ],
+  "nativePreview": [
+    {
+      "id": "preview.blank.paged.empty",
+      "file": "native-preview/preview.blank.paged.empty.json",
+      "documentType": "blank",
+      "mode": "paged",
+      "scenario": "empty-scene"
+    },
+    {
+      "id": "preview.blank.infinite.bounds",
+      "file": "native-preview/preview.blank.infinite.bounds.json",
+      "documentType": "blank",
+      "mode": "infinite",
+      "scenario": "scene-bounds"
+    },
+    {
+      "id": "preview.pdf.paged.page0",
+      "file": "native-preview/preview.pdf.paged.page0.json",
+      "documentType": "pdf",
+      "mode": "paged",
+      "scenario": "page0"
+    },
+    {
+      "id": "preview.pdf.infinite.bounds",
+      "file": "native-preview/preview.pdf.infinite.bounds.json",
+      "documentType": "pdf",
+      "mode": "infinite",
+      "scenario": "scene-bounds"
+    },
+    {
+      "id": "preview.hybrid.paged.page0",
+      "file": "native-preview/preview.hybrid.paged.page0.json",
+      "documentType": "hybrid",
+      "mode": "paged",
+      "scenario": "page0"
+    },
+    {
+      "id": "preview.hybrid.infinite.bounds",
+      "file": "native-preview/preview.hybrid.infinite.bounds.json",
+      "documentType": "hybrid",
+      "mode": "infinite",
+      "scenario": "scene-bounds"
+    }
+  ],
+  "nativeScene": [
+    {
+      "id": "scene.blank.paged.empty",
+      "file": "native-scene/scene.blank.paged.empty.json",
+      "documentType": "blank",
+      "mode": "paged",
+      "scenario": "empty-scene"
+    },
+    {
+      "id": "scene.blank.infinite.bounds",
+      "file": "native-scene/scene.blank.infinite.bounds.json",
+      "documentType": "blank",
+      "mode": "infinite",
+      "scenario": "scene-bounds"
+    },
+    {
+      "id": "scene.pdf.paged.page0",
+      "file": "native-scene/scene.pdf.paged.page0.json",
+      "documentType": "pdf",
+      "mode": "paged",
+      "scenario": "page0"
+    },
+    {
+      "id": "scene.pdf.infinite.bounds",
+      "file": "native-scene/scene.pdf.infinite.bounds.json",
+      "documentType": "pdf",
+      "mode": "infinite",
+      "scenario": "scene-bounds"
+    },
+    {
+      "id": "scene.hybrid.paged.page0",
+      "file": "native-scene/scene.hybrid.paged.page0.json",
+      "documentType": "hybrid",
+      "mode": "paged",
+      "scenario": "page0"
+    },
+    {
+      "id": "scene.hybrid.infinite.bounds",
+      "file": "native-scene/scene.hybrid.infinite.bounds.json",
+      "documentType": "hybrid",
+      "mode": "infinite",
+      "scenario": "scene-bounds"
+    }
+  ],
+  "previewStoreRegression": [
+    {
+      "id": "preview-store.missing",
+      "file": "preview-store-regression/missing",
+      "state": "missing"
+    },
+    {
+      "id": "preview-store.corrupt",
+      "file": "preview-store-regression/corrupt",
+      "state": "corrupt"
+    },
+    {
+      "id": "preview-store.legacy-summary-only",
+      "file": "preview-store-regression/legacy-summary-only",
+      "state": "legacy"
+    },
+    {
+      "id": "preview-store.richer-payload",
+      "file": "preview-store-regression/richer-payload",
+      "state": "rich"
+    }
+  ],
+  "replayScenarios": [
+    {
+      "id": "replay.template.basic",
+      "file": "replay-scenarios/scenarios/template-basic",
+      "status": "template"
+    },
+    {
+      "id": "pen_pressure_light_to_heavy",
+      "file": "replay-scenarios/scenarios/pen-pressure-light-to-heavy",
+      "status": "blocked-by-device",
+      "captureRound": 1
+    },
+    {
+      "id": "pencil_tilt_shading",
+      "file": "replay-scenarios/scenarios/pencil-tilt-shading",
+      "status": "blocked-by-device",
+      "captureRound": 1
+    },
+    {
+      "id": "double_tap_pen_eraser",
+      "file": "replay-scenarios/scenarios/double-tap-pen-eraser",
+      "status": "blocked-by-device",
+      "captureRound": 1
+    },
+    {
+      "id": "palm_rejection_with_finger_contact",
+      "file": "replay-scenarios/scenarios/palm-rejection-with-finger-contact",
+      "status": "blocked-by-device",
+      "captureRound": 1
+    },
+    {
+      "id": "prediction_fast_zigzag",
+      "file": "replay-scenarios/scenarios/prediction-fast-zigzag",
+      "status": "blocked-by-device",
+      "captureRound": 1
+    }
+  ],
+  "simulatorSmoke": [
+    {
+      "id": "simulator.install-launch",
+      "file": "simulator-smoke/index.json",
+      "status": "passed"
+    },
+    {
+      "id": "simulator.home-crud-search-open",
+      "file": "simulator-smoke/index.json",
+      "status": "pending-simulator-smoke"
+    },
+    {
+      "id": "simulator.editor-source-preview-save-back",
+      "file": "simulator-smoke/index.json",
+      "status": "pending-simulator-smoke"
+    },
+    {
+      "id": "simulator.stub-ui",
+      "file": "simulator-smoke/index.json",
+      "status": "pending-simulator-smoke"
+    },
+    {
+      "id": "simulator.x86-placeholder-fixtures",
+      "file": "simulator-smoke/index.json",
+      "status": "skipped-no-x86-placeholder"
+    }
+  ],
+  "simulatorPlaceholderFixtures": [
+    {
+      "id": "simulator-preview.x86_64",
+      "file": "simulator-preview",
+      "status": "skipped-no-x86-placeholder"
+    },
+    {
+      "id": "simulator-scene.x86_64",
+      "file": "simulator-scene",
+      "status": "skipped-no-x86-placeholder"
+    }
+  ],
+  "acceptanceCriteria": [
+    {
+      "id": "reopen-no-drift",
+      "description": "Reopen should preserve scene bounds and page anchoring."
+    },
+    {
+      "id": "surface-change-no-drift",
+      "description": "Surface resize or surface swap should not move content."
+    },
+    {
+      "id": "paged-page0-stable",
+      "description": "Paged notes should keep page-0 selection and bounds stable."
+    },
+    {
+      "id": "infinite-grid-stable",
+      "description": "Infinite grid coordinates should stay stable around origin and bounds."
+    },
+    {
+      "id": "pdf-below-ink",
+      "description": "PDF content should remain below ink in both preview and scene fixtures."
+    },
+    {
+      "id": "legacy-save-upgrades-format",
+      "description": "Legacy stroke packages should save back as the new format after migration."
+    }
+  ]
+}

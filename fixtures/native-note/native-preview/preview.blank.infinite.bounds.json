@@ -1,0 +1,31 @@
+{
+  "documentType": "blank",
+  "documentMode": "infinite",
+  "backend": "opengles",
+  "status": "ready",
+  "previewSchemaVersion": 2,
+  "pageIndex": -1,
+  "targetMode": "scene-bounds",
+  "coordinateSpace": "scene-world",
+  "targetBounds": {
+    "minX": -2400,
+    "minY": -1600,
+    "maxX": 3600,
+    "maxY": 2800
+  },
+  "layout": {
+    "mode": "infinite",
+    "pageCount": 0,
+    "documentBounds": {
+      "minX": -2400,
+      "minY": -1600,
+      "maxX": 3600,
+      "maxY": 2800
+    },
+    "pages": []
+  },
+  "layers": ["ink"],
+  "checkpointCount": 3,
+  "objectCount": 2
+}
+

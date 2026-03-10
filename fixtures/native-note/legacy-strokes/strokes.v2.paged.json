@@ -1,0 +1,74 @@
+{
+  "version": 2,
+  "documentMode": "paged",
+  "coordinateSpace": "legacy-page",
+  "coverPageId": "page-0",
+  "strokes": [
+    {
+      "objectId": "v2-paged-freehand-0",
+      "tool": "pen",
+      "colorHex": "#1D2736",
+      "shapeType": "freehand",
+      "pageIndex": 0,
+      "pageId": "page-0",
+      "points": [
+        { "x": 88, "y": 116, "force": 0.46, "tiltX": 0.4, "tiltY": -0.1, "rollAngle": 0.01, "timeStamp": 1710002000000, "toolType": "pen" },
+        { "x": 122, "y": 138, "force": 0.50, "tiltX": 0.5, "tiltY": -0.1, "rollAngle": 0.01, "timeStamp": 1710002000012, "toolType": "pen" },
+        { "x": 162, "y": 154, "force": 0.53, "tiltX": 0.5, "tiltY": -0.2, "rollAngle": 0.02, "timeStamp": 1710002000024, "toolType": "pen" },
+        { "x": 198, "y": 150, "force": 0.49, "tiltX": 0.4, "tiltY": -0.1, "rollAngle": 0.02, "timeStamp": 1710002000036, "toolType": "pen" },
+        { "x": 234, "y": 132, "force": 0.44, "tiltX": 0.3, "tiltY": 0.0, "rollAngle": 0.01, "timeStamp": 1710002000048, "toolType": "pen" }
+      ]
+    },
+    {
+      "objectId": "v2-paged-ellipse-0",
+      "tool": "pen",
+      "colorHex": "#0B57D0",
+      "shapeType": "ellipse",
+      "pageIndex": 0,
+      "pageId": "page-0",
+      "points": [
+        { "x": 344, "y": 214, "force": 0.51, "tiltX": 0.0, "tiltY": 0.0, "rollAngle": 0.00, "timeStamp": 1710002000100, "toolType": "pen" },
+        { "x": 414, "y": 164, "force": 0.51, "tiltX": 0.0, "tiltY": 0.0, "rollAngle": 0.00, "timeStamp": 1710002000112, "toolType": "pen" },
+        { "x": 484, "y": 214, "force": 0.51, "tiltX": 0.0, "tiltY": 0.0, "rollAngle": 0.00, "timeStamp": 1710002000124, "toolType": "pen" },
+        { "x": 414, "y": 264, "force": 0.51, "tiltX": 0.0, "tiltY": 0.0, "rollAngle": 0.00, "timeStamp": 1710002000136, "toolType": "pen" },
+        { "x": 344, "y": 214, "force": 0.51, "tiltX": 0.0, "tiltY": 0.0, "rollAngle": 0.00, "timeStamp": 1710002000148, "toolType": "pen" }
+      ]
+    },
+    {
+      "objectId": "v2-paged-segment-a",
+      "tool": "pen",
+      "colorHex": "#D64545",
+      "shapeType": "freehand",
+      "pageIndex": 0,
+      "pageId": "page-0",
+      "originStrokeId": "v2-paged-erased-parent",
+      "segmentIndex": 0,
+      "segmentCount": 2,
+      "points": [
+        { "x": 118, "y": 420, "force": 0.39, "tiltX": 0.2, "tiltY": 0.1, "rollAngle": 0.01, "timeStamp": 1710002000200, "toolType": "pen" },
+        { "x": 156, "y": 428, "force": 0.41, "tiltX": 0.2, "tiltY": 0.1, "rollAngle": 0.01, "timeStamp": 1710002000212, "toolType": "pen" },
+        { "x": 192, "y": 434, "force": 0.43, "tiltX": 0.1, "tiltY": 0.1, "rollAngle": 0.01, "timeStamp": 1710002000224, "toolType": "pen" },
+        { "x": 224, "y": 438, "force": 0.38, "tiltX": 0.1, "tiltY": 0.1, "rollAngle": 0.01, "timeStamp": 1710002000236, "toolType": "pen" }
+      ]
+    },
+    {
+      "objectId": "v2-paged-segment-b",
+      "tool": "pen",
+      "colorHex": "#D64545",
+      "shapeType": "freehand",
+      "pageIndex": 0,
+      "pageId": "page-0",
+      "originStrokeId": "v2-paged-erased-parent",
+      "segmentIndex": 1,
+      "segmentCount": 2,
+      "points": [
+        { "x": 272, "y": 441, "force": 0.40, "tiltX": 0.1, "tiltY": 0.1, "rollAngle": 0.01, "timeStamp": 1710002000260, "toolType": "pen" },
+        { "x": 304, "y": 444, "force": 0.41, "tiltX": 0.1, "tiltY": 0.1, "rollAngle": 0.01, "timeStamp": 1710002000272, "toolType": "pen" },
+        { "x": 338, "y": 446, "force": 0.39, "tiltX": 0.1, "tiltY": 0.1, "rollAngle": 0.01, "timeStamp": 1710002000284, "toolType": "pen" },
+        { "x": 370, "y": 448, "force": 0.37, "tiltX": 0.1, "tiltY": 0.1, "rollAngle": 0.01, "timeStamp": 1710002000296, "toolType": "pen" }
+      ]
+    }
+  ],
+  "predictions": []
+}
+

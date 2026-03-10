@@ -1,0 +1,28 @@
+{
+  "caseId": "replay.template.basic",
+  "title": "Template case for record -> replay -> compare",
+  "status": "template",
+  "tags": [
+    "template",
+    "replay"
+  ],
+  "traceCapture": {
+    "schemaLock": "open",
+    "acceptedFormats": [
+      "json",
+      "jsonl",
+      "bin",
+      "opaque"
+    ],
+    "pathPattern": "recordings/*"
+  },
+  "expectedArtifacts": {
+    "previewSnapshot": "expected/expected.preview.template.json",
+    "sceneSnapshot": "expected/expected.scene.template.json",
+    "debugTelemetry": "expected/expected.telemetry.template.json"
+  },
+  "comparePlan": {
+    "stepsDocument": "compare/README.md"
+  }
+}
+

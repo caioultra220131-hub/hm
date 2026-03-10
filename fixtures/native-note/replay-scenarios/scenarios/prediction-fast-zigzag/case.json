@@ -1,0 +1,38 @@
+{
+  "caseId": "prediction_fast_zigzag",
+  "traceName": "prediction_fast_zigzag",
+  "title": "Device capture round 1 - prediction fast zigzag",
+  "status": "blocked-by-device",
+  "captureRound": 1,
+  "tags": [
+    "device-capture",
+    "round1",
+    "prediction",
+    "zigzag"
+  ],
+  "traceCapture": {
+    "schemaLock": "open",
+    "acceptedFormats": [
+      "json",
+      "jsonl",
+      "bin",
+      "opaque"
+    ],
+    "pathPattern": "recordings/*",
+    "source": "arkts-trace-button"
+  },
+  "expectedArtifacts": {
+    "previewSnapshot": "expected/replay.preview.json",
+    "sceneSnapshot": "expected/replay.scene.json",
+    "debugTelemetry": "expected/replay.telemetry.json"
+  },
+  "comparePlan": {
+    "stepsDocument": "compare/README.md"
+  },
+  "lastAttempt": {
+    "date": "2026-03-08",
+    "recording": "blocked-by-device",
+    "replay": "blocked-by-device",
+    "reason": "The active thread has moved to simulator smoke regression. Real stylus trace capture remains blocked by device."
+  }
+}

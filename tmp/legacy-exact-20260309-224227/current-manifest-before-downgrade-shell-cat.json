@@ -1,0 +1,34 @@
+﻿{
+  "id": "doc-1773067367230-910139",
+  "title": "未命名笔记legacy-exact-20260309-224227",
+  "documentType": "blank",
+  "documentMode": "paged",
+  "renderBackend": "opengles",
+  "schemaVersion": 2,
+  "activePageId": "page-0",
+  "pages": [
+    {
+      "id": "page-0",
+      "order": 0,
+      "pageKind": "blank",
+      "pageTemplateId": "blank",
+      "pageSizeId": "letter_optimized",
+      "paperBackgroundId": "plain_white"
+    }
+  ],
+  "pageTemplateId": "blank",
+  "pageSizeId": "letter_optimized",
+  "paperBackgroundId": "plain_white",
+  "folderId": "inbox",
+  "coverPage": 0,
+  "coverVersion": 1,
+  "isFavorite": false,
+  "isTrashed": false,
+  "createdAt": 1773067367230,
+  "updatedAt": 1773067371806,
+  "openedAt": 1773067371806,
+  "trashedAt": 0,
+  "tags": [],
+  "previewSummary": "新的分页笔记本，适合结构化记录与解题。"
+}
+

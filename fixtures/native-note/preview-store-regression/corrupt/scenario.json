@@ -1,0 +1,14 @@
+{
+  "id": "preview-store.corrupt",
+  "title": "Stored preview corrupt",
+  "documentType": "blank",
+  "documentMode": "paged",
+  "previewSummary": "Corrupt preview file should fall back without regressing summary search.",
+  "previewFileState": "corrupt",
+  "expected": {
+    "previewStatus": "fallback",
+    "cardPath": "vector-fallback",
+    "searchUsesPreviewSummary": true
+  }
+}
+

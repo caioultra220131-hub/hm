@@ -1,0 +1,115 @@
+{
+  "status": "ready",
+  "version": 1,
+  "engineId": "fixture-engine-pdf-paged",
+  "documentId": "fixture-doc-pdf-paged",
+  "title": "PDF Paged Page0 Scene",
+  "documentType": "pdf",
+  "mode": "paged",
+  "backend": "skia",
+  "coordinateSpace": "page-surface",
+  "checkpointCount": 4,
+  "objectCount": 3,
+  "layout": {
+    "mode": "paged",
+    "pageCount": 1,
+    "documentBounds": {
+      "minX": 0,
+      "minY": 0,
+      "maxX": 612,
+      "maxY": 792
+    },
+    "pages": [
+      {
+        "pageId": "page-0",
+        "pageIndex": 0,
+        "width": 612,
+        "height": 792,
+        "bounds": {
+          "minX": 0,
+          "minY": 0,
+          "maxX": 612,
+          "maxY": 792
+        },
+        "backgroundId": "pdf/source-0",
+        "guideKind": "plain"
+      }
+    ]
+  },
+  "pages": [
+    {
+      "pageId": "page-0",
+      "pageIndex": 0,
+      "width": 612,
+      "height": 792,
+      "bounds": {
+        "minX": 0,
+        "minY": 0,
+        "maxX": 612,
+        "maxY": 792
+      },
+      "backgroundId": "pdf/source-0",
+      "guideKind": "plain"
+    }
+  ],
+  "objects": [
+    {
+      "id": "pdf-page-0",
+      "nodeType": "pdf-page",
+      "shapeType": "page",
+      "tool": "pdf",
+      "colorHex": "#FFFFFF",
+      "selected": false,
+      "pointCount": 0,
+      "closed": true,
+      "bounds": {
+        "minX": 0,
+        "minY": 0,
+        "maxX": 612,
+        "maxY": 792
+      },
+      "layer": "pdf",
+      "pageIndex": 0,
+      "pageId": "page-0"
+    },
+    {
+      "id": "pdf-ink-note",
+      "nodeType": "ink",
+      "shapeType": "freehand",
+      "tool": "pen",
+      "colorHex": "#1D2736",
+      "selected": false,
+      "pointCount": 12,
+      "closed": false,
+      "bounds": {
+        "minX": 120,
+        "minY": 160,
+        "maxX": 280,
+        "maxY": 230
+      },
+      "layer": "ink",
+      "pageIndex": 0,
+      "pageId": "page-0"
+    },
+    {
+      "id": "pdf-ink-box",
+      "nodeType": "ink",
+      "shapeType": "rectangle",
+      "tool": "pen",
+      "colorHex": "#0B57D0",
+      "selected": false,
+      "pointCount": 5,
+      "closed": true,
+      "bounds": {
+        "minX": 330,
+        "minY": 256,
+        "maxX": 508,
+        "maxY": 396
+      },
+      "layer": "ink",
+      "pageIndex": 0,
+      "pageId": "page-0"
+    }
+  ]
+}
+
