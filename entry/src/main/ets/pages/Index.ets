@@ -71,6 +71,10 @@ interface IndexCopy {
   selectPdfAndCreate: string;
   importingPdf: string;
   importPagedOnlyHint: string;
+  openglesOptionLabel: string;
+  skiaOptionLabel: string;
+  openglesOptionHint: string;
+  skiaOptionHint: string;
   detailsPanelTitle: string;
   closePanel: string;
   saveTitle: string;
@@ -148,9 +152,13 @@ const INDEX_COPY: IndexCopy = {
   guideWeekly: '周计划',
   updatedAtPrefix: '更新于'
   ,
-  selectPdfAndCreate: 'Select PDF & Create',
-  importingPdf: 'Importing...',
-  importPagedOnlyHint: 'PDF/HYBRID imports are paged-only in M2.'
+  selectPdfAndCreate: '选择 PDF 后创建',
+  importingPdf: '正在导入...',
+  importPagedOnlyHint: 'PDF 或混合笔记导入后会按分页模式创建。',
+  openglesOptionLabel: '兼容模式',
+  skiaOptionLabel: '高清模式',
+  openglesOptionHint: '兼容模式（OpenGL ES）：启动更稳，适合大多数情况。',
+  skiaOptionHint: '高清模式（Skia）：渲染更细腻，适合更高质量预览。'
 };
 
 @Entry
@@ -482,6 +490,22 @@ struct Index {
       return this.isImportCreateType() ? INDEX_COPY.importingPdf : INDEX_COPY.create;
     }
     return this.isImportCreateType() ? INDEX_COPY.selectPdfAndCreate : INDEX_COPY.create;
+  }
+
+  private createBackendLabel(backend: RenderBackend): string {
+    switch (backend) {
+      case RenderBackend.SKIA:
+        return INDEX_COPY.skiaOptionLabel;
+      case RenderBackend.OPEN_GLES:
+      default:
+        return INDEX_COPY.openglesOptionLabel;
+    }
+  }
+
+  private createBackendHint(): string {
+    return this.createBackend === RenderBackend.SKIA
+      ? INDEX_COPY.skiaOptionHint
+      : INDEX_COPY.openglesOptionHint;
   }
 
   private async saveRename(): Promise<void> {
@@ -941,7 +965,7 @@ struct Index {
                   }
                   Row() {
                     ForEach([RenderBackend.OPEN_GLES, RenderBackend.SKIA], (backend: RenderBackend) => {
-                      Button(RENDER_BACKEND_LABELS[backend])
+                      Button(this.createBackendLabel(backend))
                         .height(34)
                         .margin({ top: 12, right: 8 })
                         .backgroundColor(this.createBackend === backend ? '#162033' : '#FFFFFF')
@@ -951,6 +975,10 @@ struct Index {
                         })
                     }, (backend: RenderBackend) => backend)
                   }
+                  Text(this.createBackendHint())
+                    .fontSize(12)
+                    .fontColor('#667085')
+                    .margin({ top: 10 })
                   Text(INDEX_COPY.folders)
                     .fontSize(14)
                     .fontWeight(FontWeight.Medium)

@@ -1,0 +1,18 @@
+Thread H wake-up test
+
+Objective:
+- Validate Thread Test wake-up flow only.
+- Do not modify code or project files beyond the thread mailbox files required by the protocol.
+
+Required actions:
+1. Read and acknowledge this task.
+2. Clear the incoming task file after reading.
+3. Write a short status report into `T_H.txt` confirming:
+   - Thread Test was successfully woken up.
+   - The incoming task file was read and cleared.
+   - Thread Test can report back to H.
+4. Output the standard command to wake Thread H.
+
+Expected result:
+- A single concise status report in `T_H.txt`.
+- No business-code changes.
