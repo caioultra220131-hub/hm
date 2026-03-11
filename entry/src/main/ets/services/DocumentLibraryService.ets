@@ -927,6 +927,20 @@ export class DocumentLibraryService {
     return folder;
   }
 
+  async createTag(title: string, color: string = '#4C7DFF'): Promise<TagRecord> {
+    await this.ensureStore();
+    const tag: TagRecord = {
+      id: IdGenerator.tag(),
+      title,
+      color
+    };
+    await this.store!.executeSql(
+      'INSERT INTO tags (id, title, color) VALUES (?, ?, ?)',
+      [tag.id, tag.title, tag.color]
+    );
+    return tag;
+  }
+
   async renameDocument(documentId: string, title: string): Promise<DocumentRecord> {
     await this.ensureStore();
     const now: number = Date.now();

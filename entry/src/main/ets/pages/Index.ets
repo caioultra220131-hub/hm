@@ -11,6 +11,7 @@ import {
   FolderRecord,
   LibraryHomeData,
   LibraryQuery,
+  PALETTE_COLORS,
   RenderBackend,
   RENDER_BACKEND_LABELS,
   TagRecord,
@@ -71,8 +72,14 @@ interface IndexCopy {
   importingPdf: string;
   importPagedOnlyHint: string;
   detailsPanelTitle: string;
+  closePanel: string;
   saveTitle: string;
   moveToFolder: string;
+  newTagPlaceholder: string;
+  addTag: string;
+  creatingTag: string;
+  tagNameRequired: string;
+  tagAlreadyExists: string;
   libraryHomeTitle: string;
   libraryHomeDescription: string;
   deletePanelTitle: string;
@@ -117,8 +124,14 @@ const INDEX_COPY: IndexCopy = {
   createPanelTitle: '新建文档',
   create: '创建',
   detailsPanelTitle: '文档详情',
+  closePanel: '收起',
   saveTitle: '保存标题',
   moveToFolder: '移动到文件夹',
+  newTagPlaceholder: '新增标签',
+  addTag: '新增标签',
+  creatingTag: '正在新增...',
+  tagNameRequired: '请输入标签名称。',
+  tagAlreadyExists: '标签已存在，请换一个名称。',
   libraryHomeTitle: '笔记库首页',
   libraryHomeDescription: '管理本地优先的文档、收藏、标签、最近访问和回收站。',
   deletePanelTitle: '删除文档',
@@ -164,6 +177,7 @@ struct Index {
   @State private selectedDocumentId: string = '';
   @State private renameDraft: string = '';
   @State private showCreatePanel: boolean = false;
+  @State private showDetailsPanel: boolean = false;
   @State private createTitle: string = INDEX_COPY.untitledNote;
   @State private createType: DocumentType = DocumentType.BLANK;
   @State private createMode: DocumentMode = DocumentMode.PAGED;
@@ -171,6 +185,9 @@ struct Index {
   @State private createFolderId: string = 'inbox';
   @State private createBusy: boolean = false;
   @State private createErrorMessage: string = '';
+  @State private createTagTitle: string = '';
+  @State private createTagBusy: boolean = false;
+  @State private createTagErrorMessage: string = '';
   @State private showDeletePanel: boolean = false;
   @State private deleteTargetId: string = '';
 
@@ -313,14 +330,45 @@ struct Index {
     if (this.selectedDocumentId.length > 0 && !this.selectedDocument()) {
       this.selectedDocumentId = '';
       this.renameDraft = '';
+      this.showDetailsPanel = false;
     }
     this.loading = false;
   }
 
-  private pickDocument(doc: DocumentRecord): void {
+  private selectDocument(doc: DocumentRecord): void {
     this.selectedDocumentId = doc.id;
     this.renameDraft = doc.title;
+  }
+
+  private toggleDetailsPanel(doc: DocumentRecord): void {
+    const isSameDocument: boolean = this.selectedDocumentId === doc.id;
+    this.selectDocument(doc);
+    if (isSameDocument && this.showDetailsPanel && !this.showCreatePanel) {
+      this.showDetailsPanel = false;
+      return;
+    }
     this.showCreatePanel = false;
+    this.showDetailsPanel = true;
+  }
+
+  private isSidePanelVisible(): boolean {
+    return this.showCreatePanel || this.showDetailsPanel;
+  }
+
+  private closeSidePanel(): void {
+    if (this.showCreatePanel) {
+      this.showCreatePanel = false;
+      this.resetCreatePanel();
+    }
+    this.showDetailsPanel = false;
+  }
+
+  private nextTagColor(): string {
+    const availableColors: string[] = PALETTE_COLORS.filter((color) => color !== '#FFFFFF');
+    if (availableColors.length === 0) {
+      return '#4C7DFF';
+    }
+    return availableColors[this.homeData.tags.length % availableColors.length];
   }
 
   private async openDocument(doc: DocumentRecord): Promise<void> {
@@ -389,6 +437,7 @@ struct Index {
       }
       await this.reload();
       this.showCreatePanel = false;
+      this.showDetailsPanel = false;
       this.resetCreatePanel();
       if (createdDocument !== null) {
         this.selectedDocumentId = createdDocument.id;
@@ -414,6 +463,10 @@ struct Index {
     this.createFolderId = 'inbox';
     this.createErrorMessage = '';
     this.createBusy = false;
+  }
+
+  private createTagActionLabel(): string {
+    return this.createTagBusy ? INDEX_COPY.creatingTag : INDEX_COPY.addTag;
   }
 
   private selectCreateType(type: DocumentType): void {
@@ -461,6 +514,34 @@ struct Index {
     await this.reload();
   }
 
+  private async createTag(): Promise<void> {
+    if (!this.libraryService || this.createTagBusy) {
+      return;
+    }
+    const title: string = this.createTagTitle.trim();
+    if (title.length === 0) {
+      this.createTagErrorMessage = INDEX_COPY.tagNameRequired;
+      return;
+    }
+    const exists: boolean = this.homeData.tags.some((tag: TagRecord) => tag.title.toLowerCase() === title.toLowerCase());
+    if (exists) {
+      this.createTagErrorMessage = INDEX_COPY.tagAlreadyExists;
+      return;
+    }
+    this.createTagBusy = true;
+    this.createTagErrorMessage = '';
+    try {
+      await this.libraryService.createTag(title, this.nextTagColor());
+      this.createTagTitle = '';
+      await this.reload();
+    } catch (error) {
+      hilog.error(DOMAIN, LOG_TAG, 'create tag failed: %{public}s', `${error}`);
+      this.createTagErrorMessage = `${error}`;
+    } finally {
+      this.createTagBusy = false;
+    }
+  }
+
   private requestDelete(docId: string): void {
     this.deleteTargetId = docId;
     this.showDeletePanel = true;
@@ -474,6 +555,7 @@ struct Index {
     this.showDeletePanel = false;
     this.deleteTargetId = '';
     this.selectedDocumentId = '';
+    this.showDetailsPanel = false;
     await this.reload();
   }
 
@@ -493,108 +575,139 @@ struct Index {
             .fontSize(28)
             .fontWeight(FontWeight.Bold)
             .fontColor('#162033')
-          TextInput({ text: this.searchText, placeholder: INDEX_COPY.searchPlaceholder })
-            .height(42)
-            .margin({ top: 16, bottom: 16 })
-            .backgroundColor('#FFFFFF')
-            .onChange((value: string) => {
-              this.searchText = value;
-              this.reload();
-            })
-          Button(INDEX_COPY.createDocument)
-            .width('100%')
-            .height(42)
-            .backgroundColor('#162033')
-            .fontColor('#FFFFFF')
-            .onClick(() => {
-              this.showCreatePanel = true;
-              this.selectedDocumentId = '';
-              this.createErrorMessage = '';
-            })
-          Button(this.viewMode === 'home' ? INDEX_COPY.home : INDEX_COPY.allDocuments)
-            .width('100%')
-            .height(36)
-            .margin({ top: 10 })
-            .backgroundColor(this.viewMode === 'home' ? '#DCE6FF' : '#FFFFFF')
-            .fontColor('#162033')
-            .onClick(() => {
-              this.viewMode = 'home';
-              this.reload();
-            })
-          Button(this.viewMode === 'favorites' ? INDEX_COPY.favorites : INDEX_COPY.viewFavorites)
-            .width('100%')
-            .height(36)
-            .margin({ top: 8 })
-            .backgroundColor(this.viewMode === 'favorites' ? '#FFE8C7' : '#FFFFFF')
-            .fontColor('#162033')
-            .onClick(() => {
-              this.viewMode = 'favorites';
-              this.reload();
-            })
-          Button(this.viewMode === 'trash' ? INDEX_COPY.trash : INDEX_COPY.openTrash)
-            .width('100%')
-            .height(36)
-            .margin({ top: 8, bottom: 18 })
-            .backgroundColor(this.viewMode === 'trash' ? '#FFD8D8' : '#FFFFFF')
-            .fontColor('#162033')
-            .onClick(() => {
-              this.viewMode = 'trash';
-              this.reload();
-            })
+          Scroll() {
+            Column() {
+              TextInput({ text: this.searchText, placeholder: INDEX_COPY.searchPlaceholder })
+                .height(42)
+                .margin({ top: 16, bottom: 16 })
+                .backgroundColor('#FFFFFF')
+                .onChange((value: string) => {
+                  this.searchText = value;
+                  this.reload();
+                })
+              Button(INDEX_COPY.createDocument)
+                .width('100%')
+                .height(42)
+                .backgroundColor('#162033')
+                .fontColor('#FFFFFF')
+                .onClick(() => {
+                  this.showCreatePanel = true;
+                  this.showDetailsPanel = false;
+                  this.selectedDocumentId = '';
+                  this.createErrorMessage = '';
+                })
+              Button(this.viewMode === 'home' ? INDEX_COPY.home : INDEX_COPY.allDocuments)
+                .width('100%')
+                .height(36)
+                .margin({ top: 10 })
+                .backgroundColor(this.viewMode === 'home' ? '#DCE6FF' : '#FFFFFF')
+                .fontColor('#162033')
+                .onClick(() => {
+                  this.viewMode = 'home';
+                  this.reload();
+                })
+              Button(this.viewMode === 'favorites' ? INDEX_COPY.favorites : INDEX_COPY.viewFavorites)
+                .width('100%')
+                .height(36)
+                .margin({ top: 8 })
+                .backgroundColor(this.viewMode === 'favorites' ? '#FFE8C7' : '#FFFFFF')
+                .fontColor('#162033')
+                .onClick(() => {
+                  this.viewMode = 'favorites';
+                  this.reload();
+                })
+              Button(this.viewMode === 'trash' ? INDEX_COPY.trash : INDEX_COPY.openTrash)
+                .width('100%')
+                .height(36)
+                .margin({ top: 8, bottom: 18 })
+                .backgroundColor(this.viewMode === 'trash' ? '#FFD8D8' : '#FFFFFF')
+                .fontColor('#162033')
+                .onClick(() => {
+                  this.viewMode = 'trash';
+                  this.reload();
+                })
 
-          Text(INDEX_COPY.folders)
-            .fontSize(14)
-            .fontWeight(FontWeight.Medium)
-            .margin({ bottom: 8 })
-          Button(INDEX_COPY.allFolders)
-            .width('100%')
-            .height(34)
-            .backgroundColor(this.activeFolderId === 'all' ? '#162033' : '#FFFFFF')
-            .fontColor(this.activeFolderId === 'all' ? '#FFFFFF' : '#162033')
-            .onClick(() => {
-              this.activeFolderId = 'all';
-              this.reload();
-            })
-          ForEach(this.homeData.folders, (folder: FolderRecord) => {
-            Button(folder.title)
-              .width('100%')
-              .height(34)
-              .margin({ top: 8 })
-              .backgroundColor(this.activeFolderId === folder.id ? folder.color : '#FFFFFF')
-              .fontColor(this.activeFolderId === folder.id ? '#FFFFFF' : '#162033')
-              .onClick(() => {
-                this.activeFolderId = folder.id;
-                this.viewMode = 'home';
-                this.reload();
-              })
-          }, (folder: FolderRecord): string => folder.id)
+              Text(INDEX_COPY.folders)
+                .fontSize(14)
+                .fontWeight(FontWeight.Medium)
+                .margin({ bottom: 8 })
+              Button(INDEX_COPY.allFolders)
+                .width('100%')
+                .height(34)
+                .backgroundColor(this.activeFolderId === 'all' ? '#162033' : '#FFFFFF')
+                .fontColor(this.activeFolderId === 'all' ? '#FFFFFF' : '#162033')
+                .onClick(() => {
+                  this.activeFolderId = 'all';
+                  this.reload();
+                })
+              ForEach(this.homeData.folders, (folder: FolderRecord) => {
+                Button(folder.title)
+                  .width('100%')
+                  .height(34)
+                  .margin({ top: 8 })
+                  .backgroundColor(this.activeFolderId === folder.id ? folder.color : '#FFFFFF')
+                  .fontColor(this.activeFolderId === folder.id ? '#FFFFFF' : '#162033')
+                  .onClick(() => {
+                    this.activeFolderId = folder.id;
+                    this.viewMode = 'home';
+                    this.reload();
+                  })
+              }, (folder: FolderRecord): string => folder.id)
 
-          Text(INDEX_COPY.tags)
-            .fontSize(14)
-            .fontWeight(FontWeight.Medium)
-            .margin({ top: 18, bottom: 8 })
-          Button(INDEX_COPY.allTags)
+              Text(INDEX_COPY.tags)
+                .fontSize(14)
+                .fontWeight(FontWeight.Medium)
+                .margin({ top: 18, bottom: 8 })
+              TextInput({ text: this.createTagTitle, placeholder: INDEX_COPY.newTagPlaceholder })
+                .height(40)
+                .backgroundColor('#FFFFFF')
+                .onChange((value: string) => {
+                  this.createTagTitle = value;
+                  this.createTagErrorMessage = '';
+                })
+              Button(this.createTagActionLabel())
+                .width('100%')
+                .height(34)
+                .margin({ top: 8, bottom: this.createTagErrorMessage.length > 0 ? 0 : 8 })
+                .backgroundColor(this.createTagBusy ? '#98A2B3' : '#4C7DFF')
+                .fontColor('#FFFFFF')
+                .onClick(() => {
+                  this.createTag();
+                })
+              if (this.createTagErrorMessage.length > 0) {
+                Text(this.createTagErrorMessage)
+                  .fontSize(12)
+                  .fontColor('#B42318')
+                  .margin({ top: 8, bottom: 8 })
+              }
+              Button(INDEX_COPY.allTags)
+                .width('100%')
+                .height(34)
+                .backgroundColor(this.activeTagId === 'all' ? '#162033' : '#FFFFFF')
+                .fontColor(this.activeTagId === 'all' ? '#FFFFFF' : '#162033')
+                .onClick(() => {
+                  this.activeTagId = 'all';
+                  this.reload();
+                })
+              ForEach(this.homeData.tags, (tag: TagRecord) => {
+                Button(tag.title)
+                  .width('100%')
+                  .height(34)
+                  .margin({ top: 8 })
+                  .backgroundColor(this.activeTagId === tag.id ? tag.color : '#FFFFFF')
+                  .fontColor(this.activeTagId === tag.id ? '#FFFFFF' : '#162033')
+                  .onClick(() => {
+                    this.activeTagId = tag.id;
+                    this.viewMode = 'home';
+                    this.reload();
+                  })
+              }, (tag: TagRecord): string => tag.id)
+            }
             .width('100%')
-            .height(34)
-            .backgroundColor(this.activeTagId === 'all' ? '#162033' : '#FFFFFF')
-            .fontColor(this.activeTagId === 'all' ? '#FFFFFF' : '#162033')
-            .onClick(() => {
-              this.activeTagId = 'all';
-              this.reload();
-            })
-          ForEach(this.homeData.tags, (tag: TagRecord) => {
-            Button(tag.title)
-              .width('100%')
-              .height(34)
-              .margin({ top: 8 })
-              .backgroundColor(this.activeTagId === tag.id ? tag.color : '#FFFFFF')
-              .fontColor(this.activeTagId === tag.id ? '#FFFFFF' : '#162033')
-              .onClick(() => {
-                this.activeTagId = tag.id;
-                this.viewMode = 'home';
-                this.reload();
-              })
-          }, (tag: TagRecord): string => tag.id)
+            .padding({ right: 14 })
+          }
+          .scrollBar(BarState.On)
+          .layoutWeight(1)
         }
         .width(250)
         .height('100%')
@@ -724,7 +837,7 @@ struct Index {
                         .backgroundColor('#F2F5FA')
                         .fontColor('#162033')
                         .onClick(() => {
-                          this.pickDocument(doc);
+                          this.toggleDetailsPanel(doc);
                         })
                       Button(INDEX_COPY.delete)
                         .height(34)
@@ -740,10 +853,10 @@ struct Index {
                   .width('100%')
                   .padding(18)
                   .margin({ top: 18 })
-                  .backgroundColor(this.selectedDocumentId === doc.id ? '#EEF4FF' : '#FFFFFF')
+                  .backgroundColor(this.showDetailsPanel && this.selectedDocumentId === doc.id ? '#EEF4FF' : '#FFFFFF')
                   .borderRadius(22)
                   .onClick(() => {
-                    this.pickDocument(doc);
+                    this.selectDocument(doc);
                   })
                 }, (doc: DocumentRecord) => doc.id)
               }
@@ -756,171 +869,187 @@ struct Index {
         .padding(24)
         .backgroundColor('#F7F9FC')
 
-        Column() {
-          if (this.showCreatePanel) {
-            Text(INDEX_COPY.createPanelTitle)
-              .fontSize(22)
-              .fontWeight(FontWeight.Bold)
-              .fontColor('#162033')
-            TextInput({ text: this.createTitle, placeholder: INDEX_COPY.documentTitlePlaceholder })
-              .height(42)
-              .margin({ top: 16 })
-              .backgroundColor('#FFFFFF')
-              .onChange((value: string) => {
-                this.createTitle = value;
-              })
+        if (this.isSidePanelVisible()) {
+          Column() {
             Row() {
-              ForEach([DocumentType.BLANK, DocumentType.PDF, DocumentType.HYBRID], (type: DocumentType) => {
-                Button(DOCUMENT_TYPE_LABELS[type])
-                  .height(34)
-                  .margin({ top: 16, right: 8 })
-                  .backgroundColor(this.createType === type ? '#162033' : '#FFFFFF')
-                  .fontColor(this.createType === type ? '#FFFFFF' : '#162033')
-                  .onClick(() => {
-                    this.selectCreateType(type);
-                  })
-              }, (type: DocumentType) => type)
-            }
-            Row() {
-              ForEach([DocumentMode.PAGED, DocumentMode.INFINITE], (mode: DocumentMode) => {
-                Button(DOCUMENT_MODE_LABELS[mode])
-                  .height(34)
-                  .margin({ top: 12, right: 8 })
-                  .enabled(!this.isImportCreateType() || mode === DocumentMode.PAGED)
-                  .backgroundColor(this.createMode === mode ? '#162033' : '#FFFFFF')
-                  .fontColor(this.createMode === mode ? '#FFFFFF' : '#162033')
-                  .onClick(() => {
-                    if (this.isImportCreateType() && mode !== DocumentMode.PAGED) {
-                      return;
-                    }
-                    this.createMode = mode;
-                  })
-              }, (mode: DocumentMode) => mode)
-            }
-            if (this.isImportCreateType()) {
-              Text(INDEX_COPY.importPagedOnlyHint)
-                .fontSize(12)
-                .fontColor('#667085')
-                .margin({ top: 10 })
-            }
-            Row() {
-              ForEach([RenderBackend.OPEN_GLES, RenderBackend.SKIA], (backend: RenderBackend) => {
-                Button(RENDER_BACKEND_LABELS[backend])
-                  .height(34)
-                  .margin({ top: 12, right: 8 })
-                  .backgroundColor(this.createBackend === backend ? '#162033' : '#FFFFFF')
-                  .fontColor(this.createBackend === backend ? '#FFFFFF' : '#162033')
-                  .onClick(() => {
-                    this.createBackend = backend;
-                  })
-              }, (backend: RenderBackend) => backend)
-            }
-            Text(INDEX_COPY.folders)
-              .fontSize(14)
-              .fontWeight(FontWeight.Medium)
-              .margin({ top: 18, bottom: 8 })
-            ForEach(this.homeData.folders, (folder: FolderRecord) => {
-              Button(folder.title)
-                .width('100%')
-                .height(34)
-                .margin({ top: 8 })
-                .backgroundColor(this.createFolderId === folder.id ? folder.color : '#FFFFFF')
-                .fontColor(this.createFolderId === folder.id ? '#FFFFFF' : '#162033')
+              Text(this.showCreatePanel ? INDEX_COPY.createPanelTitle : INDEX_COPY.detailsPanelTitle)
+                .fontSize(22)
+                .fontWeight(FontWeight.Bold)
+                .fontColor('#162033')
+              Blank()
+                .layoutWeight(1)
+                .height('100%')
                 .onClick(() => {
-                  this.createFolderId = folder.id;
+                  this.closeSidePanel();
                 })
-            }, (folder: FolderRecord): string => folder.id)
-            if (this.createErrorMessage.length > 0) {
-              Text(this.createErrorMessage)
-                .fontSize(12)
-                .fontColor('#B42318')
-                .margin({ top: 12 })
-            }
-            Row() {
-              Text(this.createActionLabel())
-                .fontSize(16)
-                .fontWeight(FontWeight.Medium)
-                .fontColor('#FFFFFF')
+              Button('X')
+                .width(36)
+                .height(36)
+                .backgroundColor('#F2F5FA')
+                .fontColor('#162033')
+                .fontSize(20)
+                .onClick(() => {
+                  this.closeSidePanel();
+                })
             }
             .width('100%')
-            .height(40)
-            .margin({ top: 18 })
-            .justifyContent(FlexAlign.Center)
-            .backgroundColor(this.createBusy ? '#98A2B3' : '#162033')
-            .borderRadius(999)
-            .opacity(this.createBusy ? 0.72 : 1)
-            .onClick(() => {
-              if (this.createBusy) {
-                return;
+            .height(36)
+
+            Scroll() {
+              Column() {
+                if (this.showCreatePanel) {
+                  TextInput({ text: this.createTitle, placeholder: INDEX_COPY.documentTitlePlaceholder })
+                    .height(42)
+                    .margin({ top: 16 })
+                    .backgroundColor('#FFFFFF')
+                    .onChange((value: string) => {
+                      this.createTitle = value;
+                    })
+                  Row() {
+                    ForEach([DocumentType.BLANK, DocumentType.PDF, DocumentType.HYBRID], (type: DocumentType) => {
+                      Button(DOCUMENT_TYPE_LABELS[type])
+                        .height(34)
+                        .margin({ top: 16, right: 8 })
+                        .backgroundColor(this.createType === type ? '#162033' : '#FFFFFF')
+                        .fontColor(this.createType === type ? '#FFFFFF' : '#162033')
+                        .onClick(() => {
+                          this.selectCreateType(type);
+                        })
+                    }, (type: DocumentType) => type)
+                  }
+                  Row() {
+                    ForEach([DocumentMode.PAGED, DocumentMode.INFINITE], (mode: DocumentMode) => {
+                      Button(DOCUMENT_MODE_LABELS[mode])
+                        .height(34)
+                        .margin({ top: 12, right: 8 })
+                        .enabled(!this.isImportCreateType() || mode === DocumentMode.PAGED)
+                        .backgroundColor(this.createMode === mode ? '#162033' : '#FFFFFF')
+                        .fontColor(this.createMode === mode ? '#FFFFFF' : '#162033')
+                        .onClick(() => {
+                          if (this.isImportCreateType() && mode !== DocumentMode.PAGED) {
+                            return;
+                          }
+                          this.createMode = mode;
+                        })
+                    }, (mode: DocumentMode) => mode)
+                  }
+                  if (this.isImportCreateType()) {
+                    Text(INDEX_COPY.importPagedOnlyHint)
+                      .fontSize(12)
+                      .fontColor('#667085')
+                      .margin({ top: 10 })
+                  }
+                  Row() {
+                    ForEach([RenderBackend.OPEN_GLES, RenderBackend.SKIA], (backend: RenderBackend) => {
+                      Button(RENDER_BACKEND_LABELS[backend])
+                        .height(34)
+                        .margin({ top: 12, right: 8 })
+                        .backgroundColor(this.createBackend === backend ? '#162033' : '#FFFFFF')
+                        .fontColor(this.createBackend === backend ? '#FFFFFF' : '#162033')
+                        .onClick(() => {
+                          this.createBackend = backend;
+                        })
+                    }, (backend: RenderBackend) => backend)
+                  }
+                  Text(INDEX_COPY.folders)
+                    .fontSize(14)
+                    .fontWeight(FontWeight.Medium)
+                    .margin({ top: 18, bottom: 8 })
+                  ForEach(this.homeData.folders, (folder: FolderRecord) => {
+                    Button(folder.title)
+                      .width('100%')
+                      .height(34)
+                      .margin({ top: 8 })
+                      .backgroundColor(this.createFolderId === folder.id ? folder.color : '#FFFFFF')
+                      .fontColor(this.createFolderId === folder.id ? '#FFFFFF' : '#162033')
+                      .onClick(() => {
+                        this.createFolderId = folder.id;
+                      })
+                  }, (folder: FolderRecord): string => folder.id)
+                  if (this.createErrorMessage.length > 0) {
+                    Text(this.createErrorMessage)
+                      .fontSize(12)
+                      .fontColor('#B42318')
+                      .margin({ top: 12 })
+                  }
+                  Row() {
+                    Text(this.createActionLabel())
+                      .fontSize(16)
+                      .fontWeight(FontWeight.Medium)
+                      .fontColor('#FFFFFF')
+                  }
+                  .width('100%')
+                  .height(40)
+                  .margin({ top: 18 })
+                  .justifyContent(FlexAlign.Center)
+                  .backgroundColor(this.createBusy ? '#98A2B3' : '#162033')
+                  .borderRadius(999)
+                  .opacity(this.createBusy ? 0.72 : 1)
+                  .onClick(() => {
+                    if (this.createBusy) {
+                      return;
+                    }
+                    this.createDocument(this.createType);
+                  })
+                } else if (this.showDetailsPanel && this.selectedDocument()) {
+                  TextInput({ text: this.renameDraft, placeholder: INDEX_COPY.documentTitlePlaceholder })
+                    .height(42)
+                    .margin({ top: 16 })
+                    .backgroundColor('#FFFFFF')
+                    .onChange((value: string) => {
+                      this.renameDraft = value;
+                    })
+                  Button(INDEX_COPY.saveTitle)
+                    .width('100%')
+                    .height(38)
+                    .margin({ top: 12 })
+                    .backgroundColor('#F2F5FA')
+                    .fontColor('#162033')
+                    .onClick(() => {
+                      this.saveRename();
+                    })
+                  Text(INDEX_COPY.moveToFolder)
+                    .fontSize(14)
+                    .fontWeight(FontWeight.Medium)
+                    .margin({ top: 18, bottom: 8 })
+                  ForEach(this.homeData.folders, (folder: FolderRecord) => {
+                    Button(folder.title)
+                      .width('100%')
+                      .height(34)
+                      .margin({ top: 8 })
+                      .backgroundColor(this.selectedDocument()?.folderId === folder.id ? folder.color : '#FFFFFF')
+                      .fontColor(this.selectedDocument()?.folderId === folder.id ? '#FFFFFF' : '#162033')
+                      .onClick(() => {
+                        this.moveSelected(folder.id);
+                      })
+                  }, (folder: FolderRecord): string => folder.id)
+                  Text(INDEX_COPY.tags)
+                    .fontSize(14)
+                    .fontWeight(FontWeight.Medium)
+                    .margin({ top: 18, bottom: 8 })
+                  ForEach(this.homeData.tags, (tag: TagRecord) => {
+                    Button(tag.title)
+                      .width('100%')
+                      .height(34)
+                      .margin({ top: 8 })
+                      .backgroundColor(this.selectedDocument()?.tags.some((item: TagRecord) => item.id === tag.id) ? tag.color : '#FFFFFF')
+                      .fontColor(this.selectedDocument()?.tags.some((item: TagRecord) => item.id === tag.id) ? '#FFFFFF' : '#162033')
+                      .onClick(() => {
+                        this.toggleTag(tag.id);
+                      })
+                  }, (tag: TagRecord): string => tag.id)
+                }
               }
-              this.createDocument(this.createType);
-            })
-          } else if (this.selectedDocument()) {
-            Text(INDEX_COPY.detailsPanelTitle)
-              .fontSize(22)
-              .fontWeight(FontWeight.Bold)
-              .fontColor('#162033')
-            TextInput({ text: this.renameDraft, placeholder: INDEX_COPY.documentTitlePlaceholder })
-              .height(42)
-              .margin({ top: 16 })
-              .backgroundColor('#FFFFFF')
-              .onChange((value: string) => {
-                this.renameDraft = value;
-              })
-            Button(INDEX_COPY.saveTitle)
-              .width('100%')
-              .height(38)
-              .margin({ top: 12 })
-              .backgroundColor('#F2F5FA')
-              .fontColor('#162033')
-              .onClick(() => {
-                this.saveRename();
-              })
-            Text(INDEX_COPY.moveToFolder)
-              .fontSize(14)
-              .fontWeight(FontWeight.Medium)
-              .margin({ top: 18, bottom: 8 })
-            ForEach(this.homeData.folders, (folder: FolderRecord) => {
-              Button(folder.title)
-                .width('100%')
-                .height(34)
-                .margin({ top: 8 })
-                .backgroundColor(this.selectedDocument()?.folderId === folder.id ? folder.color : '#FFFFFF')
-                .fontColor(this.selectedDocument()?.folderId === folder.id ? '#FFFFFF' : '#162033')
-                .onClick(() => {
-                  this.moveSelected(folder.id);
-                })
-            }, (folder: FolderRecord): string => folder.id)
-            Text(INDEX_COPY.tags)
-              .fontSize(14)
-              .fontWeight(FontWeight.Medium)
-              .margin({ top: 18, bottom: 8 })
-            ForEach(this.homeData.tags, (tag: TagRecord) => {
-              Button(tag.title)
-                .width('100%')
-                .height(34)
-                .margin({ top: 8 })
-                .backgroundColor(this.selectedDocument()?.tags.some((item: TagRecord) => item.id === tag.id) ? tag.color : '#FFFFFF')
-                .fontColor(this.selectedDocument()?.tags.some((item: TagRecord) => item.id === tag.id) ? '#FFFFFF' : '#162033')
-                .onClick(() => {
-                  this.toggleTag(tag.id);
-                })
-            }, (tag: TagRecord): string => tag.id)
-          } else {
-            Text(INDEX_COPY.libraryHomeTitle)
-              .fontSize(22)
-              .fontWeight(FontWeight.Bold)
-              .fontColor('#162033')
-            Text(INDEX_COPY.libraryHomeDescription)
-              .fontSize(13)
-              .fontColor('#667085')
-              .margin({ top: 12 })
+              .alignItems(HorizontalAlign.Start)
+            }
+            .scrollBar(BarState.On)
+            .layoutWeight(1)
           }
+          .width(320)
+          .height('100%')
+          .padding(20)
+          .backgroundColor('#F4F7FB')
         }
-        .width(320)
-        .height('100%')
-        .padding(20)
-        .backgroundColor('#F4F7FB')
       }
       .width('100%')
       .height('100%')

@@ -1,67 +1,65 @@
 # Context Handoff A
 
-Date: 2026-03-08
+Date: 2026-03-11
 
 ## Ownership
 
 A owns only:
 
 - native runtime
-- build profile / ABI
 - simulator stub contract
-- `getDebugState()`
-- HAP install/start path
-- `x86_64` placeholder outputs
+- `readPdfPageCount(pdfPath)` helper
+- page-aware open/session semantics
+- preview/scene/debug native payload semantics
+- build/runtime issues on simulator
 
 A does not own:
 
-- ArkTS page bootstrap
-- document library flow
-- editor page flow
-- preview display
-- banner/UI wording
+- ArkTS home/create flow
+- document package bootstrap
+- editor page switching UI
+- preview metadata persistence
 
-## Current Verified State
-
-- `entry-simulator-unsigned.hap` installs on the official `x86_64` simulator.
-- App launch succeeds with `aa start -b com.example.myapplication -a EntryAbility -W`.
-- No current evidence of a fresh native-module load failure.
-- Head-thread routing rule is active: if install/start is healthy and stub/debug capability is correct, later page/UI failures default to B.
-
-## Current Status For A
+## Current Status
 
 Status: standby
 
-Current known app blocker is not assigned to A.
+The accepted source of truth is now local `main@0fbc585`.
 
-The current blocker is:
+The old A worktree branch:
 
-- home/bootstrap fails inside ArkTS
-- runtime log reports `bootstrap failed: {"code":13900002}`
-- `13900002` maps to `ERR_ENOENT`
+- `codex/feature/pdf-prep-a`
 
-Unless B proves this is caused by native/stub contract output, A should not pick it up.
+is still parked at `e82869b` and should be treated as stale.
 
-## A Action Items
+## Accepted Native State
 
-1. Be ready to re-check `getDebugState()` and simulator stub contract only if B reports a mismatch.
-2. Keep `SIM-X86-01` as a separate non-blocking task.
-3. If placeholder assets are produced, notify the head thread so `SIM-X86-01` can move from `skipped-no-x86-placeholder` to a real verification.
+The current accepted `main` already includes:
 
-## Escalation Back To A
+- `readPdfPageCount(pdfPath: string): string`
+- page-aware runtime for paged imported docs
+- `PDF` and `HYBRID` imported docs entering the real paged session path through explicit `pages[] + activePageId`
+- stable preview/scene/debug outputs for the accepted M2 flow
 
-Route back to A only if any of the following becomes true:
+## Important Semantic Reminder
 
-- `hdc install` fails for the simulator HAP
-- app start fails
-- ABI mismatch appears on the simulator HAP path
-- native module load fails
-- `getDebugState()` fields are missing, renamed, or semantically wrong
-- stub banner/capability is wrong because native debug output is wrong
-- `x86_64` placeholder output needs implementation or repair
+Do not misroute imported `HYBRID` docs to A based on the compat fallback in native code.
 
-## Acceptance Notes
+Current intended semantics are:
 
-A is not the owner for the current `Failed to open the local library.` blocker.
+- imported `HYBRID` docs persist real `pages[]`
+- those imported pages currently use `pageKind = "pdf"` for M2 phase 1
+- `documentType = hybrid -> pdf-fragment` in native compat logic is only a fallback path when no valid real `pages[]` are provided
+- `pdf-fragment` support still exists, but it is not the current persisted shape of imported M2 `HYBRID` docs
 
-Do not take B-owned ArkTS/UI issues unless the head thread explicitly reroutes based on new evidence.
+## Route Back To A Only If
+
+- `readPdfPageCount()` regresses
+- page-aware open/session logic regresses for paged imported docs
+- preview/scene/debug payloads diverge from accepted M2 semantics
+- simulator stub/native capability output regresses
+- a future task intentionally expands true `pdf-fragment` imported-page semantics
+
+## No Current A Action
+
+Do not pick up new work here unless the head thread explicitly reopens A-owned native scope based on new evidence from `main`.

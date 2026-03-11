@@ -1,72 +1,75 @@
 # Context Handoff Test
 
-Date: 2026-03-08
+Date: 2026-03-11
 
 ## Ownership
 
 The test thread owns only:
 
-- preflight
-- reproduction
 - targeted regression
-- final confirmation
+- confirmation after a new patch lands
+- result reporting
 
 The test thread does not:
 
-- edit product code
-- change the smoke script
-- redefine acceptance criteria
+- edit code
+- redefine semantics
+- use old A/B worktrees as the source of truth
 
-## Current Acceptance Order
+## Current Source Of Truth
 
-Always execute in this order:
+Test only against:
 
-1. `SIM-STUB-01`
-2. `SIM-HOME-01`
-3. `SIM-EDITOR-01`
-4. `SIM-X86-01`
+- local branch: `main`
+- current accepted head: `0fbc585`
 
-`SIM-X86-01` is non-blocking.
+Do not test:
 
-If placeholder output is still missing, keep the status as `skipped-no-x86-placeholder`.
+- `codex/feature/pdf-prep-a`
+- `codex/feature/pdf-ask-prep-b`
 
-## Current Known State
+Those worktrees are stale.
 
-- simulator target is online
-- simulator HAP installs
-- app starts
-- current app blocker is inside the app, not in install/start
+## Accepted Current Baseline
 
-Current visible failure:
+The current accepted M2 baseline on `main` is:
 
-- home page shows `Failed to open the local library.`
-- head-thread diagnosis points to B-owned bootstrap `ENOENT(13900002)`
+- `PDF` import: passed
+- `HYBRID` import: passed
+- active-page preview metadata: passed
+- invalid PDF cleanup path: passed
 
-## What Test Should Do Now
+The accepted preview metadata after saving page 2 is:
 
-Status: wait for B return
+- `pageIndex = 1`
+- `coverPageId = "page-1"`
 
-Until B provides a fix:
+## Important Test Rule For HYBRID Create
 
-- keep the current result record as failing/blocking
-- do not expand scope
-- do not spend time on A-owned hypotheses unless the head thread reroutes
+Do not use stale fixed coordinates for the HYBRID Create CTA.
 
-## What Test Should Do After B Return
+The final accepted rerun used:
 
-1. rerun the target case first
-2. report only:
-   - case id
-   - reproduced or fixed
-   - remaining blocker
-3. if target case passes, continue with neighboring cases in the same smoke sequence
-4. do not mark the full round as passed; the head thread does final sign-off
+- `uitest dumpLayout` to read the real-time CTA bounds
+- then clicked the CTA center from the live bounds
 
-## Result Vocabulary
+Reason:
 
-Only use:
+- one interim HYBRID failure was a false negative caused by clicking an old Y-coordinate after the Create panel layout moved
 
-- `passed`
-- `failed`
-- `blocked`
-- `skipped-no-x86-placeholder`
+## What Test Should Do If Work Reopens
+
+Only rerun after a new patch lands on `main`.
+
+When rerunning, keep the output format strict:
+
+- case
+- result
+- blocker
+- minimal reproduction steps
+
+## No Current Test Action
+
+Status: standby
+
+The current round is already accepted. Do not reopen it unless the head thread explicitly dispatches a new regression run from `main`.

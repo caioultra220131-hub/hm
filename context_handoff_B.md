@@ -1,82 +1,83 @@
 # Context Handoff B
 
-Date: 2026-03-08
+Date: 2026-03-11
 
 ## Ownership
 
 B owns only:
 
-- ArkTS bootstrap
-- document library flow
-- home page
-- editor page
-- preview consumption/display
-- simulator-stub UI behavior after native capability is already correct
+- ArkTS import/create flow
+- document package creation and persistence
+- home page create panel
+- editor page switching/save/back/reopen integration
+- preview metadata persistence on the ArkTS side
 
-Primary files:
+Primary files remain:
 
 - [DocumentLibraryService.ets](C:/Users/lasrorder/hw/MyApplication/entry/src/main/ets/services/DocumentLibraryService.ets)
-- [AppSettingsService.ets](C:/Users/lasrorder/hw/MyApplication/entry/src/main/ets/services/AppSettingsService.ets)
 - [Index.ets](C:/Users/lasrorder/hw/MyApplication/entry/src/main/ets/pages/Index.ets)
 - [EditorWorkspace.ets](C:/Users/lasrorder/hw/MyApplication/entry/src/main/ets/pages/EditorWorkspace.ets)
-- [PreviewThumbnail.ets](C:/Users/lasrorder/hw/MyApplication/entry/src/main/ets/components/PreviewThumbnail.ets)
 - [NativeNoteEngine.ets](C:/Users/lasrorder/hw/MyApplication/entry/src/main/ets/services/NativeNoteEngine.ets)
+- [PdfImportService.ets](C:/Users/lasrorder/hw/MyApplication/entry/src/main/ets/services/PdfImportService.ets)
+- [PreviewAdapterService.ets](C:/Users/lasrorder/hw/MyApplication/entry/src/main/ets/services/PreviewAdapterService.ets)
 
-## Current Head-Thread Diagnosis
+## Current Status
 
-This is the current active B-owned blocker:
+Status: standby
 
-- simulator install/start is already healthy
-- app reaches `pages/Index`
-- home page shows `Failed to open the local library.`
-- runtime log shows `bootstrap failed: {"code":13900002}`
-- HarmonyOS SDK constant mapping identifies `13900002` as `ERR_ENOENT`
+The accepted source of truth is local `main@0fbc585`.
 
-Therefore the current working diagnosis is:
+The old B worktree branch:
 
-- ArkTS bootstrap is touching a missing file or directory
-- current first-failure layer is B, not A
+- `codex/feature/pdf-ask-prep-b`
 
-## Immediate B Tasks
+is still parked at `e82869b` and should not be used as the active baseline anymore.
 
-1. Root-cause the exact file operation that throws `ENOENT(13900002)` during bootstrap.
-2. Prioritize these paths:
-   - `DocumentLibraryService.initialize()`
-   - `DocumentLibraryService.seedDefaults()`
-   - `DocumentLibraryService.createDocument()`
-   - `AppSettingsService.getSettings()`
-   - `AppSettingsService.writeEnvelope()`
-   - any directory creation or JSON write/read around app bootstrap
-3. Fix the ArkTS-side bootstrap failure without changing public native API surface.
-4. After the fix, hand back:
-   - root cause
-   - changed files
-   - exact regression cases to rerun
-   - any remaining known risk
+## Accepted B-Side State
 
-## Routing Rule Reminder
+The current accepted `main` already includes:
 
-Do not bounce this back to A just because the failure happens early.
+- single-entry `Select PDF & Create` flow for imported `PDF` and `HYBRID`
+- imported package creation under `attachments/` and `pages/`
+- `attachments[] + pages[] + activePageId + coverPage`
+- imported `PDF/HYBRID` forced to paged mode
+- editor reopen landing back on the saved active page
+- home preview metadata following the active page in the accepted flow
+- invalid PDF failure cleanup without leaving bad rows or half-written packages
 
-If the following are already true, the issue stays with B by default:
+## Important Semantic Reminder
 
-- app installs
-- app starts
-- `getDebugState()` is correct
-- stub banner/capability contract is correct
+Imported `HYBRID` docs are intentionally persisted as imported full-page PDF-backed pages in M2 phase 1.
 
-Only reroute if B proves the ArkTS failure is downstream of wrong native/stub output.
+That means:
 
-## Expected Regression After B Return
+- shared `pageKind` enum still includes `blank | pdf | pdf-fragment`
+- imported `HYBRID` pages currently land as `pageKind = "pdf"`
+- do not reinterpret that as a blocker unless a future coordinated contract migration deliberately changes imported `HYBRID` semantics
 
-The head thread and test thread will rerun:
+## Resolved False Negative
 
-1. `SIM-STUB-01`
-2. `SIM-HOME-01`
-3. `SIM-EDITOR-01`
+One HYBRID failure during this round was not a product bug.
 
-`SIM-X86-01` remains non-blocking.
+It was caused by stale test click coordinates after the Create panel layout shifted.
 
-## Notes
+Final accepted behavior:
 
-There is already a provisional workspace patch in B-owned files from earlier local diagnosis. B should treat the current workspace state as input, review it, and decide whether to keep, revise, or supersede it.
+- live `dumpLayout` was used to read the actual CTA bounds
+- clicking the real CTA center entered the picker
+- final `HYBRID` import/save/back/reopen path passed
+
+## Remaining Non-Blocking Follow-Up
+
+There is one B-owned hardening item left if this area is reopened:
+
+- `refreshPreview()` can still preserve stale stored preview `pageIndex/pageId` when no fresh native preview payload is merged
+- this did not fail in the accepted end-to-end M2 flow
+- if reopened, focus on [DocumentLibraryService.ets](C:/Users/lasrorder/hw/MyApplication/entry/src/main/ets/services/DocumentLibraryService.ets) and [PreviewAdapterService.ets](C:/Users/lasrorder/hw/MyApplication/entry/src/main/ets/services/PreviewAdapterService.ets)
+
+## Route Back To B Only If
+
+- a new regression is reproduced on `main` in import/create/editor/home preview flow
+- the preview hardening item is explicitly reopened as follow-up work
+
+Otherwise B stays closed for this round.
