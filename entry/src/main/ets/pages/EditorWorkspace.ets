@@ -6,7 +6,11 @@ import {
   buildNativeOpenDocumentConfig,
   buildNativePageContractForEntry,
   buildNativePreviewRequestSize,
-  NativePreviewPayload
+  NativePreviewBounds,
+  NativePreviewPage,
+  NativePreviewPayload,
+  NativeSceneObject,
+  NativeSceneSnapshot
 } from '../models/NativeNoteContracts';
 import {
   DOCUMENT_MODE_LABELS,
@@ -28,6 +32,10 @@ import { MarkdownPreviewBlock, MarkdownUtils } from '../utils/MarkdownUtils';
 function parseAreaValue(value: Object): number {
   const parsed: number = Number.parseFloat(`${value}`);
   return Number.isNaN(parsed) ? 0 : parsed;
+}
+
+function clampToRange(value: number, minValue: number, maxValue: number): number {
+  return Math.min(maxValue, Math.max(minValue, value));
 }
 
 interface EditorWorkspaceCopy {
@@ -80,6 +88,13 @@ const BACK_HIT_TARGET_HEIGHT: number = 56;
 const NATIVE_PAGE_METHOD_SET_ACTIVE: string = 'setActivePage';
 const NATIVE_PAGE_METHOD_INSERT: string = 'insertPage';
 const NATIVE_PAGE_METHOD_DELETE: string = 'deletePage';
+const EDITOR_INSPECTOR_WIDTH: number = 336;
+const EDITOR_PAGE_RAIL_WIDTH: number = 256;
+const PAGE_RAIL_THUMBNAIL_WIDTH: number = 168;
+const PAGE_RAIL_THUMBNAIL_HEIGHT: number = 224;
+const PAGE_RAIL_MENU_WIDTH: number = 208;
+const PAGE_SWIPE_DRAG_LIMIT: number = 132;
+const PAGE_SWIPE_TRIGGER_DISTANCE: number = 84;
 const EDITOR_WORKSPACE_COPY: EditorWorkspaceCopy = {
   back: '返回',
   save: '保存',
@@ -141,6 +156,7 @@ struct EditorWorkspace {
   private leavingEditor: boolean = false;
   private debugRefreshTimerId: number = -1;
   private persistTask: Promise<boolean> | null = null;
+  private pageSelectionInFlight: boolean = false;
 
   @State private loading: boolean = true;
   @State private errorMessage: string = '';
@@ -151,6 +167,12 @@ struct EditorWorkspace {
   @State private showToolExtras: boolean = false;
   @State private activePageId: string = '';
   @State private activePageIndex: number = 0;
+  @State private pageSearchText: string = '';
+  @State private showPageJumpInput: boolean = false;
+  @State private pageJumpDraft: string = '';
+  @State private showRailMenu: boolean = false;
+  @State private openPageMenuId: string = '';
+  @State private pageSwipeOffset: number = 0;
   @State private engineId: string = '';
   @State private currentTool: ToolType = ToolType.PEN;
   @State private currentColor: string = PALETTE_COLORS[0];
@@ -158,6 +180,7 @@ struct EditorWorkspace {
   @State private currentBackend: RenderBackend = RenderBackend.OPEN_GLES;
   @State private debugStateText: string = '';
   @State private debugState: NativeDebugState | null = null;
+  @State private simulatorSceneSnapshot: NativeSceneSnapshot | null = null;
   @State private showTracePanel: boolean = false;
   @State private traceActionMessage: string = '';
   @State private surfaceReady: boolean = false;
@@ -491,12 +514,14 @@ struct EditorWorkspace {
     if (this.engineId.length === 0) {
       this.debugStateText = '';
       this.debugState = null;
+      this.simulatorSceneSnapshot = null;
       return;
     }
     const state: NativeDebugState | null = this.nativeEngine.getDebugState(this.engineId);
     if (!state) {
       this.debugState = null;
       this.debugStateText = 'native debug unavailable';
+      this.simulatorSceneSnapshot = null;
       return;
     }
     this.debugState = state;
@@ -519,6 +544,19 @@ struct EditorWorkspace {
       `source=${state.lastSourceType} action=${state.lastTouchAction}\n` +
       `trace=${state.inputTraceStatus || 'idle'} recording=${state.inputTraceRecording} replay=${state.inputReplayActive} samples=${state.inputTraceSampleCount}\n` +
       `prediction=${state.predictionEnabled} pressureOn=${state.pressureEnabled} shape=${state.shapeRecognitionEnabled}`;
+    this.updateSimulatorSceneSnapshot();
+  }
+
+  private updateSimulatorSceneSnapshot(): void {
+    if (!this.document || this.engineId.length === 0 || !this.shouldUseSimulatorStubUi()) {
+      this.simulatorSceneSnapshot = null;
+      return;
+    }
+    try {
+      this.simulatorSceneSnapshot = this.nativeEngine.exportSceneSnapshot(this.engineId, this.document.id);
+    } catch (_) {
+      this.simulatorSceneSnapshot = null;
+    }
   }
 
   private startDebugPolling(): void {
@@ -725,6 +763,167 @@ struct EditorWorkspace {
     return `${currentPageNumber}/${this.pageCount()}`;
   }
 
+  private currentDocumentCreatedLabel(): string {
+    const createdAt: number = this.document?.createdAt ?? Date.now();
+    const createdDate: Date = new Date(createdAt);
+    return `${createdDate.getFullYear()}年${createdDate.getMonth() + 1}月${createdDate.getDate()}日 · ` +
+      `${`${createdDate.getHours()}`.padStart(2, '0')}:${`${createdDate.getMinutes()}`.padStart(2, '0')}`;
+  }
+
+  private inspectorTabLabel(mode: 'preview' | 'source'): string {
+    return mode === 'source' ? 'Markdown' : EDITOR_WORKSPACE_COPY.preview;
+  }
+
+  private inspectorPanelTitle(): string {
+    return this.previewMode === 'preview' ? EDITOR_WORKSPACE_COPY.previewPanel : 'Markdown';
+  }
+
+  private pageJumpTargetIndex(): number {
+    const parsed: number = Number.parseInt(this.pageJumpDraft.trim(), 10);
+    if (Number.isNaN(parsed)) {
+      return -1;
+    }
+    const index: number = parsed - 1;
+    if (index < 0 || index >= this.pageCount()) {
+      return -1;
+    }
+    return index;
+  }
+
+  private filteredPageIndexes(): number[] {
+    const query: string = this.pageSearchText.trim().toLowerCase();
+    if (query.length === 0) {
+      return this.pageIndexes();
+    }
+    return this.pageIndexes().filter((pageIndex: number) => {
+      const pageNumber: string = `${pageIndex + 1}`;
+      const title: string = this.pagePlaceholderTitle(pageIndex).toLowerCase();
+      const detail: string = this.pagePlaceholderDetail(pageIndex).toLowerCase();
+      return pageNumber.includes(query) || title.includes(query) || detail.includes(query);
+    });
+  }
+
+  private openPageJumpInput(): void {
+    this.showRailMenu = false;
+    this.openPageMenuId = '';
+    this.showPageJumpInput = true;
+    this.pageJumpDraft = `${this.activePageIndex + 1}`;
+  }
+
+  private closePageJumpInput(): void {
+    this.showPageJumpInput = false;
+    this.pageJumpDraft = '';
+  }
+
+  private async jumpToDraftPage(): Promise<void> {
+    const targetIndex: number = this.pageJumpTargetIndex();
+    if (targetIndex < 0) {
+      return;
+    }
+    await this.selectPage(targetIndex);
+    this.closePageJumpInput();
+  }
+
+  private closeRailMenus(): void {
+    this.showRailMenu = false;
+    this.openPageMenuId = '';
+  }
+
+  private toggleRailMenu(): void {
+    this.showPageJumpInput = false;
+    this.showRailMenu = !this.showRailMenu;
+    this.openPageMenuId = '';
+  }
+
+  private isPageMenuOpen(pageIndex: number): boolean {
+    return this.openPageMenuId === this.pageKeyAt(pageIndex);
+  }
+
+  private async togglePageMenu(pageIndex: number): Promise<void> {
+    if (this.isPageMenuOpen(pageIndex)) {
+      this.openPageMenuId = '';
+      return;
+    }
+    this.showPageJumpInput = false;
+    this.showRailMenu = false;
+    if (!this.isSelectedPageIndex(pageIndex)) {
+      await this.selectPage(pageIndex);
+    }
+    this.openPageMenuId = this.pageKeyAt(pageIndex);
+  }
+
+  private noteUnsupportedMenuAction(label: string): void {
+    this.traceActionMessage = `${label} 暂未接入`;
+    this.closeRailMenus();
+  }
+
+  private async duplicateCurrentPage(): Promise<void> {
+    if (!this.canAddRealPages() || !this.document || !this.libraryService || this.activePageId.length === 0) {
+      return;
+    }
+    const sourcePageId: string = this.activePageId;
+    const sourceMarkdown: string = this.pageMarkdownDrafts.get(sourcePageId) ?? this.markdownText;
+    this.stageCurrentPageDraft();
+    await this.persistBlankPagedRuntimePage();
+    await this.libraryService.saveDocumentMarkdown(this.document.id, sourceMarkdown, sourcePageId, false);
+    this.dirtyPageIds.delete(sourcePageId);
+    let nextDocument: DocumentRecord = await this.libraryService.addBlankPage(this.document.id);
+    this.applyDocumentActivePage(nextDocument, nextDocument.activePageId);
+    this.pageMarkdownDrafts.set(this.activePageId, sourceMarkdown);
+    this.markdownText = sourceMarkdown;
+    nextDocument = await this.libraryService.saveDocumentMarkdown(nextDocument.id, sourceMarkdown, this.activePageId, false);
+    this.applyDocumentActivePage(nextDocument, nextDocument.activePageId);
+    await this.loadPageMarkdown(this.activePageId);
+    if (!this.notifyNativeActivePage(this.activePageId)) {
+      await this.primeBlankPagedRuntime(this.activePageId);
+      await this.reopenNativeDocumentForCurrentState();
+    }
+    this.refreshDebugState();
+    this.closeRailMenus();
+  }
+
+  private async clearCurrentPageContent(): Promise<void> {
+    if (!this.document || !this.libraryService || this.activePageId.length === 0) {
+      return;
+    }
+    this.markdownText = '';
+    this.pageMarkdownDrafts.set(this.activePageId, '');
+    this.dirtyPageIds.add(this.activePageId);
+    await this.libraryService.saveDocumentMarkdown(this.document.id, '', this.activePageId, false);
+    this.dirtyPageIds.delete(this.activePageId);
+    this.saveState = 'idle';
+    this.traceActionMessage = 'page-cleared';
+    this.closeRailMenus();
+  }
+
+  private canSwipeBetweenPages(): boolean {
+    return this.shouldUseSimulatorStubUi() && this.supportsPagedDocumentRuntime() && this.pageCount() > 1;
+  }
+
+  private updatePageSwipeOffset(offsetY: number): void {
+    if (!this.canSwipeBetweenPages() || this.pageSelectionInFlight) {
+      this.pageSwipeOffset = 0;
+      return;
+    }
+    this.pageSwipeOffset = clampToRange(offsetY, -PAGE_SWIPE_DRAG_LIMIT, PAGE_SWIPE_DRAG_LIMIT);
+  }
+
+  private async finishPageSwipe(offsetY: number): Promise<void> {
+    const clampedOffset: number = clampToRange(offsetY, -PAGE_SWIPE_DRAG_LIMIT, PAGE_SWIPE_DRAG_LIMIT);
+    if (!this.canSwipeBetweenPages() || this.pageSelectionInFlight || Math.abs(clampedOffset) < PAGE_SWIPE_TRIGGER_DISTANCE) {
+      this.pageSwipeOffset = 0;
+      return;
+    }
+    const delta: number = clampedOffset < 0 ? 1 : -1;
+    const nextIndex: number = clampToRange(this.activePageIndex + delta, 0, this.pageCount() - 1);
+    if (nextIndex === this.activePageIndex) {
+      this.pageSwipeOffset = 0;
+      return;
+    }
+    await this.selectPage(nextIndex);
+    this.pageSwipeOffset = 0;
+  }
+
   private async setMode(mode: DocumentMode): Promise<void> {
     if (!this.canChangeDocumentMode() && mode !== this.currentMode) {
       return;
@@ -823,6 +1022,113 @@ struct EditorWorkspace {
       return 'trace=false preview=false scene=false';
     }
     return `trace=${state.traceSupported} preview=${state.previewRenderSupported} scene=${state.sceneExportSupported}`;
+  }
+
+  private simulatorPage(): NativePreviewPage | null {
+    const scene: NativeSceneSnapshot | null = this.simulatorSceneSnapshot;
+    if (!scene) {
+      return null;
+    }
+    const activePageId: string = this.activePageId.length > 0 ? this.activePageId : (scene.pages[0]?.pageId ?? '');
+    return scene.pages.find((page: NativePreviewPage) => page.pageId === activePageId) ?? scene.pages[0] ?? null;
+  }
+
+  private simulatorPageWidth(): number {
+    const page: NativePreviewPage | null = this.simulatorPage();
+    const bounds: NativePreviewBounds | undefined = page?.bounds;
+    const boundedWidth: number = bounds ? Math.max(0, bounds.maxX - bounds.minX) : 0;
+    const width: number = Number(page?.width ?? boundedWidth);
+    return width > 0 ? width : 612;
+  }
+
+  private simulatorPageHeight(): number {
+    const page: NativePreviewPage | null = this.simulatorPage();
+    const bounds: NativePreviewBounds | undefined = page?.bounds;
+    const boundedHeight: number = bounds ? Math.max(0, bounds.maxY - bounds.minY) : 0;
+    const height: number = Number(page?.height ?? boundedHeight);
+    return height > 0 ? height : 792;
+  }
+
+  private simulatorCanvasWidth(): number {
+    const sourceWidth: number = this.simulatorPageWidth();
+    const sourceHeight: number = this.simulatorPageHeight();
+    const aspectRatio: number = sourceWidth / sourceHeight;
+    return aspectRatio >= 0.82 ? 356 : 304;
+  }
+
+  private simulatorCanvasHeight(): number {
+    const sourceWidth: number = this.simulatorPageWidth();
+    const sourceHeight: number = this.simulatorPageHeight();
+    return clampToRange(this.simulatorCanvasWidth() * (sourceHeight / sourceWidth), 380, 560);
+  }
+
+  private simulatorObjectsForActivePage(): NativeSceneObject[] {
+    const scene: NativeSceneSnapshot | null = this.simulatorSceneSnapshot;
+    if (!scene) {
+      return [];
+    }
+    const activePageId: string = this.activePageId.length > 0 ? this.activePageId : (scene.pages[0]?.pageId ?? '');
+    return scene.objects.filter((object: NativeSceneObject) => (object.pageId ?? '') === activePageId && object.layer === 'ink');
+  }
+
+  private simulatorObjectX(object: NativeSceneObject): number {
+    const canvasWidth: number = this.simulatorCanvasWidth();
+    const pageWidth: number = this.simulatorPageWidth();
+    const innerWidth: number = canvasWidth - 36;
+    return 18 + clampToRange((object.bounds.minX / pageWidth) * innerWidth, 0, innerWidth - 28);
+  }
+
+  private simulatorObjectY(object: NativeSceneObject): number {
+    const canvasHeight: number = this.simulatorCanvasHeight();
+    const pageHeight: number = this.simulatorPageHeight();
+    const innerHeight: number = canvasHeight - 40;
+    return 20 + clampToRange((object.bounds.minY / pageHeight) * innerHeight, 0, innerHeight - 22);
+  }
+
+  private simulatorObjectWidth(object: NativeSceneObject): number {
+    const pageWidth: number = this.simulatorPageWidth();
+    const widthRatio: number = Math.max(0, object.bounds.maxX - object.bounds.minX) / pageWidth;
+    return clampToRange(widthRatio * (this.simulatorCanvasWidth() - 36), 34, this.simulatorCanvasWidth() - 40);
+  }
+
+  private simulatorObjectHeight(object: NativeSceneObject): number {
+    const pageHeight: number = this.simulatorPageHeight();
+    const heightRatio: number = Math.max(0, object.bounds.maxY - object.bounds.minY) / pageHeight;
+    return clampToRange(heightRatio * (this.simulatorCanvasHeight() - 40), 20, 88);
+  }
+
+  private simulatorPageFillColor(): string {
+    const backgroundId: string = this.simulatorPage()?.backgroundId ?? '';
+    if (backgroundId.startsWith('pdf/')) {
+      return '#F8FAFC';
+    }
+    if (backgroundId.includes('warm')) {
+      return '#FFF7E8';
+    }
+    return '#FFFDF8';
+  }
+
+  private simulatorPageAccentColor(): string {
+    const backgroundId: string = this.simulatorPage()?.backgroundId ?? '';
+    if (backgroundId.startsWith('pdf/')) {
+      return '#CBD5E1';
+    }
+    return '#D8DEE8';
+  }
+
+  private simulatorGuideLabel(): string {
+    const guideKind: string = this.simulatorPage()?.guideKind ?? 'plain';
+    const backgroundId: string = this.simulatorPage()?.backgroundId ?? 'paper';
+    return `${guideKind} · ${backgroundId}`;
+  }
+
+  private simulatorGuideKind(): string {
+    return this.simulatorPage()?.guideKind ?? 'plain';
+  }
+
+  private simulatorObjectLabel(object: NativeSceneObject): string {
+    const pageNumber: number = (object.pageIndex ?? this.activePageIndex) + 1;
+    return `${object.tool} · p${pageNumber}`;
   }
 
   private toggleTracePanel(): void {
@@ -957,30 +1263,40 @@ struct EditorWorkspace {
   }
 
   private async selectPage(index: number): Promise<void> {
-    if (this.supportsPagedDocumentRuntime()) {
-      const nextPage: DocumentPageEntry | undefined = this.editablePages()[index];
-      if (!nextPage || nextPage.id === this.activePageId || !this.document || !this.libraryService) {
-        return;
-      }
-      const currentPageId: string = this.activePageId;
-      this.stageCurrentPageDraft();
-      await this.persistBlankPagedRuntimePage();
-      if (currentPageId.length > 0) {
-        const currentMarkdown: string = this.pageMarkdownDrafts.get(currentPageId) ?? this.markdownText;
-        await this.libraryService.saveDocumentMarkdown(this.document.id, currentMarkdown, currentPageId, false);
-        this.dirtyPageIds.delete(currentPageId);
-      }
-      const nextDocument: DocumentRecord = await this.libraryService.setDocumentActivePage(this.document.id, nextPage.id);
-      this.applyDocumentActivePage(nextDocument, nextPage.id);
-      await this.loadPageMarkdown(nextPage.id);
-      if (!this.notifyNativeActivePage(nextPage.id)) {
-        await this.primeBlankPagedRuntime(nextPage.id);
-        await this.reopenNativeDocumentForCurrentState();
-      }
-      this.refreshDebugState();
+    if (index < 0 || index >= this.pageCount() || this.pageSelectionInFlight) {
       return;
     }
-    this.activePageIndex = index;
+    this.pageSelectionInFlight = true;
+    this.closeRailMenus();
+    this.showPageJumpInput = false;
+    try {
+      if (this.supportsPagedDocumentRuntime()) {
+        const nextPage: DocumentPageEntry | undefined = this.editablePages()[index];
+        if (!nextPage || nextPage.id === this.activePageId || !this.document || !this.libraryService) {
+          return;
+        }
+        const currentPageId: string = this.activePageId;
+        this.stageCurrentPageDraft();
+        await this.persistBlankPagedRuntimePage();
+        if (currentPageId.length > 0) {
+          const currentMarkdown: string = this.pageMarkdownDrafts.get(currentPageId) ?? this.markdownText;
+          await this.libraryService.saveDocumentMarkdown(this.document.id, currentMarkdown, currentPageId, false);
+          this.dirtyPageIds.delete(currentPageId);
+        }
+        const nextDocument: DocumentRecord = await this.libraryService.setDocumentActivePage(this.document.id, nextPage.id);
+        this.applyDocumentActivePage(nextDocument, nextPage.id);
+        await this.loadPageMarkdown(nextPage.id);
+        if (!this.notifyNativeActivePage(nextPage.id)) {
+          await this.primeBlankPagedRuntime(nextPage.id);
+          await this.reopenNativeDocumentForCurrentState();
+        }
+        this.refreshDebugState();
+        return;
+      }
+      this.activePageIndex = index;
+    } finally {
+      this.pageSelectionInFlight = false;
+    }
   }
 
   private canAddRealPages(): boolean {
@@ -1046,50 +1362,111 @@ struct EditorWorkspace {
     return this.activePageIndex === index;
   }
 
+  private isInspectorModeActive(mode: 'preview' | 'source'): boolean {
+    return this.showInspectorDrawer && this.previewMode === mode;
+  }
+
+  private pagePreviewSnapshotAt(index: number): DocumentPreviewSnapshot | undefined {
+    const snapshot: DocumentPreviewSnapshot | undefined = this.previewSnapshot();
+    if (!snapshot) {
+      return undefined;
+    }
+    const pageEntry: DocumentPageEntry | undefined = this.pageEntryAt(index);
+    if (pageEntry) {
+      if (snapshot.coverPageId === pageEntry.id) {
+        return snapshot;
+      }
+      if (snapshot.pageIndex === index && (snapshot.pageIds.length === 0 || snapshot.pageIds.includes(pageEntry.id))) {
+        return snapshot;
+      }
+      if (this.document?.coverPage === index && snapshot.pageIds.includes(pageEntry.id)) {
+        return snapshot;
+      }
+      return undefined;
+    }
+    if (snapshot.pageIndex === index) {
+      return snapshot;
+    }
+    return this.document?.coverPage === index ? snapshot : undefined;
+  }
+
+  private pagePlaceholderTitle(index: number): string {
+    if (!this.supportsPagedDocumentRuntime()) {
+      return 'Document page';
+    }
+    const pageEntry: DocumentPageEntry | undefined = this.pageEntryAt(index);
+    if (pageEntry?.pageKind === 'pdf') {
+      return 'PDF page';
+    }
+    if (pageEntry?.pageKind === 'pdf-fragment') {
+      return 'Fragment';
+    }
+    return 'Blank page';
+  }
+
+  private pagePlaceholderDetail(index: number): string {
+    if (!this.supportsPagedDocumentRuntime()) {
+      return 'Document summary only';
+    }
+    return this.isSelectedPageIndex(index) ? 'Active page without preview' : 'No preview yet';
+  }
+
+  @Builder
+  private buildInspectorShortcut(mode: 'preview' | 'source', label: string): void {
+    Button(label)
+      .height(44)
+      .padding({ left: 16, right: 16 })
+      .backgroundColor(this.isInspectorModeActive(mode) ? '#162033' : '#F3F6FB')
+      .fontColor(this.isInspectorModeActive(mode) ? '#FFFFFF' : '#162033')
+      .fontSize(13)
+      .borderRadius(14)
+      .onClick(() => {
+        this.toggleInspector(mode);
+      })
+  }
+
   @Builder
   private buildHeaderBar(): void {
-    Row() {
-      Button(EDITOR_WORKSPACE_COPY.back)
-        .height(28)
-        .padding({ left: 10, right: 10 })
-        .backgroundColor('#FFFFFF')
-        .fontColor('#162033')
-        .fontSize(12)
-        .responseRegion({
-          x: -24,
-          y: -12,
-          width: 150,
-          height: 52
-        })
-        .onClick(() => {
-          this.goBack();
-        })
-      Column() {
-        Text((this.document as DocumentRecord).title)
-          .fontSize(16)
-          .fontWeight(FontWeight.Bold)
-          .fontColor('#162033')
-          .maxLines(1)
-      }
-      .layoutWeight(1)
-      .alignItems(HorizontalAlign.Start)
-      .margin({ left: 8, right: 8 })
+    Row({ space: 8 }) {
+      this.buildInspectorShortcut('preview', this.inspectorTabLabel('preview'))
+      this.buildInspectorShortcut('source', this.inspectorTabLabel('source'))
       Button(this.saveButtonLabel())
-        .height(28)
-        .padding({ left: 10, right: 10 })
+        .height(44)
+        .padding({ left: 16, right: 16 })
         .enabled(this.saveState !== 'saving')
         .backgroundColor(this.saveState === 'saving' ? '#98A2B3' : '#162033')
         .fontColor('#FFFFFF')
-        .fontSize(12)
+        .fontSize(13)
         .onClick(async () => {
           await this.saveDocument();
         })
     }
-    .padding({ left: 6, right: 6, top: 4, bottom: 4 })
-    .backgroundColor('#FDFEFE')
-    .border({ width: 1, color: '#E3E8EF' })
-    .borderRadius(999)
+    .padding(8)
+    .backgroundColor('#F8F9FA')
+    .border({ width: 1, color: '#E4E7EC' })
+    .borderRadius(18)
     .hitTestBehavior(HitTestMode.Transparent)
+  }
+
+  @Builder
+  private buildHeaderArea(): void {
+    Row() {
+      Button('←')
+        .width(52)
+        .height(52)
+        .backgroundColor('#F7F7F8')
+        .fontColor('#364152')
+        .fontSize(22)
+        .borderRadius(16)
+        .onClick(() => {
+          this.goBack();
+        })
+      Blank()
+        .layoutWeight(1)
+      this.buildHeaderBar()
+    }
+    .width('100%')
+    .alignItems(VerticalAlign.Center)
   }
 
   @Builder
@@ -1258,6 +1635,9 @@ struct EditorWorkspace {
       Text(`runtimeProfile=${this.runtimeProfileText()}`)
         .fontSize(10)
         .fontColor('#9A3412')
+      Text('simulated state')
+        .fontSize(10)
+        .fontColor('#9A3412')
     }
     .padding({ left: 8, right: 8, top: 6, bottom: 6 })
     .backgroundColor('#FFF7ED')
@@ -1266,20 +1646,128 @@ struct EditorWorkspace {
   }
 
   @Builder
+  private buildSimulatorGuideLines(): void {
+    if (this.simulatorGuideKind() !== 'plain') {
+      ForEach([0, 1, 2, 3, 4, 5], (lineIndex: number) => {
+        Row()
+          .width(this.simulatorCanvasWidth() - 44)
+          .height(this.simulatorGuideKind() === 'grid' ? 1 : 0.8)
+          .backgroundColor(this.simulatorGuideKind() === 'cornell' ? '#D6DDE8' : '#E3E8EF')
+          .opacity(this.simulatorGuideKind() === 'dotted' ? 0.5 : 0.8)
+          .position({ x: 22, y: 70 + lineIndex * ((this.simulatorCanvasHeight() - 110) / 6) })
+      }, (lineIndex: number): string => `line-${lineIndex}`)
+    }
+    if (this.simulatorGuideKind() === 'grid' || this.simulatorGuideKind() === 'weekly') {
+      ForEach([0, 1, 2, 3], (lineIndex: number) => {
+        Row()
+          .width(1)
+          .height(this.simulatorCanvasHeight() - 92)
+          .backgroundColor('#E3E8EF')
+          .opacity(0.75)
+          .position({ x: 50 + lineIndex * ((this.simulatorCanvasWidth() - 92) / 4), y: 54 })
+      }, (lineIndex: number): string => `vline-${lineIndex}`)
+    }
+    if (this.simulatorGuideKind() === 'cornell') {
+      Row()
+        .width(1)
+        .height(this.simulatorCanvasHeight() - 86)
+        .backgroundColor('#CBD5E1')
+        .position({ x: 104, y: 44 })
+      Row()
+        .width(this.simulatorCanvasWidth() - 44)
+        .height(1)
+        .backgroundColor('#CBD5E1')
+        .position({ x: 22, y: this.simulatorCanvasHeight() - 94 })
+    }
+  }
+
+  @Builder
   private buildPlaceholderSurface(): void {
-    Column() {}
+    Stack({ alignContent: Alignment.Center }) {
+      Column({ space: 12 }) {
+        Stack({ alignContent: Alignment.TopStart }) {
+          Row()
+            .width(this.simulatorCanvasWidth())
+            .height(this.simulatorCanvasHeight())
+            .backgroundColor(this.simulatorPageFillColor())
+            .borderRadius(26)
+            .border({ width: 1, color: this.simulatorPageAccentColor() })
+
+          this.buildSimulatorGuideLines()
+
+          Row()
+            .width(this.simulatorCanvasWidth() - 44)
+            .height(1)
+            .backgroundColor('#D8DEE8')
+            .position({ x: 22, y: 44 })
+
+          Text(this.document?.title ?? 'Untitled')
+            .fontSize(16)
+            .fontWeight(FontWeight.Medium)
+            .fontColor('#162033')
+            .maxLines(1)
+            .position({ x: 22, y: 18 })
+
+          Text(this.simulatorGuideLabel())
+            .fontSize(11)
+            .fontColor('#667085')
+            .position({ x: 22, y: 52 })
+
+          ForEach(this.simulatorObjectsForActivePage(), (object: NativeSceneObject) => {
+            Row() {
+              Text(this.simulatorObjectLabel(object))
+                .fontSize(10)
+                .fontColor('#FFFFFF')
+                .maxLines(1)
+            }
+            .justifyContent(FlexAlign.Center)
+            .width(this.simulatorObjectWidth(object))
+            .height(this.simulatorObjectHeight(object))
+            .padding({ left: 6, right: 6 })
+            .backgroundColor(object.colorHex)
+            .opacity(object.tool === 'highlighter' ? 0.58 : 0.9)
+            .borderRadius(object.tool === 'text' ? 10 : 16)
+            .position({ x: this.simulatorObjectX(object), y: this.simulatorObjectY(object) })
+          }, (object: NativeSceneObject): string => object.id)
+
+          if (this.simulatorObjectsForActivePage().length === 0) {
+            Column({ space: 6 }) {
+              Text('Simulator surface is writable')
+                .fontSize(18)
+                .fontWeight(FontWeight.Medium)
+                .fontColor('#162033')
+              Text('Use Save, Undo, Redo, tool switch, color switch, and page actions to inspect synthetic state changes.')
+                .fontSize(12)
+                .lineHeight(18)
+                .fontColor('#667085')
+            }
+            .width(this.simulatorCanvasWidth() - 56)
+            .alignItems(HorizontalAlign.Start)
+            .position({ x: 28, y: 98 })
+          }
+        }
+        Row({ space: 10 }) {
+          Text(`objects=${this.simulatorObjectsForActivePage().length}`)
+            .fontSize(11)
+            .fontColor('#475467')
+          Text(`page=${this.activePageIndex + 1}/${this.pageCount()}`)
+            .fontSize(11)
+            .fontColor('#475467')
+          Text(this.simulatorCapabilitySummary())
+            .fontSize(11)
+            .fontColor('#667085')
+        }
+      }
+      .alignItems(HorizontalAlign.Center)
+    }
     .width('100%')
     .height('100%')
     .backgroundColor('#F8FAFC')
   }
 
   @Builder
-  private buildWritingSurface(): void {
+  private buildPageMotionLayer(): void {
     Stack() {
-      Column() {}
-        .width('100%')
-        .height('100%')
-        .backgroundColor('#F8FAFC')
       if (this.shouldRenderNativeSurface()) {
         XComponent({
           id: this.xComponentId,
@@ -1314,11 +1802,37 @@ struct EditorWorkspace {
     }
     .width('100%')
     .height('100%')
+    .translate({ x: 0, y: this.canSwipeBetweenPages() ? this.pageSwipeOffset : 0 })
+  }
+
+  @Builder
+  private buildWritingSurface(): void {
+    Stack() {
+      Column() {}
+        .width('100%')
+        .height('100%')
+        .backgroundColor('#F8FAFC')
+      this.buildPageMotionLayer()
+    }
+    .width('100%')
+    .height('100%')
     .gesture(
-      LongPressGesture({ repeat: false, duration: 600 })
-        .onAction(() => {
-          this.toggleTracePanel();
-        })
+      GestureGroup(
+        GestureMode.Exclusive,
+        LongPressGesture({ repeat: false, duration: 600 })
+          .onAction(() => {
+            this.toggleTracePanel();
+          }),
+        PanGesture({ direction: PanDirection.Vertical, distance: this.canSwipeBetweenPages() ? 16 : 100000 })
+          .onActionUpdate((event) => {
+            const offsetY: number = Number.parseFloat(`${event.offsetY ?? 0}`);
+            this.updatePageSwipeOffset(Number.isNaN(offsetY) ? 0 : offsetY);
+          })
+          .onActionEnd(async (event) => {
+            const offsetY: number = Number.parseFloat(`${event.offsetY ?? 0}`);
+            await this.finishPageSwipe(Number.isNaN(offsetY) ? 0 : offsetY);
+          })
+      )
     )
   }
 
@@ -1328,6 +1842,11 @@ struct EditorWorkspace {
       Text(this.showTracePanel ? EDITOR_WORKSPACE_COPY.longPressCollapseDebugPanel : EDITOR_WORKSPACE_COPY.longPressExpandTracePanel)
         .fontSize(11)
         .fontColor('#475467')
+      if (this.canSwipeBetweenPages()) {
+        Text('Swipe up or down to change page')
+          .fontSize(11)
+          .fontColor('#0F766E')
+      }
       if (this.shouldUseSimulatorStubUi()) {
         Text(`stubReason=${this.stubReasonText()}`)
           .fontSize(11)
@@ -1430,7 +1949,7 @@ struct EditorWorkspace {
   private buildInspectorDrawer(): void {
     Column() {
       Row() {
-        Text(this.previewMode === 'preview' ? EDITOR_WORKSPACE_COPY.previewPanel : EDITOR_WORKSPACE_COPY.sourcePanel)
+        Text(this.inspectorPanelTitle())
           .fontSize(18)
           .fontWeight(FontWeight.Bold)
           .fontColor('#162033')
@@ -1444,30 +1963,13 @@ struct EditorWorkspace {
             this.closeInspector();
           })
       }
-      Row({ space: 8 }) {
-        Button(EDITOR_WORKSPACE_COPY.preview)
-          .height(34)
-          .backgroundColor(this.previewMode === 'preview' ? '#162033' : '#F3F6FB')
-          .fontColor(this.previewMode === 'preview' ? '#FFFFFF' : '#162033')
-          .onClick(() => {
-            this.previewMode = 'preview';
-          })
-        Button(EDITOR_WORKSPACE_COPY.source)
-          .height(34)
-          .backgroundColor(this.previewMode === 'source' ? '#162033' : '#F3F6FB')
-          .fontColor(this.previewMode === 'source' ? '#FFFFFF' : '#162033')
-          .onClick(() => {
-            this.previewMode = 'source';
-          })
-      }
-      .margin({ top: 12 })
       if (this.previewMode === 'preview') {
         this.buildPreviewDrawerBody()
       } else {
         this.buildSourceDrawerBody()
       }
     }
-    .width(300)
+    .width(EDITOR_INSPECTOR_WIDTH)
     .height('100%')
     .padding(14)
     .backgroundColor('#FFFFFF')
@@ -1566,77 +2068,425 @@ struct EditorWorkspace {
   }
 
   @Builder
-  private buildPageRail(): void {
-    Column() {
-      Row() {
-        Text(this.selectedPageLabel())
-          .fontSize(11)
-          .fontWeight(FontWeight.Medium)
-          .fontColor('#667085')
+  private buildPageRailPreviewCard(pageIndex: number): void {
+    Stack({ alignContent: Alignment.TopStart }) {
+      if (this.pagePreviewSnapshotAt(pageIndex) !== undefined) {
+        PreviewThumbnail({
+          previewSnapshot: this.pagePreviewSnapshotAt(pageIndex) as DocumentPreviewSnapshot,
+          fallbackSummary: '',
+          thumbnailWidth: PAGE_RAIL_THUMBNAIL_WIDTH,
+          thumbnailHeight: PAGE_RAIL_THUMBNAIL_HEIGHT
+        })
+      } else {
+        Stack({ alignContent: Alignment.TopStart }) {
+          Row()
+            .width(PAGE_RAIL_THUMBNAIL_WIDTH)
+            .height(PAGE_RAIL_THUMBNAIL_HEIGHT)
+            .backgroundColor('#FFFFFF')
+            .borderRadius(22)
+            .border({ width: 1, color: '#D8E0EA' })
+          if (this.pageEntryAt(pageIndex)?.pageKind === 'pdf' || this.pageEntryAt(pageIndex)?.pageKind === 'pdf-fragment') {
+            Row()
+              .width(PAGE_RAIL_THUMBNAIL_WIDTH - 20)
+              .height(PAGE_RAIL_THUMBNAIL_HEIGHT - 20)
+              .backgroundColor('#F2F4F7')
+              .borderRadius(18)
+              .position({ x: 10, y: 10 })
+          } else {
+            ForEach([0, 1, 2, 3, 4], (rowIndex: number) => {
+              Row()
+                .width(PAGE_RAIL_THUMBNAIL_WIDTH - 28)
+                .height(1)
+                .backgroundColor('#E3E8EF')
+                .opacity(0.75)
+                .position({
+                  x: 14,
+                  y: 26 + rowIndex * Math.round((PAGE_RAIL_THUMBNAIL_HEIGHT - 58) / 5)
+                })
+            }, (rowIndex: number): string => `page-line-${pageIndex}-${rowIndex}`)
+          }
+        }
+      }
+      if (this.isSelectedPageIndex(pageIndex)) {
+        Row()
+          .width(PAGE_RAIL_THUMBNAIL_WIDTH)
+          .height(PAGE_RAIL_THUMBNAIL_HEIGHT)
+          .border({ width: 2, color: '#2A9D8F' })
+          .borderRadius(22)
+      }
+    }
+  }
+
+  @Builder
+  private buildPageRailHeader(): void {
+    Column({ space: 12 }) {
+      Row({ space: 8 }) {
+        TextInput({ text: this.pageSearchText, placeholder: '搜索' })
           .layoutWeight(1)
+          .height(40)
+          .backgroundColor('#FFFFFF')
+          .borderRadius(14)
+          .padding({ left: 12, right: 12 })
+          .fontSize(13)
+          .onChange((value: string) => {
+            this.pageSearchText = value;
+          })
+        Button('···')
+          .width(40)
+          .height(40)
+          .backgroundColor('#F8FAFC')
+          .fontColor('#475467')
+          .fontSize(16)
+          .borderRadius(14)
+          .onClick(() => {
+            this.toggleRailMenu();
+          })
+      }
+      Row({ space: 8 }) {
+        Text('所有页面')
+          .fontSize(15)
+          .fontWeight(FontWeight.Bold)
+          .fontColor('#101828')
+        Text('⌄')
+          .fontSize(14)
+          .fontColor('#101828')
+        Blank()
+          .layoutWeight(1)
+        if (this.showPageJumpInput) {
+          Row({ space: 6 }) {
+            TextInput({ text: this.pageJumpDraft, placeholder: `${this.activePageIndex + 1}` })
+              .width(52)
+              .height(34)
+              .backgroundColor('#FFFFFF')
+              .textAlign(TextAlign.Center)
+              .borderRadius(12)
+              .onChange((value: string) => {
+                this.pageJumpDraft = value.replace(/[^0-9]/g, '');
+              })
+            Text(`/ ${this.pageCount()}`)
+              .fontSize(12)
+              .fontColor('#667085')
+            Button('跳转')
+              .height(34)
+              .enabled(this.pageJumpTargetIndex() >= 0)
+              .backgroundColor('#162033')
+              .fontColor('#FFFFFF')
+              .fontSize(11)
+              .padding({ left: 12, right: 12 })
+              .borderRadius(12)
+              .onClick(async () => {
+                await this.jumpToDraftPage();
+              })
+            Button('×')
+              .width(32)
+              .height(32)
+              .backgroundColor('#E7ECF3')
+              .fontColor('#475467')
+              .fontSize(14)
+              .borderRadius(12)
+              .onClick(() => {
+                this.closePageJumpInput();
+              })
+          }
+        } else {
+          Button(this.selectedPageLabel())
+            .height(34)
+            .padding({ left: 12, right: 12 })
+            .backgroundColor('#FFFFFF')
+            .fontColor('#344054')
+            .fontSize(12)
+            .borderRadius(12)
+            .onClick(() => {
+              this.openPageJumpInput();
+            })
+        }
         if (this.canAddRealPages()) {
           Button('+')
-            .width(24)
-            .height(24)
-            .fontSize(14)
+            .width(32)
+            .height(32)
+            .fontSize(16)
             .backgroundColor('#FFFFFF')
             .fontColor('#162033')
+            .borderRadius(12)
             .onClick(() => {
               this.addPage();
             })
         }
       }
-      .margin({ bottom: 8 })
-      Scroll() {
-        Column() {
-          ForEach(this.pageIndexes(), (pageIndex: number) => {
-            Column() {
-              PreviewThumbnail({
-                previewSnapshot: this.document?.previewSnapshot,
-                fallbackSummary: this.document?.previewSummary ?? '',
-                thumbnailWidth: 56,
-                thumbnailHeight: 78
-              })
-              Text(`${pageIndex + 1}`)
-                .fontSize(10)
-                .fontColor(this.isSelectedPageIndex(pageIndex) ? '#0F766E' : '#667085')
-                .margin({ top: 4 })
-              if (this.canDeleteCurrentPage() && this.isSelectedPageIndex(pageIndex)) {
-                Button('-')
-                  .width(24)
-                  .height(18)
-                  .margin({ top: 6 })
-                  .fontSize(12)
-                  .backgroundColor('#FDECEC')
-                  .fontColor('#B42318')
-                  .onClick(() => {
-                    this.deleteCurrentPage();
-                  })
-              }
-            }
-            .width('100%')
-            .padding({ top: 6, bottom: 6, left: 4, right: 4 })
-            .margin({ bottom: 6 })
-            .backgroundColor(this.isSelectedPageIndex(pageIndex) ? '#E8F5F3' : '#FFFFFF')
-            .border({
-              width: this.isSelectedPageIndex(pageIndex) ? 2 : 1,
-              color: this.isSelectedPageIndex(pageIndex) ? '#0F766E' : '#D8E0EA'
-            })
-            .borderRadius(12)
-            .onClick(() => {
-              this.selectPage(pageIndex);
-            })
-          }, (pageIndex: number): string => this.pageKeyAt(pageIndex))
+    }
+  }
+
+  @Builder
+  private buildRailMenu(): void {
+    Column() {
+      Button('快速导出')
+        .width('100%')
+        .height(44)
+        .backgroundColor('#FFFFFF')
+        .fontColor('#101828')
+        .fontSize(14)
+        .onClick(async () => {
+          this.closeRailMenus();
+          await this.saveDocument();
+        })
+      Button('导出选项')
+        .width('100%')
+        .height(44)
+        .backgroundColor('#FFFFFF')
+        .fontColor('#101828')
+        .fontSize(14)
+        .onClick(() => {
+          this.noteUnsupportedMenuAction('导出选项');
+        })
+      Button('发布到图库')
+        .width('100%')
+        .height(44)
+        .backgroundColor('#FFFFFF')
+        .fontColor('#101828')
+        .fontSize(14)
+        .onClick(() => {
+          this.noteUnsupportedMenuAction('发布到图库');
+        })
+      Button('创建链接')
+        .width('100%')
+        .height(44)
+        .backgroundColor('#FFFFFF')
+        .fontColor('#101828')
+        .fontSize(14)
+        .onClick(() => {
+          this.noteUnsupportedMenuAction('创建链接');
+        })
+      Blank()
+        .width('100%')
+        .height(1)
+        .backgroundColor('#E4E7EC')
+      Button('模板设置')
+        .width('100%')
+        .height(44)
+        .backgroundColor('#FFFFFF')
+        .fontColor('#101828')
+        .fontSize(14)
+        .onClick(() => {
+          this.noteUnsupportedMenuAction('模板设置');
+        })
+      Button('查看设置')
+        .width('100%')
+        .height(44)
+        .backgroundColor('#FFFFFF')
+        .fontColor('#101828')
+        .fontSize(14)
+        .onClick(() => {
+          this.previewMode = 'preview';
+          this.showInspectorDrawer = true;
+          this.closeRailMenus();
+        })
+      Column() {
+        Text(this.document?.title ?? '未命名笔记')
+          .fontSize(15)
+          .fontWeight(FontWeight.Medium)
+          .fontColor('#101828')
+          .maxLines(2)
+        Text(`创建于: ${this.currentDocumentCreatedLabel()}`)
+          .fontSize(12)
+          .fontColor('#667085')
+          .margin({ top: 4 })
+      }
+      .width('100%')
+      .padding(14)
+      .backgroundColor('#FFFFFF')
+      .borderRadius(16)
+      .margin({ top: 8 })
+      Row({ space: 8 }) {
+        Button(EDITOR_WORKSPACE_COPY.preview)
+          .layoutWeight(1)
+          .height(42)
+          .backgroundColor(this.previewMode === 'preview' ? '#162033' : '#FFFFFF')
+          .fontColor(this.previewMode === 'preview' ? '#FFFFFF' : '#162033')
+          .fontSize(13)
+          .borderRadius(14)
+          .onClick(() => {
+            this.previewMode = 'preview';
+            this.showInspectorDrawer = true;
+            this.closeRailMenus();
+          })
+        Button('Markdown')
+          .layoutWeight(1)
+          .height(42)
+          .backgroundColor(this.previewMode === 'source' ? '#162033' : '#FFFFFF')
+          .fontColor(this.previewMode === 'source' ? '#FFFFFF' : '#162033')
+          .fontSize(13)
+          .borderRadius(14)
+          .onClick(() => {
+            this.previewMode = 'source';
+            this.showInspectorDrawer = true;
+            this.closeRailMenus();
+          })
+      }
+      .margin({ top: 8 })
+    }
+    .width(PAGE_RAIL_MENU_WIDTH)
+    .padding(12)
+    .backgroundColor('#F9FAFB')
+    .border({ width: 1, color: '#E4E7EC' })
+    .borderRadius(20)
+  }
+
+  @Builder
+  private buildPageMenu(pageIndex: number): void {
+    Column() {
+      Button('添加页面')
+        .width('100%')
+        .height(40)
+        .backgroundColor('#FFFFFF')
+        .fontColor('#101828')
+        .fontSize(13)
+        .onClick(async () => {
+          this.closeRailMenus();
+          await this.addPage();
+        })
+      Button('剪切')
+        .width('100%')
+        .height(40)
+        .backgroundColor('#FFFFFF')
+        .fontColor('#101828')
+        .fontSize(13)
+        .onClick(() => {
+          this.noteUnsupportedMenuAction('剪切');
+        })
+      Button('拷贝')
+        .width('100%')
+        .height(40)
+        .backgroundColor('#FFFFFF')
+        .fontColor('#101828')
+        .fontSize(13)
+        .onClick(() => {
+          this.noteUnsupportedMenuAction('拷贝');
+        })
+      Button('复制')
+        .width('100%')
+        .height(40)
+        .backgroundColor('#FFFFFF')
+        .fontColor('#101828')
+        .fontSize(13)
+        .onClick(async () => {
+          await this.duplicateCurrentPage();
+        })
+      Button('创建模板')
+        .width('100%')
+        .height(40)
+        .backgroundColor('#FFFFFF')
+        .fontColor('#101828')
+        .fontSize(13)
+        .onClick(() => {
+          this.noteUnsupportedMenuAction('创建模板');
+        })
+      Button('清除页面')
+        .width('100%')
+        .height(40)
+        .backgroundColor('#FFFFFF')
+        .fontColor('#101828')
+        .fontSize(13)
+        .onClick(async () => {
+          await this.clearCurrentPageContent();
+        })
+      Button('删除')
+        .width('100%')
+        .height(40)
+        .enabled(this.canDeleteCurrentPage())
+        .backgroundColor('#FFFFFF')
+        .fontColor('#F04438')
+        .fontSize(13)
+        .onClick(async () => {
+          this.closeRailMenus();
+          await this.deleteCurrentPage();
+        })
+    }
+    .width(PAGE_RAIL_MENU_WIDTH)
+    .padding(10)
+    .backgroundColor('#F9FAFB')
+    .border({ width: 1, color: '#E4E7EC' })
+    .borderRadius(20)
+  }
+
+  @Builder
+  private buildPageRailItem(pageIndex: number): void {
+    Column({ space: 10 }) {
+      Stack({ alignContent: Alignment.BottomStart }) {
+        this.buildPageRailPreviewCard(pageIndex)
+        Button('···')
+          .width(32)
+          .height(32)
+          .fontSize(14)
+          .backgroundColor('#FFFFFF')
+          .fontColor('#475467')
+          .borderRadius(16)
+          .margin({ left: 10, bottom: 10 })
+          .onClick(async () => {
+            await this.togglePageMenu(pageIndex);
+          })
+        if (this.isPageMenuOpen(pageIndex)) {
+          Column() {
+            this.buildPageMenu(pageIndex)
+          }
+          .position({ x: 18, y: PAGE_RAIL_THUMBNAIL_HEIGHT - 12 })
         }
       }
-      .layoutWeight(1)
+      Text(`${pageIndex + 1}`)
+        .fontSize(12)
+        .fontWeight(this.isSelectedPageIndex(pageIndex) ? FontWeight.Medium : FontWeight.Normal)
+        .fontColor(this.isSelectedPageIndex(pageIndex) ? '#0F766E' : '#475467')
     }
-    .width(82)
+    .width('100%')
+    .padding({ top: 2, bottom: 18 })
+    .alignItems(HorizontalAlign.Center)
+    .onClick(() => {
+      this.selectPage(pageIndex);
+    })
+  }
+
+  @Builder
+  private buildPageRail(): void {
+    Stack({ alignContent: Alignment.TopStart }) {
+      Column({ space: 14 }) {
+        this.buildPageRailHeader()
+        Scroll() {
+          Column({ space: 2 }) {
+            if (this.filteredPageIndexes().length === 0) {
+              Column({ space: 8 }) {
+                Text('没有匹配页面')
+                  .fontSize(13)
+                  .fontWeight(FontWeight.Medium)
+                  .fontColor('#344054')
+                Text('试试输入页码进行跳转')
+                  .fontSize(11)
+                  .fontColor('#667085')
+              }
+              .width('100%')
+              .padding({ top: 24, bottom: 24 })
+              .alignItems(HorizontalAlign.Center)
+            } else {
+              ForEach(this.filteredPageIndexes(), (pageIndex: number) => {
+                this.buildPageRailItem(pageIndex)
+              }, (pageIndex: number): string => this.pageKeyAt(pageIndex))
+            }
+          }
+          .padding({ top: 4, bottom: 18 })
+        }
+        .layoutWeight(1)
+      }
+      if (this.showRailMenu) {
+        Column() {
+          this.buildRailMenu()
+        }
+        .position({ x: 18, y: 58 })
+      }
+    }
+    .width(EDITOR_PAGE_RAIL_WIDTH)
     .height('100%')
-    .padding(6)
-    .backgroundColor('#F7F9FC')
+    .padding(16)
+    .backgroundColor('#F3F4F6')
     .border({ width: 1, color: '#D8E0EA' })
-    .borderRadius(18)
+    .borderRadius(28)
   }
 
   build() {
@@ -1678,85 +2528,67 @@ struct EditorWorkspace {
         .justifyContent(FlexAlign.Center)
         .backgroundColor('#EEF2F8')
       } else {
-        Row() {
-          Stack() {
-            this.buildWritingSurface()
-            Row() {
-              this.buildHeaderBar()
-              Blank()
-                .layoutWeight(1)
-                .hitTestBehavior(HitTestMode.None)
-            }
-            .width('100%')
-            .padding({ top: 8, left: 8, right: 8 })
-            .hitTestBehavior(HitTestMode.Transparent)
-            Row() {
-              Blank()
-                .layoutWeight(1)
-                .hitTestBehavior(HitTestMode.None)
-              this.buildFloatingToolbar()
-              Blank()
-                .layoutWeight(1)
-                .hitTestBehavior(HitTestMode.None)
-            }
-            .width('100%')
-            .padding({ top: 8, left: 72, right: 72 })
-            .hitTestBehavior(HitTestMode.Transparent)
-            if (this.shouldUseSimulatorStubUi()) {
-              Row() {
-                Blank()
-                  .layoutWeight(1)
-                  .hitTestBehavior(HitTestMode.None)
-                this.buildStubBadge()
-              }
-              .width('100%')
-              .padding({ top: 48, left: 8, right: 8 })
-              .hitTestBehavior(HitTestMode.Transparent)
-            }
-            if (this.showInspectorDrawer) {
-              Row() {
-                Blank()
-                  .layoutWeight(1)
-                this.buildInspectorDrawer()
-              }
-              .width('100%')
-              .height('100%')
-              .padding({ top: 76, right: 8, bottom: 8, left: 8 })
-            }
-            if (this.showTracePanel) {
-              Column() {
-                Blank()
-                  .layoutWeight(1)
-                Row() {
-                  this.buildTracePanel()
+        Row({ space: 12 }) {
+          Column({ space: 12 }) {
+            this.buildHeaderArea()
+            Row({ space: 12 }) {
+              Column({ space: 12 }) {
+                Row({ space: 12 }) {
+                  this.buildFloatingToolbar()
                   Blank()
                     .layoutWeight(1)
+                    .hitTestBehavior(HitTestMode.None)
                 }
-              }
-              .width('100%')
-              .height('100%')
-              .padding({ top: 96, right: 8, bottom: 8, left: 8 })
-            }
-            Row() {
-              this.buildBackHitTarget()
-              Blank()
+                .width('100%')
+                .alignItems(VerticalAlign.Top)
+                Stack({ alignContent: Alignment.BottomStart }) {
+                  this.buildWritingSurface()
+                  if (!this.showTracePanel) {
+                    Row() {
+                      this.buildBottomHint()
+                      Blank()
+                        .layoutWeight(1)
+                        .hitTestBehavior(HitTestMode.None)
+                    }
+                    .width('100%')
+                    .padding(12)
+                    .hitTestBehavior(HitTestMode.Transparent)
+                  }
+                  if (this.showTracePanel) {
+                    Row() {
+                      this.buildTracePanel()
+                      Blank()
+                        .layoutWeight(1)
+                        .hitTestBehavior(HitTestMode.None)
+                    }
+                    .width('100%')
+                    .height('100%')
+                    .padding(12)
+                    .hitTestBehavior(HitTestMode.Transparent)
+                  }
+                }
                 .layoutWeight(1)
-                .hitTestBehavior(HitTestMode.None)
+                .width('100%')
+                .backgroundColor('#F4F7FB')
+                .borderRadius(22)
+              }
+              .layoutWeight(1)
+              .height('100%')
+              if (this.showInspectorDrawer) {
+                this.buildInspectorDrawer()
+              }
             }
+            .layoutWeight(1)
             .width('100%')
-            .padding({ top: 8, left: 8, right: 8 })
-            .hitTestBehavior(HitTestMode.Transparent)
+            .alignItems(VerticalAlign.Top)
           }
           .layoutWeight(1)
           .height('100%')
-          .margin({ right: 8 })
-          .backgroundColor('#F4F7FB')
-          .borderRadius(22)
           this.buildPageRail()
         }
         .width('100%')
         .height('100%')
-        .padding(8)
+        .padding(12)
         .backgroundColor('#E9EEF5')
       }
     }
