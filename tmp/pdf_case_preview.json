@@ -1,0 +1,109 @@
+{
+  "schemaVersion": 2,
+  "previewSchemaVersion": 0,
+  "generatedAt": 1773187921620,
+  "summary": "新的 PDF 批注文档，等待源文件与墨迹图层。",
+  "previewLabel": "paged/opengles",
+  "type": "pdf",
+  "source": "native",
+  "previewStatus": "ready",
+  "status": "ready",
+  "targetMode": "stats-fallback",
+  "coverPageId": "page-1",
+  "pageIds": [
+    "page-0",
+    "page-1"
+  ],
+  "layers": [
+    "pdf",
+    "ink"
+  ],
+  "pageIndex": 1,
+  "documentMode": "paged",
+  "renderBackend": "opengles",
+  "pageContract": {
+    "schemaVersion": 1,
+    "pageId": "page-1",
+    "pageTemplateId": "blank",
+    "pageSizeId": "letter_optimized",
+    "widthPt": 612.283,
+    "heightPt": 790.866,
+    "paperBackgroundId": "plain_white",
+    "fill": "#FFFFFF",
+    "accent": "#D0D5DD",
+    "guideKind": "plain",
+    "primitives": [
+      {
+        "id": "blank-safe-area",
+        "kind": "header",
+        "x": 0.04,
+        "y": 0.03,
+        "width": 0.92,
+        "height": 0.94,
+        "stroke": "#E5E7EB",
+        "strokeWidth": 0.5,
+        "opacity": 0.2
+      }
+    ],
+    "fillColor": "#FFFFFF",
+    "accentColor": "#D0D5DD",
+    "guide": {
+      "guideKind": "plain",
+      "contentBounds": {
+        "x": 0.04,
+        "y": 0.03,
+        "width": 0.92,
+        "height": 0.94
+      }
+    }
+  },
+  "coordinateSpace": "legacy-surface",
+  "targetBounds": {
+    "minX": 0,
+    "minY": 0,
+    "maxX": 612.283,
+    "maxY": 790.866
+  },
+  "layout": {
+    "mode": "paged",
+    "pageCount": 2,
+    "pages": [
+      {
+        "pageId": "page-0",
+        "pageIndex": 0,
+        "width": 612.283,
+        "height": 790.866,
+        "bounds": {
+          "minX": 0,
+          "minY": 0,
+          "maxX": 612.283,
+          "maxY": 790.866
+        },
+        "backgroundId": "pdf/source-0",
+        "guideKind": "plain"
+      },
+      {
+        "pageId": "page-1",
+        "pageIndex": 1,
+        "width": 612.283,
+        "height": 790.866,
+        "bounds": {
+          "minX": 0,
+          "minY": 0,
+          "maxX": 612.283,
+          "maxY": 790.866
+        },
+        "backgroundId": "pdf/source-1",
+        "guideKind": "plain"
+      }
+    ],
+    "documentBounds": {
+      "minX": 0,
+      "minY": 0,
+      "maxX": 612.283,
+      "maxY": 790.866
+    }
+  },
+  "checkpointCount": 2,
+  "objectCount": 1
+}

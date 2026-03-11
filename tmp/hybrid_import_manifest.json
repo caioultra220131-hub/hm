@@ -1,0 +1,57 @@
+{
+  "id": "doc-1773185380483-437183",
+  "title": "未命名笔记",
+  "documentType": "hybrid",
+  "documentMode": "paged",
+  "renderBackend": "opengles",
+  "schemaVersion": 2,
+  "activePageId": "page-1",
+  "pages": [
+    {
+      "id": "page-0",
+      "order": 0,
+      "pageKind": "pdf",
+      "pageTemplateId": "blank",
+      "pageSizeId": "letter_optimized",
+      "paperBackgroundId": "plain_white",
+      "sourceAttachmentId": "attachment-1773185380483-905745",
+      "sourcePageIndex": 0
+    },
+    {
+      "id": "page-1",
+      "order": 1,
+      "pageKind": "pdf",
+      "pageTemplateId": "blank",
+      "pageSizeId": "letter_optimized",
+      "paperBackgroundId": "plain_white",
+      "sourceAttachmentId": "attachment-1773185380483-905745",
+      "sourcePageIndex": 1
+    }
+  ],
+  "pageTemplateId": "blank",
+  "pageSizeId": "letter_optimized",
+  "paperBackgroundId": "plain_white",
+  "folderId": "inbox",
+  "coverPage": 1,
+  "coverVersion": 1,
+  "isFavorite": false,
+  "isTrashed": false,
+  "createdAt": 1773185380483,
+  "updatedAt": 1773185793710,
+  "openedAt": 1773185793710,
+  "trashedAt": 0,
+  "attachments": [
+    {
+      "id": "attachment-1773185380483-905745",
+      "kind": "pdf",
+      "displayName": "m2-valid-2pages.pdf",
+      "mimeType": "application/pdf",
+      "relativePath": "attachments/attachment-1773185380483-905745.pdf",
+      "byteSize": 294,
+      "importedAt": 1773185380483,
+      "pageCount": 2
+    }
+  ],
+  "tags": [],
+  "previewSummary": "一份可混合空白纸张、文本框、PDF 片段与墨迹对象的混合笔记。"
+}

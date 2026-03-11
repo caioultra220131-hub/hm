@@ -1,0 +1,57 @@
+{
+  "id": "doc-1773184458490-805034",
+  "title": "未命名笔记",
+  "documentType": "pdf",
+  "documentMode": "paged",
+  "renderBackend": "opengles",
+  "schemaVersion": 2,
+  "activePageId": "page-1",
+  "pages": [
+    {
+      "id": "page-0",
+      "order": 0,
+      "pageKind": "pdf",
+      "pageTemplateId": "blank",
+      "pageSizeId": "letter_optimized",
+      "paperBackgroundId": "plain_white",
+      "sourceAttachmentId": "attachment-1773184458490-791698",
+      "sourcePageIndex": 0
+    },
+    {
+      "id": "page-1",
+      "order": 1,
+      "pageKind": "pdf",
+      "pageTemplateId": "blank",
+      "pageSizeId": "letter_optimized",
+      "paperBackgroundId": "plain_white",
+      "sourceAttachmentId": "attachment-1773184458490-791698",
+      "sourcePageIndex": 1
+    }
+  ],
+  "pageTemplateId": "blank",
+  "pageSizeId": "letter_optimized",
+  "paperBackgroundId": "plain_white",
+  "folderId": "inbox",
+  "coverPage": 1,
+  "coverVersion": 1,
+  "isFavorite": false,
+  "isTrashed": false,
+  "createdAt": 1773184458490,
+  "updatedAt": 1773184952018,
+  "openedAt": 1773184586816,
+  "trashedAt": 0,
+  "attachments": [
+    {
+      "id": "attachment-1773184458490-791698",
+      "kind": "pdf",
+      "displayName": "m2-valid-2pages.pdf",
+      "mimeType": "application/pdf",
+      "relativePath": "attachments/attachment-1773184458490-791698.pdf",
+      "byteSize": 294,
+      "importedAt": 1773184458490,
+      "pageCount": 2
+    }
+  ],
+  "tags": [],
+  "previewSummary": "新的 PDF 批注文档，等待源文件与墨迹图层。"
+}
