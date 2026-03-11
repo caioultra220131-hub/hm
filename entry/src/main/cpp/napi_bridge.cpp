@@ -133,6 +133,17 @@ static napi_value ExportSceneSnapshot(napi_env env, napi_callback_info info)
     return CreateString(env, response);
 }
 
+static napi_value ReadPdfPageCount(napi_env env, napi_callback_info info)
+{
+    size_t argc = 1;
+    napi_value args[1] = { nullptr };
+    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
+    std::string response = argc == 1
+        ? GetNoteEngineRuntime().ReadPdfPageCount(GetStringArg(env, args[0]))
+        : R"({"status":"invalid-args","detail":"pdfPath is required"})";
+    return CreateString(env, response);
+}
+
 static napi_value SetActivePage(napi_env env, napi_callback_info info)
 {
     size_t argc = 2;
@@ -289,6 +300,7 @@ static napi_value Init(napi_env env, napi_value exports)
         { "saveCheckpoint", nullptr, SaveCheckpoint, nullptr, nullptr, nullptr, napi_default, nullptr },
         { "requestPreviewRender", nullptr, RequestPreviewRender, nullptr, nullptr, nullptr, napi_default, nullptr },
         { "exportSceneSnapshot", nullptr, ExportSceneSnapshot, nullptr, nullptr, nullptr, napi_default, nullptr },
+        { "readPdfPageCount", nullptr, ReadPdfPageCount, nullptr, nullptr, nullptr, napi_default, nullptr },
         { "setActivePage", nullptr, SetActivePage, nullptr, nullptr, nullptr, napi_default, nullptr },
         { "insertPage", nullptr, InsertPage, nullptr, nullptr, nullptr, napi_default, nullptr },
         { "deletePage", nullptr, DeletePage, nullptr, nullptr, nullptr, napi_default, nullptr },

@@ -26,6 +26,9 @@ export enum ToolType {
   TEXT = 'text'
 }
 
+export type DocumentPageKind = 'blank' | 'pdf' | 'pdf-fragment';
+export type DocumentAttachmentKind = 'pdf';
+
 export interface FolderRecord {
   id: string;
   title: string;
@@ -56,9 +59,20 @@ export interface DocumentPageEntry {
   pageTemplateId?: string;
   pageSizeId?: string;
   paperBackgroundId?: string;
-  pageKind: string;
+  pageKind: DocumentPageKind;
   sourceAttachmentId?: string;
   sourcePageIndex?: number;
+}
+
+export interface DocumentAttachmentEntry {
+  id: string;
+  kind: DocumentAttachmentKind;
+  displayName: string;
+  mimeType: string;
+  relativePath: string;
+  byteSize: number;
+  importedAt: number;
+  pageCount: number;
 }
 
 export interface DocumentRecord {
@@ -89,6 +103,7 @@ export interface DocumentRecord {
   updatedAt: number;
   openedAt: number;
   trashedAt: number;
+  attachments: DocumentAttachmentEntry[];
   tags: TagRecord[];
 }
 
@@ -122,6 +137,7 @@ export interface DocumentManifest {
   updatedAt: number;
   openedAt: number;
   trashedAt: number;
+  attachments: DocumentAttachmentEntry[];
   tags: TagRecord[];
   previewSummary: string;
 }
@@ -137,6 +153,20 @@ export interface DocumentCreatePayload {
   folderId: string | null;
   initialMarkdown?: string;
   previewSummary?: string;
+}
+
+export interface ImportedDocumentCreatePayload {
+  title: string;
+  documentType: DocumentType.PDF | DocumentType.HYBRID;
+  renderBackend: RenderBackend;
+  folderId: string | null;
+  sourceUri: string;
+  sourceDisplayName: string;
+  sourceMimeType: string;
+  sourceByteSize: number;
+  pageTemplateId?: string;
+  pageSizeId?: string;
+  paperBackgroundId?: string;
 }
 
 export interface LibraryQuery {

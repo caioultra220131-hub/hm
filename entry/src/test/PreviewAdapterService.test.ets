@@ -178,5 +178,55 @@ export default function previewAdapterServiceTest() {
       expect(snapshot.layout?.pageCount).assertEqual(1);
       expect(snapshot.extension?.['extraField']).assertEqual('kept');
     });
+
+    it('previewAdapterKeepsCoverPageInSyncWithActivePreviewPage', 0, () => {
+      const adapter = new PreviewAdapterService();
+      const snapshot = adapter.normalizeRequestPreviewRenderPayload(
+        {
+          previewSchemaVersion: 3,
+          status: 'ready',
+          pageIndex: 1,
+          pageId: 'page-1',
+          coverPageId: 'page-0',
+          layout: {
+            pageCount: 2,
+            pages: [
+              {
+                pageId: 'page-0',
+                pageIndex: 0,
+                backgroundId: 'plain_white',
+                guideKind: 'plain'
+              },
+              {
+                pageId: 'page-1',
+                pageIndex: 1,
+                backgroundId: 'plain_white',
+                guideKind: 'plain'
+              }
+            ]
+          }
+        },
+        {
+          documentType: DocumentType.PDF,
+          documentMode: DocumentMode.PAGED,
+          renderBackend: RenderBackend.OPEN_GLES,
+          pageMetadata: {
+            pageTemplateId: 'pdf_annotation',
+            pageSizeId: 'letter_optimized',
+            paperBackgroundId: 'plain_white'
+          },
+          generatedAt: 400,
+          fallbackSummary: 'pdf summary',
+          fallbackPreviewLabel: 'paged/opengles',
+          fallbackPageIndex: 1
+        }
+      );
+
+      expect(snapshot.pageIndex).assertEqual(1);
+      expect(snapshot.coverPageId).assertEqual('page-1');
+      expect(snapshot.pageIds.length).assertEqual(2);
+      expect(snapshot.pageIds[0]).assertEqual('page-0');
+      expect(snapshot.pageIds[1]).assertEqual('page-1');
+    });
   });
 }

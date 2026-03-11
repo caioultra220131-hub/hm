@@ -1,6 +1,6 @@
 import { relationalStore } from '@kit.ArkData';
 import { common } from '@kit.AbilityKit';
-import { fileIo } from '@kit.CoreFileKit';
+import { fileIo, fileUri } from '@kit.CoreFileKit';
 import { getDocumentPageMetadataFromSettings } from '../models/AppSettingsModels';
 import {
   DEFAULT_DOCUMENT_PAGE_METADATA,
@@ -16,13 +16,16 @@ import { DocumentPreviewSnapshot, PreviewNormalizationContext } from '../models/
 import {
   DEFAULT_FOLDERS,
   DEFAULT_TAGS,
+  DocumentAttachmentEntry,
   DocumentCreatePayload,
   DocumentManifest,
   DocumentMode,
   DocumentPageEntry,
+  DocumentPageKind,
   DocumentRecord,
   DocumentType,
   FolderRecord,
+  ImportedDocumentCreatePayload,
   HomeSectionVM,
   LibraryHomeData,
   LibraryQuery,
@@ -31,6 +34,7 @@ import {
   TrashItemVM
 } from '../models/NoteModels';
 import { AppSettingsService } from './AppSettingsService';
+import { NativeNoteEngine, NativePdfPageCountResult } from './NativeNoteEngine';
 import { PreviewAdapterService } from './PreviewAdapterService';
 import { IdGenerator } from '../utils/IdGenerator';
 import { MarkdownUtils } from '../utils/MarkdownUtils';
@@ -180,7 +184,8 @@ const DOCUMENT_LIBRARY_COPY: DocumentLibraryCopy = {
 
 const DOCUMENT_PACKAGE_SCHEMA_VERSION_V2: number = 2;
 const LEGACY_DOCUMENT_PACKAGE_SCHEMA_VERSION: number = 1;
-const BLANK_PAGE_KIND: string = 'blank';
+const BLANK_PAGE_KIND: DocumentPageKind = 'blank';
+const PDF_PAGE_KIND: DocumentPageKind = 'pdf';
 
 /**
  * DocumentLibraryService manages both the metadata database and per-document package folders.
@@ -197,6 +202,7 @@ export class DocumentLibraryService {
     securityLevel: relationalStore.SecurityLevel.S1
   };
   private appSettingsService: AppSettingsService | undefined;
+  private readonly nativeNoteEngine: NativeNoteEngine = new NativeNoteEngine();
   private readonly previewAdapter: PreviewAdapterService = new PreviewAdapterService();
   private readonly previewSnapshotCache: Map<string, DocumentPreviewSnapshot> = new Map<string, DocumentPreviewSnapshot>();
   private readonly previewCacheKeyByPath: Map<string, string> = new Map<string, string>();
@@ -468,6 +474,7 @@ export class DocumentLibraryService {
         updatedAt: now,
         openedAt: now,
         trashedAt: 0,
+        attachments: [],
         tags: [],
         previewSummary
       };
@@ -540,6 +547,367 @@ export class DocumentLibraryService {
       return this.requireDocument(documentId);
     } catch (error) {
       throw this.wrapFileError('DocumentLibraryService.createDocument', 'bootstrap', this.documentsRoot, error as Object);
+    }
+  }
+
+  async createImportedDocument(payload: ImportedDocumentCreatePayload): Promise<DocumentRecord> {
+    await this.ensureStore();
+    const now: number = Date.now();
+    const documentId: string = IdGenerator.document();
+    const attachmentId: string = IdGenerator.document('attachment');
+    const packagePath: string = `${this.documentsRoot}/${documentId}`;
+    const manifestPath: string = `${packagePath}/manifest.json`;
+    const previewPath: string = `${packagePath}/preview.json`;
+    const attachmentRelativePath: string = this.buildImportedAttachmentRelativePath(attachmentId);
+    const attachmentPath: string = `${packagePath}/${attachmentRelativePath}`;
+    let packageCreated: boolean = false;
+    let insertedDocumentRow: boolean = false;
+    let insertedFlagsRow: boolean = false;
+    let insertedRecentRow: boolean = false;
+
+    try {
+      const compatFields: ResolvedDocumentPageMetadata = await this.resolveDocumentCompatFields({
+        pageTemplateId: payload.pageTemplateId,
+        pageSizeId: payload.pageSizeId,
+        paperBackgroundId: payload.paperBackgroundId
+      });
+      this.ensureDir(this.documentsRoot);
+      this.ensureDir(packagePath);
+      packageCreated = true;
+      this.ensureDir(`${packagePath}/attachments`);
+      this.copyBinaryFile(payload.sourceUri, attachmentPath);
+      const pageCountResult: NativePdfPageCountResult | null = this.nativeNoteEngine.readPdfPageCount(attachmentPath);
+      const normalizedPageCount: number = this.requireImportedPdfPageCount(pageCountResult, attachmentPath);
+      const attachmentEntry: DocumentAttachmentEntry = this.buildImportedAttachmentEntry(
+        attachmentId,
+        payload.sourceDisplayName,
+        payload.sourceMimeType,
+        attachmentRelativePath,
+        payload.sourceByteSize,
+        now,
+        normalizedPageCount
+      );
+      const pages: DocumentPageEntry[] = await this.buildImportedPdfPages(
+        normalizedPageCount,
+        compatFields,
+        attachmentEntry.id
+      );
+      const previewSummary: string = this.defaultSummary({
+        title: payload.title,
+        documentType: payload.documentType,
+        documentMode: DocumentMode.PAGED,
+        renderBackend: payload.renderBackend,
+        folderId: payload.folderId
+      });
+
+      this.initializePagedPageStorage(packagePath, pages);
+
+      const manifest: DocumentManifest = {
+        id: documentId,
+        title: payload.title,
+        documentType: payload.documentType,
+        documentMode: DocumentMode.PAGED,
+        renderBackend: payload.renderBackend,
+        schemaVersion: DOCUMENT_PACKAGE_SCHEMA_VERSION_V2,
+        activePageId: pages[0]?.id ?? '',
+        pages,
+        pageTemplateId: compatFields.pageTemplateId,
+        pageSizeId: compatFields.pageSizeId,
+        paperBackgroundId: compatFields.paperBackgroundId,
+        folderId: payload.folderId,
+        coverPage: pages[0]?.order ?? 0,
+        coverVersion: 1,
+        isFavorite: false,
+        isTrashed: false,
+        createdAt: now,
+        updatedAt: now,
+        openedAt: now,
+        trashedAt: 0,
+        attachments: [attachmentEntry],
+        tags: [],
+        previewSummary
+      };
+
+      this.writeJsonFile(manifestPath, manifest);
+      const previewSnapshot: DocumentPreviewSnapshot = this.previewAdapter.normalizeRequestPreviewRenderPayload(
+        undefined,
+        this.buildPreviewNormalizationContext(
+          payload.documentType,
+          DocumentMode.PAGED,
+          payload.renderBackend,
+          compatFields,
+          previewSummary,
+          `${DocumentMode.PAGED}/${payload.renderBackend}`,
+          now,
+          0
+        )
+      );
+      this.writeJsonFile(previewPath, previewSnapshot);
+
+      await this.store!.executeSql(
+        `INSERT INTO documents (
+           id, title, document_type, document_mode, render_backend, folder_id,
+           package_path, manifest_path, preview_path, preview_summary,
+           cover_page, cover_version, is_trashed, created_at, updated_at, opened_at, trashed_at
+         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          documentId,
+          payload.title,
+          payload.documentType,
+          DocumentMode.PAGED,
+          payload.renderBackend,
+          payload.folderId,
+          packagePath,
+          manifestPath,
+          previewPath,
+          previewSummary,
+          manifest.coverPage,
+          manifest.coverVersion,
+          0,
+          now,
+          now,
+          now,
+          0
+        ]
+      );
+      insertedDocumentRow = true;
+      await this.store!.executeSql(
+        'INSERT INTO favorites_or_flags (doc_id, is_favorite, is_pinned) VALUES (?, ?, ?)',
+        [documentId, 0, 0]
+      );
+      insertedFlagsRow = true;
+      await this.store!.executeSql(
+        'INSERT INTO recent_visits (doc_id, visited_at) VALUES (?, ?)',
+        [documentId, now]
+      );
+      insertedRecentRow = true;
+      return this.requireDocument(documentId);
+    } catch (error) {
+      await this.cleanupFailedImportedDocument(
+        documentId,
+        packagePath,
+        packageCreated,
+        insertedDocumentRow,
+        insertedFlagsRow,
+        insertedRecentRow
+      );
+      throw this.wrapFileError('DocumentLibraryService.createImportedDocument', 'import', packagePath, error as Object);
+    }
+  }
+
+  private buildImportedAttachmentRelativePath(attachmentId: string): string {
+    return `attachments/${attachmentId}.pdf`;
+  }
+
+  private requireImportedPdfPageCount(result: NativePdfPageCountResult | null, pdfPath: string): number {
+    if (result === null) {
+      throw new Error(`readPdfPageCount returned invalid payload for ${pdfPath}`);
+    }
+    if (result.status !== 'ok') {
+      const detail: string = result.detail && result.detail.length > 0 ? `: ${result.detail}` : '';
+      throw new Error(`readPdfPageCount failed with status ${result.status}${detail}`);
+    }
+    const pageCount: number = Math.trunc(result.pageCount ?? 0);
+    if (!Number.isFinite(pageCount) || pageCount <= 0) {
+      throw new Error(`readPdfPageCount returned invalid pageCount ${pageCount} for ${pdfPath}`);
+    }
+    return pageCount;
+  }
+
+  private buildImportedAttachmentEntry(
+    attachmentId: string,
+    sourceDisplayName: string,
+    sourceMimeType: string,
+    relativePath: string,
+    sourceByteSize: number,
+    importedAt: number,
+    pageCount: number
+  ): DocumentAttachmentEntry {
+    return {
+      id: attachmentId,
+      kind: 'pdf',
+      displayName: sourceDisplayName,
+      mimeType: sourceMimeType.length > 0 ? sourceMimeType : 'application/pdf',
+      relativePath,
+      byteSize: Math.max(0, Math.trunc(sourceByteSize)),
+      importedAt,
+      pageCount: Math.max(1, Math.trunc(pageCount))
+    };
+  }
+
+  private async buildImportedPdfPages(
+    pageCount: number,
+    compatFields: ResolvedDocumentPageMetadata,
+    attachmentId: string
+  ): Promise<DocumentPageEntry[]> {
+    const pages: DocumentPageEntry[] = [];
+    for (let pageIndex: number = 0; pageIndex < pageCount; pageIndex += 1) {
+      pages.push(await this.createDocumentPageEntry({
+        id: `page-${pageIndex}`,
+        order: pageIndex,
+        pageKind: PDF_PAGE_KIND,
+        pageTemplateId: compatFields.pageTemplateId,
+        pageSizeId: compatFields.pageSizeId,
+        paperBackgroundId: compatFields.paperBackgroundId,
+        sourceAttachmentId: attachmentId,
+        sourcePageIndex: pageIndex
+      }));
+    }
+    return pages;
+  }
+
+  private initializePagedPageStorage(packagePath: string, pages: DocumentPageEntry[]): void {
+    this.ensureDir(`${packagePath}/pages`);
+    pages.forEach((page: DocumentPageEntry) => {
+      const storagePaths: DocumentPageStoragePaths = this.getPageStoragePaths(packagePath, page.id);
+      this.writeJsonFile(storagePaths.strokesPath, this.createEmptyStrokeSnapshot());
+      this.writeJsonFile(storagePaths.textBoxesPath, this.createEmptyTextBoxesSnapshot(''));
+    });
+  }
+
+  private copyBinaryFile(sourceReference: string, targetPath: string): void {
+    try {
+      const parentPath: string = this.getParentPath(targetPath);
+      if (parentPath.length > 0) {
+        this.ensureDir(parentPath);
+      }
+      const sourceCandidates: string[] = this.buildBinaryCopySourceCandidates(sourceReference);
+      const targetCandidates: string[] = this.buildBinaryCopyTargetCandidates(targetPath);
+      let lastError: Object | null = null;
+      for (let sourceIndex = 0; sourceIndex < sourceCandidates.length; sourceIndex += 1) {
+        const sourceCandidate: string = sourceCandidates[sourceIndex];
+        for (let targetIndex = 0; targetIndex < targetCandidates.length; targetIndex += 1) {
+          const targetCandidate: string = targetCandidates[targetIndex];
+          try {
+            fileIo.copyFileSync(sourceCandidate, targetCandidate);
+            return;
+          } catch (error) {
+            lastError = error as Object;
+            this.removeFileIfExists(targetPath);
+          }
+        }
+      }
+      for (let sourceIndex = 0; sourceIndex < sourceCandidates.length; sourceIndex += 1) {
+        const sourceCandidate: string = sourceCandidates[sourceIndex];
+        for (let targetIndex = 0; targetIndex < targetCandidates.length; targetIndex += 1) {
+          const targetCandidate: string = targetCandidates[targetIndex];
+          try {
+            this.copyBinaryFileByStream(sourceCandidate, targetCandidate);
+            return;
+          } catch (error) {
+            lastError = error as Object;
+            this.removeFileIfExists(targetPath);
+          }
+        }
+      }
+      throw this.wrapFileError(
+        'DocumentLibraryService.copyBinaryFile',
+        'copyFileSync',
+        targetPath,
+        lastError ?? new Error(`copyFileSync failed for ${sourceReference}`)
+      );
+    } catch (error) {
+      throw this.wrapFileError('DocumentLibraryService.copyBinaryFile', 'copyFileSync', targetPath, error as Object);
+    }
+  }
+
+  private buildBinaryCopySourceCandidates(sourceReference: string): string[] {
+    const candidates: string[] = [sourceReference];
+    const resolvedSourcePath: string = this.tryResolveUriToPath(sourceReference);
+    if (resolvedSourcePath.length > 0 && !candidates.includes(resolvedSourcePath)) {
+      candidates.push(resolvedSourcePath);
+    }
+    return candidates;
+  }
+
+  private buildBinaryCopyTargetCandidates(targetPath: string): string[] {
+    const candidates: string[] = [targetPath];
+    try {
+      const targetUri: string = fileUri.getUriFromPath(targetPath);
+      if (targetUri.length > 0 && !candidates.includes(targetUri)) {
+        candidates.push(targetUri);
+      }
+    } catch (_) {
+      // Fall back to the plain sandbox path when URI conversion is unavailable.
+    }
+    return candidates;
+  }
+
+  private tryResolveUriToPath(uriOrPath: string): string {
+    try {
+      const resolvedPath: string = new fileUri.FileUri(uriOrPath).path;
+      return resolvedPath.trim();
+    } catch (_) {
+      return '';
+    }
+  }
+
+  private copyBinaryFileByStream(sourceReference: string, targetReference: string): void {
+    let sourceStream: fileIo.Stream | undefined;
+    let targetStream: fileIo.Stream | undefined;
+    try {
+      sourceStream = fileIo.createStreamSync(sourceReference, 'r');
+      targetStream = fileIo.createStreamSync(targetReference, 'w');
+      const chunkBuffer: ArrayBuffer = new ArrayBuffer(64 * 1024);
+      while (true) {
+        const bytesRead: number = sourceStream.readSync(chunkBuffer);
+        if (bytesRead <= 0) {
+          break;
+        }
+        targetStream.writeSync(chunkBuffer, {
+          offset: 0,
+          length: bytesRead
+        });
+      }
+      targetStream.flushSync();
+    } finally {
+      try {
+        targetStream?.closeSync();
+      } catch (_) {
+        // Ignore close errors during cleanup.
+      }
+      try {
+        sourceStream?.closeSync();
+      } catch (_) {
+        // Ignore close errors during cleanup.
+      }
+    }
+  }
+
+  private async cleanupFailedImportedDocument(
+    documentId: string,
+    packagePath: string,
+    packageCreated: boolean,
+    insertedDocumentRow: boolean,
+    insertedFlagsRow: boolean,
+    insertedRecentRow: boolean
+  ): Promise<void> {
+    if (insertedRecentRow) {
+      await this.deleteImportedDocumentRow('recent_visits', documentId, 'doc_id');
+    }
+    if (insertedFlagsRow) {
+      await this.deleteImportedDocumentRow('favorites_or_flags', documentId, 'doc_id');
+    }
+    if (insertedDocumentRow) {
+      await this.deleteImportedDocumentRow('documents', documentId, 'id');
+    }
+    if (packageCreated) {
+      try {
+        this.removeRecursively(packagePath);
+      } catch (_) {
+        return;
+      }
+    }
+  }
+
+  private async deleteImportedDocumentRow(tableName: string, documentId: string, keyColumn: string): Promise<void> {
+    if (!this.store) {
+      return;
+    }
+    try {
+      await this.store.executeSql(`DELETE FROM ${tableName} WHERE ${keyColumn} = ?`, [documentId]);
+    } catch (_) {
+      return;
     }
   }
 
@@ -701,8 +1069,8 @@ export class DocumentLibraryService {
       [previewSnapshot.summary, coverPage, now, documentId]
     );
     this.writeJsonFile(doc.previewPath, previewSnapshot);
-    if (this.isBlankPagedDocument(doc.documentType, doc.documentMode)) {
-      await this.updateBlankPagedManifest(documentId, (manifest) => {
+    if (this.supportsPagedDocumentStorage(doc)) {
+      await this.updateSchemaV2PagedManifest(documentId, (manifest) => {
         manifest.previewSummary = previewSnapshot.summary;
         manifest.coverPage = coverPage;
         manifest.updatedAt = now;
@@ -800,6 +1168,8 @@ export class DocumentLibraryService {
     let doc: DocumentRecord = await this.requireDocument(documentId);
     if (this.isBlankPagedDocument(doc.documentType, doc.documentMode)) {
       doc = await this.ensureBlankPagedDocumentV2(documentId);
+    }
+    if (this.supportsPagedDocumentStorage(doc)) {
       const targetPageId: string = this.resolveTargetPageId(doc, pageId);
       const textBoxesPath: string = this.getPageStoragePaths(doc.packagePath, targetPageId).textBoxesPath;
       const snapshot: TextBoxesSnapshot = this.readTextBoxesSnapshot(textBoxesPath);
@@ -817,11 +1187,13 @@ export class DocumentLibraryService {
 
   async setDocumentActivePage(documentId: string, activePageId: string): Promise<DocumentRecord> {
     let doc: DocumentRecord = await this.requireDocument(documentId);
-    if (!this.isBlankPagedDocument(doc.documentType, doc.documentMode)) {
+    if (this.isBlankPagedDocument(doc.documentType, doc.documentMode)) {
+      doc = await this.ensureBlankPagedDocumentV2(documentId);
+    }
+    if (!this.supportsPagedDocumentStorage(doc)) {
       return doc;
     }
 
-    doc = await this.ensureBlankPagedDocumentV2(documentId);
     const activePage: DocumentPageEntry | undefined = doc.pages.find((page) => page.id === activePageId);
     if (activePage === undefined) {
       return doc;
@@ -832,7 +1204,7 @@ export class DocumentLibraryService {
       'UPDATE documents SET cover_page = ?, updated_at = ? WHERE id = ?',
       [activePage.order, now, documentId]
     );
-    await this.updateBlankPagedManifest(documentId, (manifest) => {
+    await this.updateSchemaV2PagedManifest(documentId, (manifest) => {
       manifest.activePageId = activePageId;
       manifest.coverPage = activePage.order;
       manifest.updatedAt = now;
@@ -895,8 +1267,11 @@ export class DocumentLibraryService {
   }
 
   async captureRuntimePageStrokes(documentId: string, pageId: string): Promise<void> {
-    const doc: DocumentRecord = await this.requireDocument(documentId);
-    if (!this.isBlankPagedDocument(doc.documentType, doc.documentMode)) {
+    let doc: DocumentRecord = await this.requireDocument(documentId);
+    if (this.isBlankPagedDocument(doc.documentType, doc.documentMode)) {
+      doc = await this.ensureBlankPagedDocumentV2(documentId);
+    }
+    if (!this.supportsPagedDocumentStorage(doc)) {
       return;
     }
 
@@ -910,8 +1285,11 @@ export class DocumentLibraryService {
   }
 
   async stagePageStrokesForRuntime(documentId: string, pageId: string): Promise<void> {
-    const doc: DocumentRecord = await this.requireDocument(documentId);
-    if (!this.isBlankPagedDocument(doc.documentType, doc.documentMode)) {
+    let doc: DocumentRecord = await this.requireDocument(documentId);
+    if (this.isBlankPagedDocument(doc.documentType, doc.documentMode)) {
+      doc = await this.ensureBlankPagedDocumentV2(documentId);
+    }
+    if (!this.supportsPagedDocumentStorage(doc)) {
       return;
     }
 
@@ -927,7 +1305,12 @@ export class DocumentLibraryService {
   }
 
   private mirrorBlankPagedActivePageToLegacyRoot(document: DocumentRecord): void {
-    const activePageId: string = this.resolveTargetPageId(document, document.activePageId);
+    const activePageId: string = document.pages.some((page) => page.id === document.activePageId)
+      ? document.activePageId
+      : (document.pages[0]?.id ?? '');
+    if (activePageId.length === 0) {
+      return;
+    }
     const activePageStorage: DocumentPageStoragePaths = this.getPageStoragePaths(document.packagePath, activePageId);
     const legacyTextBoxesPath: string = `${document.packagePath}/text-boxes.json`;
     const legacyStrokesPath: string = `${document.packagePath}/strokes.json`;
@@ -1157,6 +1540,7 @@ export class DocumentLibraryService {
     const normalizedPages: DocumentPageEntry[] = normalizedManifest?.pages ?? [];
     const normalizedActivePageId: string = normalizedManifest?.activePageId ?? '';
     const normalizedCoverPage: number = normalizedManifest?.coverPage ?? document.coverPage;
+    const normalizedAttachments: DocumentAttachmentEntry[] = normalizedManifest?.attachments ?? [];
     const normalizedDocument: DocumentRecord = {
       id: document.id,
       title: document.title,
@@ -1185,6 +1569,7 @@ export class DocumentLibraryService {
       updatedAt: document.updatedAt,
       openedAt: document.openedAt,
       trashedAt: document.trashedAt,
+      attachments: normalizedAttachments,
       tags: document.tags
     };
     const previewSnapshot: DocumentPreviewSnapshot = this.resolveDocumentPreviewSnapshot(normalizedDocument, compatFields);
@@ -1216,6 +1601,7 @@ export class DocumentLibraryService {
       updatedAt: normalizedDocument.updatedAt,
       openedAt: normalizedDocument.openedAt,
       trashedAt: normalizedDocument.trashedAt,
+      attachments: normalizedDocument.attachments,
       tags: normalizedDocument.tags
     };
   }
@@ -1279,6 +1665,7 @@ export class DocumentLibraryService {
       updatedAt: row.updatedAt,
       openedAt: row.openedAt,
       trashedAt: row.trashedAt,
+      attachments: [],
       tags
     };
   }
@@ -1324,7 +1711,8 @@ export class DocumentLibraryService {
         resolvedMetadata,
         summary,
         `${document.documentMode}/${document.renderBackend}`,
-        generatedAt
+        generatedAt,
+        this.resolvePreviewFallbackPageIndex(document)
       )
     );
   }
@@ -1349,7 +1737,8 @@ export class DocumentLibraryService {
         pageMetadata,
         document.previewSummary,
         `${document.documentMode}/${document.renderBackend}`,
-        document.updatedAt
+        document.updatedAt,
+        this.resolvePreviewFallbackPageIndex(document)
       )
     );
     this.storePreviewSnapshotCache(document.previewPath, cacheKey, snapshot);
@@ -1428,8 +1817,19 @@ export class DocumentLibraryService {
     return documentType === DocumentType.BLANK && documentMode === DocumentMode.PAGED;
   }
 
+  private supportsSchemaV2PagedManifest(manifest: DocumentManifest): boolean {
+    return manifest.documentMode === DocumentMode.PAGED &&
+      (manifest.schemaVersion ?? LEGACY_DOCUMENT_PACKAGE_SCHEMA_VERSION) >= DOCUMENT_PACKAGE_SCHEMA_VERSION_V2;
+  }
+
+  private supportsPagedDocumentStorage(document: DocumentRecord): boolean {
+    return document.documentMode === DocumentMode.PAGED &&
+      document.schemaVersion >= DOCUMENT_PACKAGE_SCHEMA_VERSION_V2 &&
+      document.pages.length > 0;
+  }
+
   private resolveTargetPageId(document: DocumentRecord, pageId?: string): string {
-    if (!this.isBlankPagedDocument(document.documentType, document.documentMode)) {
+    if (!this.supportsPagedDocumentStorage(document)) {
       return '';
     }
     if (pageId !== undefined && document.pages.some((page) => page.id === pageId)) {
@@ -1450,9 +1850,20 @@ export class DocumentLibraryService {
     };
   }
 
+  private resolvePreviewFallbackPageIndex(document: DocumentRecord): number {
+    if (!this.supportsPagedDocumentStorage(document)) {
+      return Math.max(0, document.coverPage);
+    }
+    return this.resolveCoverPage(
+      document.pages,
+      this.resolveTargetPageId(document, document.activePageId),
+      document.coverPage
+    );
+  }
+
   private readDocumentMarkdown(document: DocumentRecord, pageId?: string): string {
     let textBoxesPath: string = `${document.packagePath}/text-boxes.json`;
-    if (this.isBlankPagedDocument(document.documentType, document.documentMode)) {
+    if (this.supportsPagedDocumentStorage(document)) {
       const pageTextBoxesPath: string = this.getPageStoragePaths(
         document.packagePath,
         this.resolveTargetPageId(document, pageId)
@@ -1495,10 +1906,48 @@ export class DocumentLibraryService {
     };
     manifest.pages = await this.normalizeDocumentPages(
       manifest.pages,
-      manifestFallbackMetadata
+      manifestFallbackMetadata,
+      true
     );
+    manifest.attachments = this.normalizeDocumentAttachments(manifest.attachments);
     manifest.activePageId = this.resolveActivePageId(manifest.pages, manifest.activePageId);
+    manifest.coverPage = this.resolveCoverPage(manifest.pages, manifest.activePageId, manifest.coverPage);
     this.applyActivePageMirrorToManifest(manifest);
+    this.writeJsonFile(doc.manifestPath, manifest);
+    await this.store!.executeSql(
+      'UPDATE documents SET cover_page = ?, updated_at = ? WHERE id = ?',
+      [manifest.coverPage, manifest.updatedAt, documentId]
+    );
+  }
+
+  private async updateSchemaV2PagedManifest(documentId: string, updater: (manifest: DocumentManifest) => void): Promise<void> {
+    const doc: DocumentRecord = await this.requireDocument(documentId);
+    let manifest: DocumentManifest | null = this.readStoredManifest(doc.manifestPath);
+    if (manifest === null) {
+      return;
+    }
+    manifest = await this.applyManifestCompatDefaults(manifest);
+    if (!this.supportsSchemaV2PagedManifest(manifest)) {
+      return;
+    }
+    manifest.schemaVersion = DOCUMENT_PACKAGE_SCHEMA_VERSION_V2;
+    updater(manifest);
+    const manifestFallbackMetadata: ResolvedDocumentPageMetadata = {
+      pageTemplateId: manifest.pageTemplateId ?? DEFAULT_DOCUMENT_PAGE_METADATA.pageTemplateId,
+      pageSizeId: manifest.pageSizeId ?? DEFAULT_DOCUMENT_PAGE_METADATA.pageSizeId,
+      paperBackgroundId: manifest.paperBackgroundId ?? DEFAULT_DOCUMENT_PAGE_METADATA.paperBackgroundId
+    };
+    manifest.pages = await this.normalizeDocumentPages(
+      manifest.pages,
+      manifestFallbackMetadata,
+      this.isBlankPagedManifest(manifest.documentType, manifest.documentMode)
+    );
+    manifest.attachments = this.normalizeDocumentAttachments(manifest.attachments);
+    manifest.activePageId = this.resolveActivePageId(manifest.pages, manifest.activePageId);
+    manifest.coverPage = this.resolveCoverPage(manifest.pages, manifest.activePageId, manifest.coverPage);
+    if (manifest.pages.length > 0) {
+      this.applyActivePageMirrorToManifest(manifest);
+    }
     this.writeJsonFile(doc.manifestPath, manifest);
     await this.store!.executeSql(
       'UPDATE documents SET cover_page = ?, updated_at = ? WHERE id = ?',
@@ -1533,7 +1982,8 @@ export class DocumentLibraryService {
     pageMetadata: ResolvedDocumentPageMetadata,
     fallbackSummary: string,
     fallbackPreviewLabel: string,
-    generatedAt: number
+    generatedAt: number,
+    fallbackPageIndex: number = 0
   ): PreviewNormalizationContext {
     return {
       documentType,
@@ -1543,7 +1993,7 @@ export class DocumentLibraryService {
       generatedAt,
       fallbackSummary,
       fallbackPreviewLabel,
-      fallbackPageIndex: 0
+      fallbackPageIndex
     };
   }
 
@@ -1645,6 +2095,7 @@ export class DocumentLibraryService {
       paperBackgroundId: manifest.paperBackgroundId
     };
     const compatFields: ResolvedDocumentPageMetadata = await this.resolveDocumentCompatFields(manifestCompat);
+    const normalizedAttachments: DocumentAttachmentEntry[] = this.normalizeDocumentAttachments(manifest.attachments);
     if (this.isBlankPagedManifest(manifest.documentType, manifest.documentMode)) {
       const normalizedPages: DocumentPageEntry[] = await this.normalizeDocumentPages(manifest.pages, compatFields);
       const activePageId: string = this.resolveActivePageId(normalizedPages, manifest.activePageId);
@@ -1671,10 +2122,45 @@ export class DocumentLibraryService {
         updatedAt: manifest.updatedAt,
         openedAt: manifest.openedAt,
         trashedAt: manifest.trashedAt,
+        attachments: normalizedAttachments,
         tags: manifest.tags ?? [],
         previewSummary: manifest.previewSummary ?? ''
       };
       this.applyActivePageMirrorToManifest(normalizedManifest);
+      return normalizedManifest;
+    }
+
+    if (this.supportsSchemaV2PagedManifest(manifest)) {
+      const normalizedPages: DocumentPageEntry[] = await this.normalizeDocumentPages(manifest.pages, compatFields, false);
+      const activePageId: string = this.resolveActivePageId(normalizedPages, manifest.activePageId);
+      const normalizedManifest: DocumentManifest = {
+        id: manifest.id,
+        title: manifest.title,
+        documentType: manifest.documentType,
+        documentMode: manifest.documentMode,
+        renderBackend: manifest.renderBackend,
+        schemaVersion: DOCUMENT_PACKAGE_SCHEMA_VERSION_V2,
+        activePageId,
+        pages: normalizedPages,
+        pageTemplateId: compatFields.pageTemplateId,
+        pageSizeId: compatFields.pageSizeId,
+        paperBackgroundId: compatFields.paperBackgroundId,
+        folderId: manifest.folderId,
+        coverPage: this.resolveCoverPage(normalizedPages, activePageId, manifest.coverPage ?? 0),
+        coverVersion: manifest.coverVersion,
+        isFavorite: manifest.isFavorite,
+        isTrashed: manifest.isTrashed,
+        createdAt: manifest.createdAt,
+        updatedAt: manifest.updatedAt,
+        openedAt: manifest.openedAt,
+        trashedAt: manifest.trashedAt,
+        attachments: normalizedAttachments,
+        tags: manifest.tags ?? [],
+        previewSummary: manifest.previewSummary ?? ''
+      };
+      if (normalizedPages.length > 0) {
+        this.applyActivePageMirrorToManifest(normalizedManifest);
+      }
       return normalizedManifest;
     }
 
@@ -1699,6 +2185,7 @@ export class DocumentLibraryService {
       updatedAt: manifest.updatedAt,
       openedAt: manifest.openedAt,
       trashedAt: manifest.trashedAt,
+      attachments: normalizedAttachments,
       tags: manifest.tags ?? [],
       previewSummary: manifest.previewSummary ?? ''
     };
@@ -1707,18 +2194,19 @@ export class DocumentLibraryService {
 
   private async normalizeDocumentPages(
     pages: DocumentPageEntry[] | undefined,
-    fallbackMetadata: ResolvedDocumentPageMetadata
+    fallbackMetadata: ResolvedDocumentPageMetadata,
+    allowSyntheticFallback: boolean = true
   ): Promise<DocumentPageEntry[]> {
     const sourcePages: DocumentPageEntry[] = Array.isArray(pages) && pages.length > 0
       ? [...pages].sort((left, right) => left.order - right.order)
-      : [{
+      : (allowSyntheticFallback ? [{
         id: NATIVE_PRIMARY_PAGE_ID,
         order: 0,
         pageKind: BLANK_PAGE_KIND,
         pageTemplateId: fallbackMetadata.pageTemplateId,
         pageSizeId: fallbackMetadata.pageSizeId,
         paperBackgroundId: fallbackMetadata.paperBackgroundId
-      }];
+      }] : []);
     const normalizedPages: DocumentPageEntry[] = [];
     for (let index: number = 0; index < sourcePages.length; index += 1) {
       const sourcePage: DocumentPageEntry = sourcePages[index];
@@ -1734,6 +2222,29 @@ export class DocumentLibraryService {
       }));
     }
     return normalizedPages;
+  }
+
+  private normalizeDocumentAttachments(attachments: DocumentAttachmentEntry[] | undefined): DocumentAttachmentEntry[] {
+    if (!Array.isArray(attachments) || attachments.length === 0) {
+      return [];
+    }
+    return attachments.map((attachment: DocumentAttachmentEntry, index: number) => {
+      const fallbackId: string = `attachment-${index}`;
+      const attachmentId: string = attachment.id && attachment.id.length > 0 ? attachment.id : fallbackId;
+      const normalizedAttachment: DocumentAttachmentEntry = {
+        id: attachmentId,
+        kind: 'pdf',
+        displayName: attachment.displayName ?? '',
+        mimeType: attachment.mimeType && attachment.mimeType.length > 0 ? attachment.mimeType : 'application/pdf',
+        relativePath: attachment.relativePath && attachment.relativePath.length > 0
+          ? attachment.relativePath
+          : this.buildImportedAttachmentRelativePath(attachmentId),
+        byteSize: Math.max(0, Math.trunc(attachment.byteSize ?? 0)),
+        importedAt: Math.max(0, Math.trunc(attachment.importedAt ?? 0)),
+        pageCount: Math.max(0, Math.trunc(attachment.pageCount ?? 0))
+      };
+      return normalizedAttachment;
+    });
   }
 
   private async createDocumentPageEntry(page: DocumentPageEntry): Promise<DocumentPageEntry> {

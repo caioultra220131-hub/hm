@@ -7,8 +7,10 @@
 
 #include <algorithm>
 #include <array>
+#include <cctype>
 #include <cmath>
 #include <cstdint>
+#include <cstdio>
 #include <fstream>
 #include <iomanip>
 #include <mutex>
@@ -24,6 +26,8 @@ constexpr const char* kLogTag = "NoteEngine";
 constexpr const char* kPrimaryPageId = "page-0";
 constexpr const char* kLegacyCoordinateSpace = "legacy-surface";
 constexpr const char* kStatsFallbackTargetMode = "stats-fallback";
+constexpr const char* kPdfPageNodeIdPrefix = "pdf-page-";
+constexpr const char* kPdfFragmentNodeIdPrefix = "pdf-fragment-";
 constexpr int kPreviewSchemaVersion = 0;
 constexpr int kPrimaryPageIndex = 0;
 constexpr size_t kMaxTrackedStrokeSamples = 48;
@@ -126,12 +130,30 @@ struct StrokeRenderObject {
     bool selected = false;
 };
 
+struct PageContractDescriptor {
+    double widthPt = 0.0;
+    double heightPt = 0.0;
+    std::string paperBackgroundId = "paper";
+    std::string guideKind = "plain";
+};
+
+struct PageDescriptor {
+    std::string pageId;
+    int order = 0;
+    std::string pageKind = "blank";
+    std::string sourceAttachmentId;
+    int sourcePageIndex = -1;
+    PageContractDescriptor contract;
+};
+
 struct DocumentSession {
     std::string documentId;
     std::string packagePath;
     std::string openConfigJson;
     int checkpointCount = 0;
+    bool pageAware = false;
     std::vector<std::string> pages;
+    std::vector<PageDescriptor> pageDescriptors;
     std::string activePageId;
     std::unordered_map<std::string, std::vector<StrokeRenderObject>> pageStrokes;
 };
@@ -2380,22 +2402,8 @@ std::string ExtractJsonObjectText(const std::string& text, const std::string& ke
     return "";
 }
 
-std::vector<std::string> DeserializePageIdsFromOpenConfig(const std::string& configJson)
-{
-    std::vector<std::string> pageIds;
-    const std::string pagesArray = ExtractJsonArrayBody(configJson, "pages");
-    for (const std::string& pageObjectText : SplitTopLevelJsonObjects(pagesArray)) {
-        const std::string pageId = ExtractJsonStringValue(pageObjectText, "id", "");
-        if (pageId.empty()) {
-            return {};
-        }
-        if (std::find(pageIds.begin(), pageIds.end(), pageId) != pageIds.end()) {
-            return {};
-        }
-        pageIds.push_back(pageId);
-    }
-    return pageIds;
-}
+std::vector<PageDescriptor> DeserializePageDescriptorsFromOpenConfig(const std::string& configJson);
+std::vector<std::string> BuildPageIdsFromDescriptors(const std::vector<PageDescriptor>& descriptors);
 
 std::string ResolveCompatPageIdFromOpenConfig(const std::string& configJson)
 {
@@ -2410,17 +2418,150 @@ std::string ResolveCompatPageIdFromOpenConfig(const std::string& configJson)
         return activePageId;
     }
 
-    const std::vector<std::string> pageIds = DeserializePageIdsFromOpenConfig(configJson);
+    const std::vector<std::string> pageIds = BuildPageIdsFromDescriptors(
+        DeserializePageDescriptorsFromOpenConfig(configJson));
     if (!pageIds.empty()) {
         return pageIds.front();
     }
     return kPrimaryPageId;
 }
 
+std::string InferCompatPageKindFromOpenConfig(const std::string& configJson)
+{
+    const std::string documentType = ExtractJsonStringValue(configJson, "documentType", "blank");
+    if (documentType == "pdf") {
+        return "pdf";
+    }
+    if (documentType == "hybrid") {
+        return "pdf-fragment";
+    }
+    return "blank";
+}
+
+std::string NormalizePageKind(const std::string& pageKind, const std::string& fallback)
+{
+    if (pageKind == "blank" || pageKind == "pdf" || pageKind == "pdf-fragment") {
+        return pageKind;
+    }
+    return fallback;
+}
+
+bool IsPdfPageKind(const std::string& pageKind)
+{
+    return pageKind == "pdf" || pageKind == "pdf-fragment";
+}
+
+bool IsFullPagePdfKind(const std::string& pageKind)
+{
+    return pageKind == "pdf";
+}
+
+std::string ExtractPageContractTextFromOpenConfig(const std::string& configJson, const std::string& pageId)
+{
+    const std::string pageContractsText = ExtractJsonObjectText(configJson, "pageContracts");
+    if (!pageContractsText.empty()) {
+        const std::string specificContractText = ExtractJsonObjectText(pageContractsText, pageId);
+        if (!specificContractText.empty()) {
+            return specificContractText;
+        }
+    }
+
+    const std::string activePageId = ExtractJsonStringValue(configJson, "activePageId", "");
+    if (activePageId.empty() || activePageId == pageId) {
+        return ExtractJsonObjectText(configJson, "pageContract");
+    }
+    return "";
+}
+
+PageContractDescriptor ParsePageContractDescriptor(const std::string& contractText)
+{
+    PageContractDescriptor descriptor;
+    if (contractText.empty()) {
+        return descriptor;
+    }
+    descriptor.widthPt = std::max(0.0, ExtractJsonNumberValue(contractText, "widthPt", 0.0));
+    descriptor.heightPt = std::max(0.0, ExtractJsonNumberValue(contractText, "heightPt", 0.0));
+    descriptor.paperBackgroundId = ExtractJsonStringValue(contractText, "paperBackgroundId", "paper");
+    descriptor.guideKind = ExtractJsonStringValue(contractText, "guideKind", "plain");
+    if (descriptor.paperBackgroundId.empty()) {
+        descriptor.paperBackgroundId = "paper";
+    }
+    if (descriptor.guideKind.empty()) {
+        descriptor.guideKind = "plain";
+    }
+    return descriptor;
+}
+
+std::vector<PageDescriptor> DeserializePageDescriptorsFromOpenConfig(const std::string& configJson)
+{
+    std::vector<PageDescriptor> descriptors;
+    const std::string pagesArray = ExtractJsonArrayBody(configJson, "pages");
+    const std::string fallbackPageKind = InferCompatPageKindFromOpenConfig(configJson);
+    for (const std::string& pageObjectText : SplitTopLevelJsonObjects(pagesArray)) {
+        PageDescriptor descriptor;
+        descriptor.pageId = ExtractJsonStringValue(pageObjectText, "id", "");
+        if (descriptor.pageId.empty()) {
+            return {};
+        }
+        if (std::any_of(descriptors.begin(), descriptors.end(), [&](const PageDescriptor& existing) {
+                return existing.pageId == descriptor.pageId;
+            })) {
+            return {};
+        }
+        descriptor.order = static_cast<int>(ExtractJsonNumberValue(
+            pageObjectText, "order", static_cast<double>(descriptors.size())));
+        descriptor.pageKind = NormalizePageKind(
+            ExtractJsonStringValue(pageObjectText, "pageKind", fallbackPageKind),
+            fallbackPageKind);
+        descriptor.sourceAttachmentId = ExtractJsonStringValue(pageObjectText, "sourceAttachmentId", "");
+        descriptor.sourcePageIndex = static_cast<int>(ExtractJsonNumberValue(pageObjectText, "sourcePageIndex", -1));
+        descriptor.contract = ParsePageContractDescriptor(
+            ExtractPageContractTextFromOpenConfig(configJson, descriptor.pageId));
+        descriptors.push_back(descriptor);
+    }
+    return descriptors;
+}
+
+std::vector<std::string> BuildPageIdsFromDescriptors(const std::vector<PageDescriptor>& descriptors)
+{
+    std::vector<std::string> pageIds;
+    pageIds.reserve(descriptors.size());
+    for (const PageDescriptor& descriptor : descriptors) {
+        pageIds.push_back(descriptor.pageId);
+    }
+    return pageIds;
+}
+
+const PageDescriptor* FindPageDescriptor(const DocumentSession& session, const std::string& pageId)
+{
+    const auto iterator = std::find_if(session.pageDescriptors.begin(), session.pageDescriptors.end(),
+        [&](const PageDescriptor& descriptor) {
+            return descriptor.pageId == pageId;
+        });
+    if (iterator == session.pageDescriptors.end()) {
+        return nullptr;
+    }
+    return &(*iterator);
+}
+
+void ReindexPageDescriptors(DocumentSession& session)
+{
+    for (size_t index = 0; index < session.pageDescriptors.size(); ++index) {
+        session.pageDescriptors[index].order = static_cast<int>(index);
+    }
+}
+
 void InitializeCompatibilityPageSession(const std::string& configJson, DocumentSession& session)
 {
     const std::string pageId = ResolveCompatPageIdFromOpenConfig(configJson);
+    const std::string fallbackPageKind = InferCompatPageKindFromOpenConfig(configJson);
+    PageDescriptor descriptor;
+    descriptor.pageId = pageId;
+    descriptor.pageKind = fallbackPageKind;
+    descriptor.contract = ParsePageContractDescriptor(ExtractPageContractTextFromOpenConfig(configJson, pageId));
+    session.pageAware = false;
     session.pages = { pageId };
+    session.pageDescriptors = { descriptor };
     session.activePageId = pageId;
     session.pageStrokes.clear();
     session.pageStrokes[pageId] = {};
@@ -2428,27 +2569,25 @@ void InitializeCompatibilityPageSession(const std::string& configJson, DocumentS
 
 bool InitializePageAwareSessionFromOpenConfig(const std::string& configJson, DocumentSession& session)
 {
-    const std::vector<std::string> pageIds = DeserializePageIdsFromOpenConfig(configJson);
+    const std::vector<PageDescriptor> pageDescriptors = DeserializePageDescriptorsFromOpenConfig(configJson);
     const std::string activePageId = ExtractJsonStringValue(configJson, "activePageId", "");
-    if (pageIds.empty() || activePageId.empty()) {
+    if (pageDescriptors.empty() || activePageId.empty()) {
         return false;
     }
+    const std::vector<std::string> pageIds = BuildPageIdsFromDescriptors(pageDescriptors);
     if (std::find(pageIds.begin(), pageIds.end(), activePageId) == pageIds.end()) {
         return false;
     }
 
+    session.pageAware = true;
     session.pages = pageIds;
+    session.pageDescriptors = pageDescriptors;
     session.activePageId = activePageId;
     session.pageStrokes.clear();
     for (const std::string& pageId : pageIds) {
         session.pageStrokes[pageId] = {};
     }
     return true;
-}
-
-bool IsBlankDocumentSession(const DocumentSession& session)
-{
-    return ExtractJsonStringValue(session.openConfigJson, "documentType", "blank") == "blank";
 }
 
 std::string ResolveSessionActivePageId(const DocumentSession& session)
@@ -2474,7 +2613,17 @@ int FindPageIndex(const std::vector<std::string>& pageIds, const std::string& pa
 
 bool SupportsPageAwareEditing(const EngineState& engine, const DocumentSession& session)
 {
-    return engine.activeMode == "paged" && IsBlankDocumentSession(session);
+    return engine.activeMode == "paged" && session.pageAware && !session.pages.empty();
+}
+
+bool SupportsBlankPageMutation(const EngineState& engine, const DocumentSession& session)
+{
+    if (!SupportsPageAwareEditing(engine, session) || session.pageDescriptors.empty()) {
+        return false;
+    }
+    return std::all_of(session.pageDescriptors.begin(), session.pageDescriptors.end(), [](const PageDescriptor& descriptor) {
+        return descriptor.pageKind == "blank";
+    });
 }
 
 std::vector<std::string> BuildReportedPageIds(const EngineState& engine, const DocumentSession& session)
@@ -2531,63 +2680,127 @@ bool IsClosedStrokePath(const StrokeRenderObject& stroke)
     return DistanceBetween(stroke.points.front(), stroke.points.back()) <= std::max(12.0f, diagonal * 0.18f);
 }
 
-void AppendPageEntry(std::ostringstream& builder, const std::string& pageId, int pageIndex)
+bool HasPageBounds(const PageDescriptor* descriptor)
 {
-    builder << "{"
-            << "\"pageId\":\"" << EscapeJsonString(pageId) << "\","
-            << "\"pageIndex\":" << pageIndex
+    return descriptor != nullptr && descriptor->contract.widthPt > 0.0 && descriptor->contract.heightPt > 0.0;
+}
+
+std::string BuildPageBackgroundId(const PageDescriptor* descriptor)
+{
+    if (descriptor == nullptr) {
+        return "";
+    }
+    if (IsFullPagePdfKind(descriptor->pageKind)) {
+        return descriptor->sourcePageIndex >= 0
+            ? "pdf/source-" + std::to_string(descriptor->sourcePageIndex)
+            : "";
+    }
+    if (descriptor->contract.paperBackgroundId.empty()) {
+        return "";
+    }
+    return "paper/" + descriptor->contract.paperBackgroundId;
+}
+
+void AppendPageBounds(std::ostringstream& builder, const PageDescriptor* descriptor)
+{
+    const double width = descriptor != nullptr ? descriptor->contract.widthPt : 0.0;
+    const double height = descriptor != nullptr ? descriptor->contract.heightPt : 0.0;
+    builder << "\"bounds\":{"
+            << "\"minX\":0,"
+            << "\"minY\":0,"
+            << "\"maxX\":" << std::fixed << std::setprecision(3) << width << ","
+            << "\"maxY\":" << std::fixed << std::setprecision(3) << height
             << "}";
 }
 
-void AppendPageEntries(std::ostringstream& builder, const std::vector<std::string>& pageIds)
+void AppendPageEntry(std::ostringstream& builder, const DocumentSession& session, const std::string& pageId, int pageIndex)
+{
+    const PageDescriptor* descriptor = FindPageDescriptor(session, pageId);
+    builder << "{"
+            << "\"pageId\":\"" << EscapeJsonString(pageId) << "\","
+            << "\"pageIndex\":" << pageIndex;
+    if (HasPageBounds(descriptor)) {
+        builder << ",\"width\":" << std::fixed << std::setprecision(3) << descriptor->contract.widthPt
+                << ",\"height\":" << std::fixed << std::setprecision(3) << descriptor->contract.heightPt
+                << ",";
+        AppendPageBounds(builder, descriptor);
+    }
+    const std::string backgroundId = BuildPageBackgroundId(descriptor);
+    if (!backgroundId.empty()) {
+        builder << ",\"backgroundId\":\"" << EscapeJsonString(backgroundId) << "\"";
+    }
+    if (descriptor != nullptr && !descriptor->contract.guideKind.empty()) {
+        builder << ",\"guideKind\":\"" << EscapeJsonString(descriptor->contract.guideKind) << "\"";
+    }
+    builder << "}";
+}
+
+void AppendPageEntries(std::ostringstream& builder, const DocumentSession& session, const std::vector<std::string>& pageIds)
 {
     builder << "[";
     for (size_t index = 0; index < pageIds.size(); ++index) {
         if (index > 0) {
             builder << ",";
         }
-        AppendPageEntry(builder, pageIds[index], static_cast<int>(index));
+        AppendPageEntry(builder, session, pageIds[index], static_cast<int>(index));
     }
     builder << "]";
 }
 
-void AppendPreviewLayoutField(std::ostringstream& builder, const std::vector<std::string>& pageIds, const std::string& mode)
+bool TryResolveDocumentBounds(const DocumentSession& session, const std::vector<std::string>& pageIds,
+    double& maxWidth, double& maxHeight)
+{
+    maxWidth = 0.0;
+    maxHeight = 0.0;
+    bool hasBounds = false;
+    for (const std::string& pageId : pageIds) {
+        const PageDescriptor* descriptor = FindPageDescriptor(session, pageId);
+        if (!HasPageBounds(descriptor)) {
+            continue;
+        }
+        maxWidth = std::max(maxWidth, descriptor->contract.widthPt);
+        maxHeight = std::max(maxHeight, descriptor->contract.heightPt);
+        hasBounds = true;
+    }
+    return hasBounds;
+}
+
+void AppendPreviewLayoutField(std::ostringstream& builder, const DocumentSession& session,
+    const std::vector<std::string>& pageIds, const std::string& mode)
 {
     builder << "\"layout\":{"
             << "\"mode\":\"" << EscapeJsonString(mode) << "\","
-            << "\"pageCount\":" << pageIds.size() << ","
-            << "\"pages\":";
-    AppendPageEntries(builder, pageIds);
+            << "\"pageCount\":" << pageIds.size();
+    double documentWidth = 0.0;
+    double documentHeight = 0.0;
+    if (TryResolveDocumentBounds(session, pageIds, documentWidth, documentHeight)) {
+        builder << ",\"documentBounds\":{"
+                << "\"minX\":0,"
+                << "\"minY\":0,"
+                << "\"maxX\":" << std::fixed << std::setprecision(3) << documentWidth << ","
+                << "\"maxY\":" << std::fixed << std::setprecision(3) << documentHeight
+                << "}";
+    }
+    builder << ",\"pages\":";
+    AppendPageEntries(builder, session, pageIds);
     builder << "}";
 }
 
-void AppendScenePageFields(std::ostringstream& builder, const std::vector<std::string>& pageIds, const std::string& mode)
+void AppendScenePageFields(std::ostringstream& builder, const DocumentSession& session,
+    const std::vector<std::string>& pageIds, const std::string& mode)
 {
     builder << "\"pages\":";
-    AppendPageEntries(builder, pageIds);
-    builder << ",\"layout\":{"
-            << "\"mode\":\"" << EscapeJsonString(mode) << "\","
-            << "\"pageCount\":" << pageIds.size() << ","
-            << "\"pages\":";
-    AppendPageEntries(builder, pageIds);
-    builder << "}";
-}
-
-void AppendPreviewLayerFields(std::ostringstream& builder, bool includeInkLayer)
-{
-    builder << "\"layers\":";
-    if (includeInkLayer) {
-        builder << "[\"ink\"]";
-        return;
-    }
-    builder << "[]";
+    AppendPageEntries(builder, session, pageIds);
+    builder << ",";
+    AppendPreviewLayoutField(builder, session, pageIds, mode);
 }
 
 void AppendCanonicalPreviewFields(std::ostringstream& builder, const std::string& engineId,
     const std::string& documentId, const std::string& pageId, int pageIndex, int width, int height,
     int checkpointCount, size_t strokeCount, size_t shapeCount, size_t objectCount, const std::string& mode,
-    const std::vector<std::string>& pageIds, bool includeInkLayer)
+    const DocumentSession& session, const std::vector<std::string>& pageIds, bool includePdfLayer, bool includeInkLayer)
 {
+    const PageDescriptor* descriptor = FindPageDescriptor(session, pageId);
     builder << "\"status\":\"ready\","
             << "\"engineId\":\"" << EscapeJsonString(engineId) << "\","
             << "\"previewSchemaVersion\":" << kPreviewSchemaVersion << ","
@@ -2595,22 +2808,42 @@ void AppendCanonicalPreviewFields(std::ostringstream& builder, const std::string
             << "\"pageIndex\":" << pageIndex << ","
             << "\"pageId\":\"" << EscapeJsonString(pageId) << "\","
             << "\"targetMode\":\"" << kStatsFallbackTargetMode << "\","
-            << "\"coordinateSpace\":\"" << kLegacyCoordinateSpace << "\","
+            << "\"coordinateSpace\":\"" << kLegacyCoordinateSpace << "\"";
+    if (HasPageBounds(descriptor)) {
+        builder << ",\"targetBounds\":{"
+                << "\"minX\":0,"
+                << "\"minY\":0,"
+                << "\"maxX\":" << std::fixed << std::setprecision(3) << descriptor->contract.widthPt << ","
+                << "\"maxY\":" << std::fixed << std::setprecision(3) << descriptor->contract.heightPt
+                << "}";
+    }
+    builder << ","
             << "\"width\":" << width << ","
             << "\"height\":" << height << ","
             << "\"strokeCount\":" << strokeCount << ","
             << "\"shapeCount\":" << shapeCount << ","
             << "\"checkpointCount\":" << checkpointCount << ","
             << "\"objectCount\":" << objectCount << ",";
-    AppendPreviewLayoutField(builder, pageIds, mode);
-    builder << ",";
-    AppendPreviewLayerFields(builder, includeInkLayer);
+    AppendPreviewLayoutField(builder, session, pageIds, mode);
+    builder << ",\"layers\":[";
+    bool wroteLayer = false;
+    if (includePdfLayer) {
+        builder << "\"pdf\"";
+        wroteLayer = true;
+    }
+    if (includeInkLayer) {
+        if (wroteLayer) {
+            builder << ",";
+        }
+        builder << "\"ink\"";
+    }
+    builder << "]";
 }
 
 void AppendCanonicalSceneFields(std::ostringstream& builder, const std::string& engineId,
     const std::string& documentId, const std::string& title, const std::string& documentType,
     const std::string& mode, const std::string& backend, int checkpointCount, size_t objectCount,
-    const std::vector<std::string>& pageIds)
+    const DocumentSession& session, const std::vector<std::string>& pageIds)
 {
     builder << "\"status\":\"ready\","
             << "\"version\":1,"
@@ -2623,7 +2856,7 @@ void AppendCanonicalSceneFields(std::ostringstream& builder, const std::string& 
             << "\"coordinateSpace\":\"" << kLegacyCoordinateSpace << "\","
             << "\"checkpointCount\":" << checkpointCount << ","
             << "\"objectCount\":" << objectCount << ",";
-    AppendScenePageFields(builder, pageIds, mode);
+    AppendScenePageFields(builder, session, pageIds, mode);
 }
 
 void AppendCapabilityFields(std::ostringstream& builder, const std::string& runtimeMode,
@@ -2644,20 +2877,44 @@ std::string BuildSceneSnapshotJson(const EngineState& engine, const DocumentSess
     const std::string activePageId = ResolveSessionActivePageId(session);
     const std::vector<std::string> reportedPageIds = BuildReportedPageIds(engine, session);
     const int activePageIndex = std::max(0, FindPageIndex(reportedPageIds, activePageId));
+    const PageDescriptor* activeDescriptor = FindPageDescriptor(session, activePageId);
+    const bool includePdfPlaceholder = activeDescriptor != nullptr && IsPdfPageKind(activeDescriptor->pageKind);
+    const size_t objectCount = engine.committedStrokes.size() + (includePdfPlaceholder ? 1 : 0);
     std::ostringstream builder;
     builder << "{"
             ;
     AppendCanonicalSceneFields(builder, engine.engineId, session.documentId,
         ExtractJsonStringValue(session.openConfigJson, "title", ""),
         ExtractJsonStringValue(session.openConfigJson, "documentType", "blank"),
-        engine.activeMode, engine.activeBackend, checkpointCount, engine.committedStrokes.size(), reportedPageIds);
+        engine.activeMode, engine.activeBackend, checkpointCount, objectCount, session, reportedPageIds);
     builder << ","
             << "\"objects\":[";
+
+    bool wroteObject = false;
+    if (includePdfPlaceholder) {
+        const std::string placeholderId = IsFullPagePdfKind(activeDescriptor->pageKind)
+            ? std::string(kPdfPageNodeIdPrefix) + std::to_string(activePageIndex)
+            : std::string(kPdfFragmentNodeIdPrefix) + std::to_string(activePageIndex);
+        builder << "{"
+                << "\"id\":\"" << EscapeJsonString(placeholderId) << "\","
+                << "\"nodeType\":\"" << (IsFullPagePdfKind(activeDescriptor->pageKind) ? "pdf-page" : "pdf-fragment") << "\","
+                << "\"shapeType\":\"page\","
+                << "\"tool\":\"pdf\","
+                << "\"colorHex\":\"#FFFFFF\","
+                << "\"selected\":false,"
+                << "\"pointCount\":0,"
+                << "\"pageIndex\":" << activePageIndex << ","
+                << "\"pageId\":\"" << EscapeJsonString(activePageId) << "\","
+                << "\"closed\":true,";
+        AppendPageBounds(builder, activeDescriptor);
+        builder << ",\"layer\":\"pdf\"}";
+        wroteObject = true;
+    }
 
     for (size_t index = 0; index < engine.committedStrokes.size(); ++index) {
         const StrokeRenderObject& stroke = engine.committedStrokes[index];
         const StrokeBounds bounds = stroke.points.empty() ? StrokeBounds {} : ComputeStrokeBounds(stroke.points);
-        if (index > 0) {
+        if (wroteObject || index > 0) {
             builder << ",";
         }
         builder << "{"
@@ -2676,12 +2933,159 @@ std::string BuildSceneSnapshotJson(const EngineState& engine, const DocumentSess
                 << "\"minY\":" << std::fixed << std::setprecision(3) << bounds.minY << ","
                 << "\"maxX\":" << std::fixed << std::setprecision(3) << bounds.maxX << ","
                 << "\"maxY\":" << std::fixed << std::setprecision(3) << bounds.maxY
-                << "}"
+                << "},"
+                << "\"layer\":\"ink\""
                 << "}";
+        wroteObject = true;
     }
 
     builder << "]}";
     return builder.str();
+}
+
+std::string ReadBinaryFile(const std::string& path, std::string& contents)
+{
+    std::ifstream stream(path, std::ios::binary);
+    if (!stream.is_open()) {
+        return "file-not-found";
+    }
+    std::ostringstream buffer;
+    buffer << stream.rdbuf();
+    if (stream.bad()) {
+        contents.clear();
+        return "read-failed";
+    }
+    contents = buffer.str();
+    return "";
+}
+
+bool HasPdfHeader(const std::string& contents)
+{
+    return contents.size() >= 5 && contents.compare(0, 5, "%PDF-") == 0;
+}
+
+bool ContainsPdfToken(const std::string& contents, const std::string& token)
+{
+    return contents.find(token) != std::string::npos;
+}
+
+bool IsPdfNameCharacter(unsigned char value)
+{
+    return std::isalnum(value) || value == '-' || value == '_' || value == '.';
+}
+
+int CountPdfPageTypeObjects(const std::string& contents)
+{
+    int count = 0;
+    size_t cursor = 0;
+    while ((cursor = contents.find("/Type", cursor)) != std::string::npos) {
+        size_t valueCursor = cursor + 5;
+        while (valueCursor < contents.size() && std::isspace(static_cast<unsigned char>(contents[valueCursor]))) {
+            valueCursor += 1;
+        }
+        if (valueCursor >= contents.size() || contents[valueCursor] != '/') {
+            cursor += 5;
+            continue;
+        }
+        valueCursor += 1;
+        size_t valueEnd = valueCursor;
+        while (valueEnd < contents.size() && IsPdfNameCharacter(static_cast<unsigned char>(contents[valueEnd]))) {
+            valueEnd += 1;
+        }
+        if (contents.substr(valueCursor, valueEnd - valueCursor) == "Page") {
+            count += 1;
+        }
+        cursor = valueEnd;
+    }
+    return count;
+}
+
+std::vector<int> ExtractPdfCountValues(const std::string& contents)
+{
+    std::vector<int> values;
+    size_t cursor = 0;
+    while ((cursor = contents.find("/Count", cursor)) != std::string::npos) {
+        size_t valueCursor = cursor + 6;
+        while (valueCursor < contents.size() && std::isspace(static_cast<unsigned char>(contents[valueCursor]))) {
+            valueCursor += 1;
+        }
+        size_t valueEnd = valueCursor;
+        while (valueEnd < contents.size() && std::isdigit(static_cast<unsigned char>(contents[valueEnd]))) {
+            valueEnd += 1;
+        }
+        if (valueEnd > valueCursor) {
+            try {
+                values.push_back(std::stoi(contents.substr(valueCursor, valueEnd - valueCursor)));
+            } catch (...) {
+            }
+        }
+        cursor = valueEnd > cursor ? valueEnd : cursor + 6;
+    }
+    return values;
+}
+
+bool TryReadPdfPageCountWithPlatformReader(const std::string& pdfPath, int& pageCount)
+{
+    (void) pdfPath;
+    (void) pageCount;
+    return false;
+}
+
+std::string BuildPdfPageCountResult(const std::string& status, int pageCount, const std::string& detail)
+{
+    std::ostringstream builder;
+    builder << "{\"status\":\"" << EscapeJsonString(status) << "\"";
+    if (pageCount >= 0) {
+        builder << ",\"pageCount\":" << pageCount;
+    }
+    if (!detail.empty()) {
+        builder << ",\"detail\":\"" << EscapeJsonString(detail) << "\"";
+    }
+    builder << "}";
+    return builder.str();
+}
+
+std::string ReadPdfPageCountFromFile(const std::string& pdfPath)
+{
+    if (pdfPath.empty()) {
+        return BuildPdfPageCountResult("invalid-args", -1, "pdfPath is required");
+    }
+
+    int platformPageCount = 0;
+    if (TryReadPdfPageCountWithPlatformReader(pdfPath, platformPageCount) && platformPageCount > 0) {
+        return BuildPdfPageCountResult("ok", platformPageCount, "");
+    }
+
+    std::string contents;
+    const std::string readStatus = ReadBinaryFile(pdfPath, contents);
+    if (!readStatus.empty()) {
+        return BuildPdfPageCountResult(readStatus, -1, readStatus == "file-not-found"
+            ? "unable to open pdf"
+            : "unable to read pdf");
+    }
+    if (!HasPdfHeader(contents)) {
+        return BuildPdfPageCountResult("invalid-pdf", -1, "missing %PDF header");
+    }
+    if (ContainsPdfToken(contents, "/ObjStm") || ContainsPdfToken(contents, "/XRef")) {
+        return BuildPdfPageCountResult("page-count-unavailable", -1, "compressed object streams are not supported by fallback reader");
+    }
+
+    const int directPageCount = CountPdfPageTypeObjects(contents);
+    if (directPageCount <= 0) {
+        return BuildPdfPageCountResult("page-count-unavailable", -1, "unable to find page dictionaries");
+    }
+    const std::vector<int> pageTreeCounts = ExtractPdfCountValues(contents);
+    const auto matchingCount = std::find(pageTreeCounts.begin(), pageTreeCounts.end(), directPageCount);
+    const int maxCount = pageTreeCounts.empty()
+        ? -1
+        : *std::max_element(pageTreeCounts.begin(), pageTreeCounts.end());
+    if (matchingCount != pageTreeCounts.end() && maxCount == directPageCount) {
+        return BuildPdfPageCountResult("ok", directPageCount, "");
+    }
+    return BuildPdfPageCountResult(
+        "page-count-unavailable",
+        -1,
+        "conservative fallback could not verify page count");
 }
 
 constexpr const char* kVertexShaderSource = R"(#version 300 es
@@ -2953,7 +3357,6 @@ public:
         session.packagePath = packagePath;
         session.openConfigJson = configJson;
         const bool initializedPageAwareSession = engine->activeMode == "paged" &&
-            IsBlankDocumentSession(session) &&
             InitializePageAwareSessionFromOpenConfig(configJson, session);
         if (!initializedPageAwareSession) {
             InitializeCompatibilityPageSession(configJson, session);
@@ -3041,7 +3444,6 @@ public:
     std::string RequestPreviewRender(const std::string& engineId, const std::string& documentId,
         int pageIndex, int width, int height)
     {
-        (void) pageIndex;
         std::lock_guard<std::mutex> lock(mutex_);
         EngineState* engine = FindEngineLocked(engineId);
         if (engine == nullptr) {
@@ -3051,21 +3453,36 @@ public:
         if (iterator == engine->documents.end()) {
             return R"({"status":"missing-document"})";
         }
-        const size_t strokeCount = engine->committedStrokes.size();
+        const std::vector<std::string> reportedPageIds = BuildReportedPageIds(*engine, iterator->second);
+        std::string targetPageId = ResolveSessionActivePageId(iterator->second);
+        int targetPageIndex = std::max(0, FindPageIndex(reportedPageIds, targetPageId));
+        if (SupportsPageAwareEditing(*engine, iterator->second) &&
+            pageIndex >= 0 &&
+            pageIndex < static_cast<int>(reportedPageIds.size())) {
+            targetPageId = reportedPageIds[pageIndex];
+            targetPageIndex = pageIndex;
+        }
+        const auto pageStrokeIterator = iterator->second.pageStrokes.find(targetPageId);
+        const std::vector<StrokeRenderObject> emptyStrokes;
+        const std::vector<StrokeRenderObject>& targetStrokes = pageStrokeIterator != iterator->second.pageStrokes.end()
+            ? pageStrokeIterator->second
+            : emptyStrokes;
+        const size_t strokeCount = targetStrokes.size();
         size_t shapeCount = 0;
-        for (const StrokeRenderObject& stroke : engine->committedStrokes) {
+        for (const StrokeRenderObject& stroke : targetStrokes) {
             if (stroke.shapeType != "freehand") {
                 shapeCount += 1;
             }
         }
-        const std::string activePageId = ResolveSessionActivePageId(iterator->second);
-        const std::vector<std::string> reportedPageIds = BuildReportedPageIds(*engine, iterator->second);
-        const int activePageIndex = std::max(0, FindPageIndex(reportedPageIds, activePageId));
+        const PageDescriptor* targetDescriptor = FindPageDescriptor(iterator->second, targetPageId);
+        const bool includePdfLayer = targetDescriptor != nullptr && IsPdfPageKind(targetDescriptor->pageKind);
+        const bool includeInkLayer = includePdfLayer || strokeCount > 0;
+        const size_t objectCount = strokeCount + (includePdfLayer ? 1 : 0);
         std::ostringstream builder;
         builder << "{";
-        AppendCanonicalPreviewFields(builder, engineId, documentId, activePageId, activePageIndex, width, height,
-                iterator->second.checkpointCount, strokeCount, shapeCount, strokeCount,
-                engine->activeMode, reportedPageIds, strokeCount > 0);
+        AppendCanonicalPreviewFields(builder, engineId, documentId, targetPageId, targetPageIndex, width, height,
+                iterator->second.checkpointCount, strokeCount, shapeCount, objectCount,
+                engine->activeMode, iterator->second, reportedPageIds, includePdfLayer, includeInkLayer);
         builder
                 << "}";
         return builder.str();
@@ -3084,6 +3501,11 @@ public:
         }
         EnsureStrokeObjectIds(*engine);
         return BuildSceneSnapshotJson(*engine, iterator->second, iterator->second.checkpointCount);
+    }
+
+    std::string ReadPdfPageCount(const std::string& pdfPath) override
+    {
+        return ReadPdfPageCountFromFile(pdfPath);
     }
 
     bool SetActivePage(const std::string& engineId, const std::string& pageId)
@@ -3117,7 +3539,7 @@ public:
         }
 
         auto iterator = engine->documents.find(engine->activeDocumentId);
-        if (iterator == engine->documents.end() || !SupportsPageAwareEditing(*engine, iterator->second)) {
+        if (iterator == engine->documents.end() || !SupportsBlankPageMutation(*engine, iterator->second)) {
             return false;
         }
 
@@ -3131,10 +3553,29 @@ public:
         if (newPageId.empty() || FindPageIndex(session.pages, newPageId) >= 0) {
             return false;
         }
+        PageDescriptor newDescriptor;
+        newDescriptor.pageId = newPageId;
+        newDescriptor.pageKind = "blank";
+        newDescriptor.contract = ParsePageContractDescriptor(pageConfigJson);
 
         SyncCommittedStrokesToActivePage(*engine, session);
         session.pageStrokes[newPageId] = {};
+        const int insertIndex = static_cast<int>(std::distance(session.pages.begin(), afterIterator + 1));
         session.pages.insert(afterIterator + 1, newPageId);
+        auto afterDescriptorIterator = std::find_if(session.pageDescriptors.begin(), session.pageDescriptors.end(),
+            [&](const PageDescriptor& descriptor) {
+                return descriptor.pageId == afterPageId;
+            });
+        if (afterDescriptorIterator != session.pageDescriptors.end()) {
+            session.pageDescriptors.insert(afterDescriptorIterator + 1, newDescriptor);
+        } else {
+            if (insertIndex >= 0 && insertIndex <= static_cast<int>(session.pageDescriptors.size())) {
+                session.pageDescriptors.insert(session.pageDescriptors.begin() + insertIndex, newDescriptor);
+            } else {
+                session.pageDescriptors.push_back(newDescriptor);
+            }
+        }
+        ReindexPageDescriptors(session);
         session.activePageId = newPageId;
         LoadCommittedStrokesFromActivePage(*engine, session);
         if (SurfaceTelemetry* telemetry = FindSurfaceLocked(engine->xComponentId); telemetry != nullptr) {
@@ -3153,7 +3594,7 @@ public:
         }
 
         auto iterator = engine->documents.find(engine->activeDocumentId);
-        if (iterator == engine->documents.end() || !SupportsPageAwareEditing(*engine, iterator->second)) {
+        if (iterator == engine->documents.end() || !SupportsBlankPageMutation(*engine, iterator->second)) {
             return false;
         }
 
@@ -3177,6 +3618,11 @@ public:
         }
 
         session.pages.erase(pageIterator);
+        session.pageDescriptors.erase(std::remove_if(session.pageDescriptors.begin(), session.pageDescriptors.end(),
+            [&](const PageDescriptor& descriptor) {
+                return descriptor.pageId == pageId;
+            }), session.pageDescriptors.end());
+        ReindexPageDescriptors(session);
         session.pageStrokes.erase(pageId);
         session.activePageId = nextActivePageId;
         LoadCommittedStrokesFromActivePage(*engine, session);

@@ -51,7 +51,8 @@ export class PreviewAdapterService {
     const previewLabel: string = this.readString(rawMap, ['previewLabel', 'label']) || context.fallbackPreviewLabel;
     const layers: NativeLayerId[] = this.normalizeLayers(rawMap, context.documentType);
     const defaultCoverPageId: string = pageContract.pageId.length > 0 ? pageContract.pageId : NATIVE_PRIMARY_PAGE_ID;
-    const pageIds: string[] = this.normalizePageIds(rawMap, defaultCoverPageId, pageIndex);
+    const coverPageId: string = this.resolveCoverPageId(rawMap, defaultCoverPageId, pageIndex);
+    const pageIds: string[] = this.normalizePageIds(rawMap, defaultCoverPageId, pageIndex, coverPageId);
     const coordinateSpace: string = this.readString(rawMap, ['coordinateSpace']);
     const raster: PreviewRasterAsset | undefined = this.normalizeRaster(rawMap);
     const layout: NativePreviewLayout | undefined = this.normalizeLayout(rawMap);
@@ -71,7 +72,7 @@ export class PreviewAdapterService {
       previewStatus,
       status: rawStatus.length > 0 ? rawStatus : (source === 'markdown' ? 'summary-only' : 'ready'),
       targetMode,
-      coverPageId: pageIds.length > 0 ? pageIds[0] : defaultCoverPageId,
+      coverPageId,
       pageIds,
       layers,
       pageIndex,
@@ -498,7 +499,24 @@ export class PreviewAdapterService {
     return normalizedBounds;
   }
 
-  private normalizePageIds(rawMap: PreviewMap | undefined, fallbackCoverPageId: string, pageIndex: number): string[] {
+  private resolveCoverPageId(rawMap: PreviewMap | undefined, fallbackCoverPageId: string, pageIndex: number): string {
+    const pageId: string = this.readString(rawMap, ['pageId']);
+    if (pageId.length > 0) {
+      return pageId;
+    }
+    if (pageIndex >= 0) {
+      return buildPageId(pageIndex);
+    }
+    const rawCoverPageId: string = this.readString(rawMap, ['coverPageId']);
+    return rawCoverPageId.length > 0 ? rawCoverPageId : fallbackCoverPageId;
+  }
+
+  private normalizePageIds(
+    rawMap: PreviewMap | undefined,
+    fallbackCoverPageId: string,
+    pageIndex: number,
+    preferredCoverPageId: string
+  ): string[] {
     const pageIds: string[] = [];
     const directPageIds: PreviewValue | undefined = rawMap?.['pageIds'];
     if (Array.isArray(directPageIds)) {
@@ -516,15 +534,24 @@ export class PreviewAdapterService {
       }
     });
 
-    const pageId: string = this.readString(rawMap, ['coverPageId', 'pageId']);
+    const rawCoverPageId: string = this.readString(rawMap, ['coverPageId']);
+    if (rawCoverPageId.length > 0 && !pageIds.includes(rawCoverPageId)) {
+      pageIds.push(rawCoverPageId);
+    }
+    const pageId: string = this.readString(rawMap, ['pageId']);
     if (pageId.length > 0 && !pageIds.includes(pageId)) {
-      pageIds.unshift(pageId);
+      pageIds.push(pageId);
     }
     if (pageIds.length === 0) {
-      pageIds.push(pageIndex >= 0 ? buildPageId(pageIndex) : fallbackCoverPageId);
+      pageIds.push(preferredCoverPageId.length > 0
+        ? preferredCoverPageId
+        : (pageIndex >= 0 ? buildPageId(pageIndex) : fallbackCoverPageId));
+    }
+    if (preferredCoverPageId.length > 0 && !pageIds.includes(preferredCoverPageId)) {
+      pageIds.push(preferredCoverPageId);
     }
     if (!pageIds.includes(fallbackCoverPageId)) {
-      pageIds.unshift(fallbackCoverPageId);
+      pageIds.push(fallbackCoverPageId);
     }
     return pageIds;
   }

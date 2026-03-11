@@ -19,6 +19,7 @@ public:
     virtual std::string RequestPreviewRender(const std::string& engineId, const std::string& documentId,
         int pageIndex, int width, int height) = 0;
     virtual std::string ExportSceneSnapshot(const std::string& engineId, const std::string& documentId) = 0;
+    virtual std::string ReadPdfPageCount(const std::string& pdfPath) = 0;
     virtual bool SetActivePage(const std::string& engineId, const std::string& pageId) = 0;
     virtual bool InsertPage(const std::string& engineId, const std::string& afterPageId,
         const std::string& pageConfigJson) = 0;

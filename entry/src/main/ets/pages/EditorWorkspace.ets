@@ -230,15 +230,28 @@ struct EditorWorkspace {
     return document?.documentType === DocumentType.BLANK && document.documentMode === DocumentMode.PAGED;
   }
 
-  private supportsBlankPagedRuntime(document: DocumentRecord | null = this.document): boolean {
-    return this.isBlankPagedEditable(document) && (document?.schemaVersion ?? 0) >= 2;
+  private supportsPagedDocumentRuntime(document: DocumentRecord | null = this.document): boolean {
+    return document?.documentMode === DocumentMode.PAGED &&
+      (document?.schemaVersion ?? 0) >= 2 &&
+      (document?.pages.length ?? 0) > 0;
   }
 
   private editablePages(document: DocumentRecord | null = this.document): DocumentPageEntry[] {
-    if (!document || !this.isBlankPagedEditable(document)) {
+    if (!document || !this.supportsPagedDocumentRuntime(document)) {
       return [];
     }
     return [...document.pages].sort((left, right) => left.order - right.order);
+  }
+
+  private canMutatePageSet(document: DocumentRecord | null = this.document): boolean {
+    return this.isBlankPagedEditable(document);
+  }
+
+  private canChangeDocumentMode(document: DocumentRecord | null = this.document): boolean {
+    if (!document) {
+      return true;
+    }
+    return !(document.documentType !== DocumentType.BLANK && this.supportsPagedDocumentRuntime(document));
   }
 
   private hasOptionalNativePageMethod(methodName: string): boolean {
@@ -246,11 +259,11 @@ struct EditorWorkspace {
   }
 
   private shouldUsePageBridge(): boolean {
-    return this.supportsBlankPagedRuntime() && this.hasOptionalNativePageMethod(NATIVE_PAGE_METHOD_SET_ACTIVE);
+    return this.supportsPagedDocumentRuntime() && this.hasOptionalNativePageMethod(NATIVE_PAGE_METHOD_SET_ACTIVE);
   }
 
   private async primeBlankPagedRuntime(pageId: string): Promise<void> {
-    if (!this.document || !this.libraryService || !this.isBlankPagedEditable() || this.engineId.length === 0) {
+    if (!this.document || !this.libraryService || !this.supportsPagedDocumentRuntime() || this.engineId.length === 0) {
       return;
     }
     if (this.shouldUsePageBridge()) {
@@ -260,7 +273,7 @@ struct EditorWorkspace {
   }
 
   private async persistBlankPagedRuntimePage(): Promise<void> {
-    if (!this.document || !this.libraryService || !this.isBlankPagedEditable() || this.engineId.length === 0) {
+    if (!this.document || !this.libraryService || !this.supportsPagedDocumentRuntime() || this.engineId.length === 0) {
       return;
     }
     this.nativeEngine.saveCheckpoint(this.engineId, this.document.id);
@@ -306,6 +319,7 @@ struct EditorWorkspace {
       updatedAt: document.updatedAt,
       openedAt: document.openedAt,
       trashedAt: document.trashedAt,
+      attachments: document.attachments,
       tags: document.tags
     };
     this.document = nextDocument;
@@ -314,7 +328,7 @@ struct EditorWorkspace {
   }
 
   private stageCurrentPageDraft(): void {
-    if (!this.isBlankPagedEditable() || this.activePageId.length === 0) {
+    if (!this.supportsPagedDocumentRuntime() || this.activePageId.length === 0) {
       return;
     }
     this.pageMarkdownDrafts.set(this.activePageId, this.markdownText);
@@ -419,7 +433,7 @@ struct EditorWorkspace {
       this.document = await this.libraryService.openDocumentById(documentId);
       this.currentMode = this.document.documentMode;
       this.currentBackend = this.document.renderBackend;
-      if (this.isBlankPagedEditable(this.document)) {
+      if (this.supportsPagedDocumentRuntime(this.document)) {
         this.applyDocumentActivePage(this.document, this.document.activePageId);
         await this.loadPageMarkdown(this.activePageId);
       } else {
@@ -440,7 +454,7 @@ struct EditorWorkspace {
         enableMarkdownOverlay: true
       };
       this.engineId = this.nativeEngine.createEngine(engineConfig);
-      if (this.isBlankPagedEditable()) {
+      if (this.supportsPagedDocumentRuntime()) {
         await this.primeBlankPagedRuntime(this.activePageId);
       }
       this.nativeEngine.openDocument(
@@ -553,16 +567,23 @@ struct EditorWorkspace {
         let nextDocument: DocumentRecord;
         let mustConfirmBlankPagedSave: boolean = false;
         let expectedConfirmedPageId: string = '';
-        if (this.isBlankPagedEditable()) {
+        if (this.supportsPagedDocumentRuntime()) {
           this.stageCurrentPageDraft();
           await this.persistBlankPagedRuntimePage();
-          nextDocument = await this.libraryService!.prepareBlankPagedDocumentForSave(this.document!.id);
-          mustConfirmBlankPagedSave = this.isBlankPagedEditable(nextDocument);
-          for (const pageId of Array.from(this.dirtyPageIds.values())) {
-            const markdownText: string = this.pageMarkdownDrafts.get(pageId) ?? '';
-            nextDocument = await this.libraryService!.saveDocumentMarkdown(nextDocument.id, markdownText, pageId, false);
+          if (this.isBlankPagedEditable()) {
+            nextDocument = await this.libraryService!.prepareBlankPagedDocumentForSave(this.document!.id);
+            mustConfirmBlankPagedSave = this.isBlankPagedEditable(nextDocument);
+            for (const pageId of Array.from(this.dirtyPageIds.values())) {
+              const markdownText: string = this.pageMarkdownDrafts.get(pageId) ?? '';
+              nextDocument = await this.libraryService!.saveDocumentMarkdown(nextDocument.id, markdownText, pageId, false);
+            }
+            this.dirtyPageIds.clear();
+          } else {
+            const currentPageId: string = this.activePageId.length > 0 ? this.activePageId : this.document!.activePageId;
+            const currentMarkdown: string = this.pageMarkdownDrafts.get(currentPageId) ?? this.markdownText;
+            nextDocument = await this.libraryService!.saveDocumentMarkdown(this.document!.id, currentMarkdown, currentPageId, false);
+            this.dirtyPageIds.delete(currentPageId);
           }
-          this.dirtyPageIds.clear();
           const nextActivePageId: string = this.activePageId.length > 0 ? this.activePageId : nextDocument.activePageId;
           expectedConfirmedPageId = nextActivePageId;
           nextDocument = await this.libraryService!.setDocumentActivePage(nextDocument.id, nextActivePageId);
@@ -581,7 +602,7 @@ struct EditorWorkspace {
         if (mustConfirmBlankPagedSave) {
           nextDocument = await this.libraryService!.confirmBlankPagedSaveCompleted(nextDocument.id, expectedConfirmedPageId);
         }
-        if (this.isBlankPagedEditable(nextDocument)) {
+        if (this.supportsPagedDocumentRuntime(nextDocument)) {
           this.applyDocumentActivePage(nextDocument, this.activePageId.length > 0 ? this.activePageId : nextDocument.activePageId);
         } else {
           this.activePageId = '';
@@ -705,6 +726,9 @@ struct EditorWorkspace {
   }
 
   private async setMode(mode: DocumentMode): Promise<void> {
+    if (!this.canChangeDocumentMode() && mode !== this.currentMode) {
+      return;
+    }
     if (this.document && this.libraryService && this.isBlankPagedEditable() && mode !== DocumentMode.PAGED) {
       this.stageCurrentPageDraft();
       await this.persistBlankPagedRuntimePage();
@@ -720,7 +744,7 @@ struct EditorWorkspace {
     }
     if (this.document && this.libraryService) {
       const nextDocument: DocumentRecord = await this.libraryService.updateDocumentPresentation(this.document.id, mode, this.currentBackend);
-      if (this.isBlankPagedEditable(nextDocument)) {
+      if (this.supportsPagedDocumentRuntime(nextDocument)) {
         this.applyDocumentActivePage(nextDocument, this.activePageId.length > 0 ? this.activePageId : nextDocument.activePageId);
       } else {
         this.activePageId = '';
@@ -740,10 +764,12 @@ struct EditorWorkspace {
     }
     if (this.document && this.libraryService) {
       const nextDocument: DocumentRecord = await this.libraryService.updateDocumentPresentation(this.document.id, this.currentMode, backend);
-      if (this.isBlankPagedEditable(nextDocument)) {
+      if (this.supportsPagedDocumentRuntime(nextDocument)) {
         this.applyDocumentActivePage(nextDocument, this.activePageId.length > 0 ? this.activePageId : nextDocument.activePageId);
       } else {
         this.activePageId = '';
+        this.pageMarkdownDrafts.clear();
+        this.dirtyPageIds.clear();
         this.document = nextDocument;
       }
     }
@@ -913,7 +939,7 @@ struct EditorWorkspace {
   }
 
   private pageCount(): number {
-    if (this.isBlankPagedEditable()) {
+    if (this.supportsPagedDocumentRuntime()) {
       return Math.max(1, this.editablePages().length);
     }
     const snapshot: DocumentPreviewSnapshot | undefined = this.previewSnapshot();
@@ -931,14 +957,21 @@ struct EditorWorkspace {
   }
 
   private async selectPage(index: number): Promise<void> {
-    if (this.isBlankPagedEditable()) {
+    if (this.supportsPagedDocumentRuntime()) {
       const nextPage: DocumentPageEntry | undefined = this.editablePages()[index];
-      if (!nextPage || nextPage.id === this.activePageId) {
+      if (!nextPage || nextPage.id === this.activePageId || !this.document || !this.libraryService) {
         return;
       }
+      const currentPageId: string = this.activePageId;
       this.stageCurrentPageDraft();
       await this.persistBlankPagedRuntimePage();
-      this.applyDocumentActivePage(this.document as DocumentRecord, nextPage.id);
+      if (currentPageId.length > 0) {
+        const currentMarkdown: string = this.pageMarkdownDrafts.get(currentPageId) ?? this.markdownText;
+        await this.libraryService.saveDocumentMarkdown(this.document.id, currentMarkdown, currentPageId, false);
+        this.dirtyPageIds.delete(currentPageId);
+      }
+      const nextDocument: DocumentRecord = await this.libraryService.setDocumentActivePage(this.document.id, nextPage.id);
+      this.applyDocumentActivePage(nextDocument, nextPage.id);
       await this.loadPageMarkdown(nextPage.id);
       if (!this.notifyNativeActivePage(nextPage.id)) {
         await this.primeBlankPagedRuntime(nextPage.id);
@@ -951,7 +984,7 @@ struct EditorWorkspace {
   }
 
   private canAddRealPages(): boolean {
-    return this.isBlankPagedEditable() && this.document !== null && this.libraryService !== undefined;
+    return this.canMutatePageSet() && this.document !== null && this.libraryService !== undefined;
   }
 
   private canDeleteCurrentPage(): boolean {
@@ -999,7 +1032,7 @@ struct EditorWorkspace {
   }
 
   private pageEntryAt(index: number): DocumentPageEntry | undefined {
-    return this.isBlankPagedEditable() ? this.editablePages()[index] : undefined;
+    return this.supportsPagedDocumentRuntime() ? this.editablePages()[index] : undefined;
   }
 
   private pageKeyAt(index: number): string {
@@ -1007,7 +1040,7 @@ struct EditorWorkspace {
   }
 
   private isSelectedPageIndex(index: number): boolean {
-    if (this.isBlankPagedEditable()) {
+    if (this.supportsPagedDocumentRuntime()) {
       return this.activePageId === this.pageKeyAt(index);
     }
     return this.activePageIndex === index;
@@ -1185,6 +1218,7 @@ struct EditorWorkspace {
             .fontColor('#667085')
           Button(DOCUMENT_MODE_LABELS[DocumentMode.PAGED])
             .height(30)
+            .enabled(this.canChangeDocumentMode())
             .backgroundColor(this.currentMode === DocumentMode.PAGED ? '#162033' : '#FFFFFF')
             .fontColor(this.currentMode === DocumentMode.PAGED ? '#FFFFFF' : '#162033')
             .fontSize(11)
@@ -1193,6 +1227,7 @@ struct EditorWorkspace {
             })
           Button(DOCUMENT_MODE_LABELS[DocumentMode.INFINITE])
             .height(30)
+            .enabled(this.canChangeDocumentMode())
             .backgroundColor(this.currentMode === DocumentMode.INFINITE ? '#162033' : '#FFFFFF')
             .fontColor(this.currentMode === DocumentMode.INFINITE ? '#FFFFFF' : '#162033')
             .fontSize(11)
@@ -1384,7 +1419,7 @@ struct EditorWorkspace {
       .onChange((value: string) => {
         this.markdownText = value;
         this.saveState = 'idle';
-        if (this.isBlankPagedEditable() && this.activePageId.length > 0) {
+        if (this.supportsPagedDocumentRuntime() && this.activePageId.length > 0) {
           this.pageMarkdownDrafts.set(this.activePageId, value);
           this.dirtyPageIds.add(this.activePageId);
         }

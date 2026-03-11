@@ -15,6 +15,7 @@ declare const entry: {
   disposeDocument: (engineId: string, documentId: string) => boolean;
   disposeEngine: (engineId: string) => boolean;
   getDebugState: (engineId: string) => string;
+  readPdfPageCount: (pdfPath: string) => string;
 };
 
 export default entry;

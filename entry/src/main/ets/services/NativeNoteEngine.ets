@@ -20,6 +20,7 @@ interface NativeEntryModule {
   attachXComponent(engineId: string, xComponentId: string, surfaceId: string): boolean;
   resize(engineId: string, width: number, height: number, density: number): boolean;
   saveCheckpoint(engineId: string, documentId: string): boolean;
+  readPdfPageCount?: (pdfPath: string) => string;
   requestPreviewRender(engineId: string, documentId: string, pageIndex: number, width: number, height: number): string;
   exportSceneSnapshot(engineId: string, documentId: string): string;
   setActivePage(engineId: string, pageId: string): boolean;
@@ -114,6 +115,20 @@ export interface TraceActionResult {
   status: string;
   path?: string;
   sampleCount?: number;
+}
+
+export type NativePdfPageCountStatus =
+  'ok' |
+  'invalid-args' |
+  'file-not-found' |
+  'read-failed' |
+  'invalid-pdf' |
+  'page-count-unavailable';
+
+export interface NativePdfPageCountResult {
+  status: NativePdfPageCountStatus;
+  pageCount?: number;
+  detail?: string;
 }
 
 const nativeBridge: NativeEntryModule = nativeModule as NativeEntryModule;
@@ -500,6 +515,35 @@ export function parseNativeDebugStateJson(rawText: string): NativeDebugState | n
   };
 }
 
+export function parseNativePdfPageCountResultJson(rawText: string): NativePdfPageCountResult | null {
+  const parsed: JsonMap | null = readJsonMap(rawText);
+  if (!parsed) {
+    return null;
+  }
+  const status: string = readStringValue(parsed, 'status', '');
+  if (
+    status !== 'ok' &&
+    status !== 'invalid-args' &&
+    status !== 'file-not-found' &&
+    status !== 'read-failed' &&
+    status !== 'invalid-pdf' &&
+    status !== 'page-count-unavailable'
+  ) {
+    return null;
+  }
+  const result: NativePdfPageCountResult = {
+    status: status as NativePdfPageCountStatus
+  };
+  if (parsed['pageCount'] !== undefined) {
+    result.pageCount = Math.trunc(readNumberValue(parsed, 'pageCount', 0));
+  }
+  const detail: string = readStringValue(parsed, 'detail', '');
+  if (detail.length > 0) {
+    result.detail = detail;
+  }
+  return result;
+}
+
 export class NativeNoteEngine {
   createEngine(config: EngineConfig): string {
     return nativeBridge.createEngine(JSON.stringify(config));
@@ -519,6 +563,19 @@ export class NativeNoteEngine {
 
   saveCheckpoint(engineId: string, documentId: string): boolean {
     return nativeBridge.saveCheckpoint(engineId, documentId);
+  }
+
+  readPdfPageCount(pdfPath: string): NativePdfPageCountResult | null {
+    const bridgeMethod: ((pdfPath: string) => string) | undefined = nativeBridge.readPdfPageCount;
+    if (bridgeMethod === undefined) {
+      return null;
+    }
+    try {
+      const rawText: string = String(bridgeMethod(pdfPath) ?? '');
+      return parseNativePdfPageCountResultJson(rawText);
+    } catch (_) {
+      return null;
+    }
   }
 
   requestPreviewRender(

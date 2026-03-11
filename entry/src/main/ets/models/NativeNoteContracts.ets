@@ -455,12 +455,10 @@ export function buildNativePageContract(document: DocumentRecord): NativePageCon
   });
 }
 
-function isBlankPagedDocument(document: DocumentRecord): boolean {
-  return document.documentType === DocumentType.BLANK && document.documentMode === DocumentMode.PAGED;
-}
-
-function supportsBlankPagedRuntime(document: DocumentRecord): boolean {
-  return isBlankPagedDocument(document) && document.schemaVersion >= 2;
+function supportsPagedRuntime(document: DocumentRecord): boolean {
+  return document.documentMode === DocumentMode.PAGED &&
+    document.schemaVersion >= 2 &&
+    document.pages.length > 0;
 }
 
 function getOrderedDocumentPages(document: DocumentRecord): DocumentPageEntry[] {
@@ -540,7 +538,7 @@ export function buildNativeOpenDocumentConfig(
     paperBackgroundId: document.paperBackgroundId
   }, DEFAULT_DOCUMENT_PAGE_METADATA);
   const activePageContract: NativePageContract = buildNativePageContractForEntry(document, undefined);
-  const hasRealBlankPagedPages: boolean = supportsBlankPagedRuntime(document) && document.pages.length > 0;
+  const hasRealPagedPages: boolean = supportsPagedRuntime(document);
   const config: NativeOpenDocumentConfig = {
     documentType: document.documentType,
     title: document.title,
@@ -550,7 +548,7 @@ export function buildNativeOpenDocumentConfig(
     paperBackgroundId: resolved.paperBackgroundId,
     pageContract: activePageContract
   };
-  if (hasRealBlankPagedPages) {
+  if (hasRealPagedPages) {
     config.activePageId = activePageContract.pageId;
     config.pages = getOrderedDocumentPages(document).map((page) => buildNativeDocumentPageConfig(document, page));
     config.pageContracts = buildNativePageContracts(document);

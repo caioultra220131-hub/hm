@@ -185,3 +185,32 @@ Head-thread final decision:
 - layout refinement: accepted
 - native/schema hardening: accepted
 - ArkTS/UI cleanup: accepted
+
+## M2 PDF/HYBRID Paged Import Pass
+
+Date: 2026-03-11
+
+This follow-up pass is accepted.
+
+Scope covered in this round:
+
+- imported `PDF` paged document creation
+- imported `HYBRID` paged document creation
+- page-aware open/save/back/reopen on imported paged docs
+- preview metadata following the current active page
+- invalid PDF import failure cleanup
+
+Accepted results:
+
+- `M2-PDF-IMPORT-01 = passed`
+- `M2-HYBRID-IMPORT-01 = passed`
+- `M2-ACTIVE-PREVIEW-01 = passed`
+- `M2-INVALID-PDF-01 = passed`
+
+Head-thread notes:
+
+- `PDF` import now creates a real paged package, opens into the editor, saves on page 2, returns home, and reopens on page 2.
+- `HYBRID` import now follows the same paged flow and also reopens on page 2 after save/back.
+- home preview metadata now stays aligned with the active page; accepted value after saving page 2 is `pageIndex = 1` and `coverPageId = "page-1"`.
+- invalid/non-PDF input is rejected without leaving a bad document row or half-written package.
+- one interim HYBRID failure was caused by stale test click coordinates after the Create panel layout moved; live layout verification confirmed the CTA itself was functional, and the final rerun passed.

@@ -18,6 +18,7 @@ import {
 } from '../models/NoteModels';
 import { PreviewThumbnail } from '../components/PreviewThumbnail';
 import { DocumentLibraryService } from '../services/DocumentLibraryService';
+import { PdfImportService } from '../services/PdfImportService';
 
 const DOMAIN: number = 0xFF00;
 const LOG_TAG: string = 'NativeNoteIndex';
@@ -66,6 +67,9 @@ interface IndexCopy {
   delete: string;
   createPanelTitle: string;
   create: string;
+  selectPdfAndCreate: string;
+  importingPdf: string;
+  importPagedOnlyHint: string;
   detailsPanelTitle: string;
   saveTitle: string;
   moveToFolder: string;
@@ -130,6 +134,10 @@ const INDEX_COPY: IndexCopy = {
   guideCornell: '康奈尔',
   guideWeekly: '周计划',
   updatedAtPrefix: '更新于'
+  ,
+  selectPdfAndCreate: 'Select PDF & Create',
+  importingPdf: 'Importing...',
+  importPagedOnlyHint: 'PDF/HYBRID imports are paged-only in M2.'
 };
 
 @Entry
@@ -161,6 +169,8 @@ struct Index {
   @State private createMode: DocumentMode = DocumentMode.PAGED;
   @State private createBackend: RenderBackend = RenderBackend.OPEN_GLES;
   @State private createFolderId: string = 'inbox';
+  @State private createBusy: boolean = false;
+  @State private createErrorMessage: string = '';
   @State private showDeletePanel: boolean = false;
   @State private deleteTargetId: string = '';
 
@@ -329,21 +339,96 @@ struct Index {
     await this.reload();
   }
 
-  private async createDocument(): Promise<void> {
-    if (!this.libraryService) {
+  private async createDocument(requestedType: DocumentType = this.createType): Promise<void> {
+    if (!this.libraryService || this.createBusy) {
       return;
     }
-    const payload: DocumentCreatePayload = {
-      title: this.createTitle.trim().length > 0 ? this.createTitle.trim() : INDEX_COPY.untitledNote,
-      documentType: this.createType,
-      documentMode: this.createMode,
-      renderBackend: this.createBackend,
-      folderId: this.createFolderId
-    };
-    await this.libraryService.createDocument(payload);
-    this.showCreatePanel = false;
+    this.createErrorMessage = '';
+    let createdDocument: DocumentRecord | null = null;
+    try {
+      const title: string = this.createTitle.trim().length > 0 ? this.createTitle.trim() : INDEX_COPY.untitledNote;
+      const documentType: DocumentType = requestedType;
+      const documentMode: DocumentMode = this.isImportCreateType(documentType) ? DocumentMode.PAGED : this.createMode;
+      hilog.info(
+        DOMAIN,
+        LOG_TAG,
+        'create document start type=%{public}s mode=%{public}s busy=%{public}s',
+        `${documentType}`,
+        `${documentMode}`,
+        `${this.createBusy}`
+      );
+      if (this.isImportCreateType(documentType)) {
+        hilog.info(DOMAIN, LOG_TAG, 'opening pdf picker for %{public}s', `${documentType}`);
+        const importService: PdfImportService = new PdfImportService(this.appContext);
+        const pickedAsset = await importService.pickSinglePdf();
+        if (pickedAsset === null) {
+          hilog.warn(DOMAIN, LOG_TAG, 'pdf picker returned empty selection for %{public}s', `${documentType}`);
+          return;
+        }
+        this.createBusy = true;
+        createdDocument = await this.libraryService.createImportedDocument({
+          title,
+          documentType: documentType as DocumentType.PDF | DocumentType.HYBRID,
+          renderBackend: this.createBackend,
+          folderId: this.createFolderId,
+          sourceUri: pickedAsset.sourceUri,
+          sourceDisplayName: pickedAsset.sourceDisplayName,
+          sourceMimeType: pickedAsset.sourceMimeType,
+          sourceByteSize: pickedAsset.sourceByteSize
+        });
+      } else {
+        this.createBusy = true;
+        const payload: DocumentCreatePayload = {
+          title,
+          documentType,
+          documentMode,
+          renderBackend: this.createBackend,
+          folderId: this.createFolderId
+        };
+        createdDocument = await this.libraryService.createDocument(payload);
+      }
+      await this.reload();
+      this.showCreatePanel = false;
+      this.resetCreatePanel();
+      if (createdDocument !== null) {
+        this.selectedDocumentId = createdDocument.id;
+        this.renameDraft = createdDocument.title;
+      }
+    } catch (error) {
+      hilog.error(DOMAIN, LOG_TAG, 'create document failed: %{public}s', `${error}`);
+      this.createErrorMessage = `${error}`;
+    } finally {
+      this.createBusy = false;
+    }
+  }
+
+  private isImportCreateType(type: DocumentType = this.createType): boolean {
+    return type === DocumentType.PDF || type === DocumentType.HYBRID;
+  }
+
+  private resetCreatePanel(): void {
     this.createTitle = INDEX_COPY.untitledNote;
-    await this.reload();
+    this.createType = DocumentType.BLANK;
+    this.createMode = DocumentMode.PAGED;
+    this.createBackend = RenderBackend.OPEN_GLES;
+    this.createFolderId = 'inbox';
+    this.createErrorMessage = '';
+    this.createBusy = false;
+  }
+
+  private selectCreateType(type: DocumentType): void {
+    this.createType = type;
+    if (this.isImportCreateType(type)) {
+      this.createMode = DocumentMode.PAGED;
+    }
+    this.createErrorMessage = '';
+  }
+
+  private createActionLabel(): string {
+    if (this.createBusy) {
+      return this.isImportCreateType() ? INDEX_COPY.importingPdf : INDEX_COPY.create;
+    }
+    return this.isImportCreateType() ? INDEX_COPY.selectPdfAndCreate : INDEX_COPY.create;
   }
 
   private async saveRename(): Promise<void> {
@@ -424,6 +509,7 @@ struct Index {
             .onClick(() => {
               this.showCreatePanel = true;
               this.selectedDocumentId = '';
+              this.createErrorMessage = '';
             })
           Button(this.viewMode === 'home' ? INDEX_COPY.home : INDEX_COPY.allDocuments)
             .width('100%')
@@ -691,7 +777,7 @@ struct Index {
                   .backgroundColor(this.createType === type ? '#162033' : '#FFFFFF')
                   .fontColor(this.createType === type ? '#FFFFFF' : '#162033')
                   .onClick(() => {
-                    this.createType = type;
+                    this.selectCreateType(type);
                   })
               }, (type: DocumentType) => type)
             }
@@ -700,12 +786,22 @@ struct Index {
                 Button(DOCUMENT_MODE_LABELS[mode])
                   .height(34)
                   .margin({ top: 12, right: 8 })
+                  .enabled(!this.isImportCreateType() || mode === DocumentMode.PAGED)
                   .backgroundColor(this.createMode === mode ? '#162033' : '#FFFFFF')
                   .fontColor(this.createMode === mode ? '#FFFFFF' : '#162033')
                   .onClick(() => {
+                    if (this.isImportCreateType() && mode !== DocumentMode.PAGED) {
+                      return;
+                    }
                     this.createMode = mode;
                   })
               }, (mode: DocumentMode) => mode)
+            }
+            if (this.isImportCreateType()) {
+              Text(INDEX_COPY.importPagedOnlyHint)
+                .fontSize(12)
+                .fontColor('#667085')
+                .margin({ top: 10 })
             }
             Row() {
               ForEach([RenderBackend.OPEN_GLES, RenderBackend.SKIA], (backend: RenderBackend) => {
@@ -734,15 +830,31 @@ struct Index {
                   this.createFolderId = folder.id;
                 })
             }, (folder: FolderRecord): string => folder.id)
-            Button(INDEX_COPY.create)
-              .width('100%')
-              .height(40)
-              .margin({ top: 18 })
-              .backgroundColor('#162033')
-              .fontColor('#FFFFFF')
-              .onClick(() => {
-                this.createDocument();
-              })
+            if (this.createErrorMessage.length > 0) {
+              Text(this.createErrorMessage)
+                .fontSize(12)
+                .fontColor('#B42318')
+                .margin({ top: 12 })
+            }
+            Row() {
+              Text(this.createActionLabel())
+                .fontSize(16)
+                .fontWeight(FontWeight.Medium)
+                .fontColor('#FFFFFF')
+            }
+            .width('100%')
+            .height(40)
+            .margin({ top: 18 })
+            .justifyContent(FlexAlign.Center)
+            .backgroundColor(this.createBusy ? '#98A2B3' : '#162033')
+            .borderRadius(999)
+            .opacity(this.createBusy ? 0.72 : 1)
+            .onClick(() => {
+              if (this.createBusy) {
+                return;
+              }
+              this.createDocument(this.createType);
+            })
           } else if (this.selectedDocument()) {
             Text(INDEX_COPY.detailsPanelTitle)
               .fontSize(22)
