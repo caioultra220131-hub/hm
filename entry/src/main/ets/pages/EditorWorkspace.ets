@@ -1683,86 +1683,93 @@ struct EditorWorkspace {
 
   @Builder
   private buildPlaceholderSurface(): void {
-    Stack({ alignContent: Alignment.Center }) {
-      Column({ space: 12 }) {
-        Stack({ alignContent: Alignment.TopStart }) {
-          Row()
-            .width(this.simulatorCanvasWidth())
-            .height(this.simulatorCanvasHeight())
-            .backgroundColor(this.simulatorPageFillColor())
-            .borderRadius(26)
-            .border({ width: 1, color: this.simulatorPageAccentColor() })
+    if (this.simulatorObjectsForActivePage().length === 0) {
+      Stack() {
+        Column() {}
+          .width('100%')
+          .height('100%')
+          .backgroundColor('#F5F6F7')
+        ForEach([0, 1, 2, 3], (rowIndex: number) => {
+          ForEach([0, 1, 2, 3, 4], (columnIndex: number) => {
+            Blank()
+              .width(14)
+              .height(14)
+              .backgroundColor('#9CB0D0')
+              .opacity(0.85)
+              .borderRadius(999)
+              .position({ x: 160 + columnIndex * 350, y: 135 + rowIndex * 260 })
+          }, (columnIndex: number): string => `stub-dot-${rowIndex}-${columnIndex}`)
+        }, (rowIndex: number): string => `stub-row-${rowIndex}`)
+      }
+      .width('100%')
+      .height('100%')
+    } else {
+      Stack({ alignContent: Alignment.Center }) {
+        Column({ space: 12 }) {
+          Stack({ alignContent: Alignment.TopStart }) {
+            Row()
+              .width(this.simulatorCanvasWidth())
+              .height(this.simulatorCanvasHeight())
+              .backgroundColor(this.simulatorPageFillColor())
+              .borderRadius(26)
+              .border({ width: 1, color: this.simulatorPageAccentColor() })
 
-          this.buildSimulatorGuideLines()
+            this.buildSimulatorGuideLines()
 
-          Row()
-            .width(this.simulatorCanvasWidth() - 44)
-            .height(1)
-            .backgroundColor('#D8DEE8')
-            .position({ x: 22, y: 44 })
+            Row()
+              .width(this.simulatorCanvasWidth() - 44)
+              .height(1)
+              .backgroundColor('#D8DEE8')
+              .position({ x: 22, y: 44 })
 
-          Text(this.document?.title ?? 'Untitled')
-            .fontSize(16)
-            .fontWeight(FontWeight.Medium)
-            .fontColor('#162033')
-            .maxLines(1)
-            .position({ x: 22, y: 18 })
+            Text(this.document?.title ?? 'Untitled')
+              .fontSize(16)
+              .fontWeight(FontWeight.Medium)
+              .fontColor('#162033')
+              .maxLines(1)
+              .position({ x: 22, y: 18 })
 
-          Text(this.simulatorGuideLabel())
-            .fontSize(11)
-            .fontColor('#667085')
-            .position({ x: 22, y: 52 })
+            Text(this.simulatorGuideLabel())
+              .fontSize(11)
+              .fontColor('#667085')
+              .position({ x: 22, y: 52 })
 
-          ForEach(this.simulatorObjectsForActivePage(), (object: NativeSceneObject) => {
-            Row() {
-              Text(this.simulatorObjectLabel(object))
-                .fontSize(10)
-                .fontColor('#FFFFFF')
-                .maxLines(1)
-            }
-            .justifyContent(FlexAlign.Center)
-            .width(this.simulatorObjectWidth(object))
-            .height(this.simulatorObjectHeight(object))
-            .padding({ left: 6, right: 6 })
-            .backgroundColor(object.colorHex)
-            .opacity(object.tool === 'highlighter' ? 0.58 : 0.9)
-            .borderRadius(object.tool === 'text' ? 10 : 16)
-            .position({ x: this.simulatorObjectX(object), y: this.simulatorObjectY(object) })
-          }, (object: NativeSceneObject): string => object.id)
+            ForEach(this.simulatorObjectsForActivePage(), (object: NativeSceneObject) => {
+              Row() {
+                Text(this.simulatorObjectLabel(object))
+                  .fontSize(10)
+                  .fontColor('#FFFFFF')
+                  .maxLines(1)
+              }
+              .justifyContent(FlexAlign.Center)
+              .width(this.simulatorObjectWidth(object))
+              .height(this.simulatorObjectHeight(object))
+              .padding({ left: 6, right: 6 })
+              .backgroundColor(object.colorHex)
+              .opacity(object.tool === 'highlighter' ? 0.58 : 0.9)
+              .borderRadius(object.tool === 'text' ? 10 : 16)
+              .position({ x: this.simulatorObjectX(object), y: this.simulatorObjectY(object) })
+            }, (object: NativeSceneObject): string => object.id)
 
-          if (this.simulatorObjectsForActivePage().length === 0) {
-            Column({ space: 6 }) {
-              Text('Simulator surface is writable')
-                .fontSize(18)
-                .fontWeight(FontWeight.Medium)
-                .fontColor('#162033')
-              Text('Use Save, Undo, Redo, tool switch, color switch, and page actions to inspect synthetic state changes.')
-                .fontSize(12)
-                .lineHeight(18)
-                .fontColor('#667085')
-            }
-            .width(this.simulatorCanvasWidth() - 56)
-            .alignItems(HorizontalAlign.Start)
-            .position({ x: 28, y: 98 })
+          }
+          Row({ space: 10 }) {
+            Text(`objects=${this.simulatorObjectsForActivePage().length}`)
+              .fontSize(11)
+              .fontColor('#475467')
+            Text(`page=${this.activePageIndex + 1}/${this.pageCount()}`)
+              .fontSize(11)
+              .fontColor('#475467')
+            Text(this.simulatorCapabilitySummary())
+              .fontSize(11)
+              .fontColor('#667085')
           }
         }
-        Row({ space: 10 }) {
-          Text(`objects=${this.simulatorObjectsForActivePage().length}`)
-            .fontSize(11)
-            .fontColor('#475467')
-          Text(`page=${this.activePageIndex + 1}/${this.pageCount()}`)
-            .fontSize(11)
-            .fontColor('#475467')
-          Text(this.simulatorCapabilitySummary())
-            .fontSize(11)
-            .fontColor('#667085')
-        }
+        .alignItems(HorizontalAlign.Center)
       }
-      .alignItems(HorizontalAlign.Center)
+      .width('100%')
+      .height('100%')
+      .backgroundColor('#F8FAFC')
     }
-    .width('100%')
-    .height('100%')
-    .backgroundColor('#F8FAFC')
   }
 
   @Builder
@@ -2534,6 +2541,9 @@ struct EditorWorkspace {
             Row({ space: 12 }) {
               Column({ space: 12 }) {
                 Row({ space: 12 }) {
+                  Blank()
+                    .layoutWeight(1)
+                    .hitTestBehavior(HitTestMode.None)
                   this.buildFloatingToolbar()
                   Blank()
                     .layoutWeight(1)
@@ -2543,7 +2553,7 @@ struct EditorWorkspace {
                 .alignItems(VerticalAlign.Top)
                 Stack({ alignContent: Alignment.BottomStart }) {
                   this.buildWritingSurface()
-                  if (!this.showTracePanel) {
+                  if (!this.showTracePanel && !this.shouldUseSimulatorStubUi()) {
                     Row() {
                       this.buildBottomHint()
                       Blank()
