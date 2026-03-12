@@ -235,6 +235,7 @@ struct EditorWorkspace {
   @State private embeddedComposerText: string = '';
   @State private embeddedComposerPageId: string = '';
   @State private embeddedComposerPageIndex: number = -1;
+  @State private embeddedComposerPreviewVersion: number = 0;
 
   aboutToAppear(): void {
     if (this.bootstrapping || this.engineId.length > 0 || this.document !== null || !this.loading) {
@@ -1714,6 +1715,11 @@ struct EditorWorkspace {
     return block.sourceText.trim();
   }
 
+  private embeddedComposerPreviewBlocks(): MarkdownPreviewBlock[] {
+    this.embeddedComposerPreviewVersion;
+    return MarkdownUtils.buildPreviewBlocks(this.embeddedComposerText);
+  }
+
   private embeddedBlockPixelX(pageIndex: number, block: EmbeddedOverlayDraft): number {
     const pageWidth: number = this.renderedWritingPageWidth(pageIndex);
     const blockWidth: number = this.embeddedBlockPixelWidth(pageIndex, block);
@@ -1813,6 +1819,7 @@ struct EditorWorkspace {
     this.embeddedComposerText = '';
     this.embeddedComposerPageId = this.embedSelectionPageId;
     this.embeddedComposerPageIndex = this.activePageIndex;
+    this.embeddedComposerPreviewVersion = 0;
   }
 
   private finishEmbeddedSelection(): void {
@@ -1827,6 +1834,7 @@ struct EditorWorkspace {
     this.embeddedComposerText = '';
     this.embeddedComposerPageId = '';
     this.embeddedComposerPageIndex = -1;
+    this.embeddedComposerPreviewVersion = 0;
     this.clearEmbeddedPlacement();
   }
 
@@ -3386,6 +3394,51 @@ struct EditorWorkspace {
   }
 
   @Builder
+  private buildEmbeddedComposerPreview(): void {
+    Scroll() {
+      Column({ space: 10 }) {
+        ForEach(this.embeddedComposerPreviewBlocks(), (block: MarkdownPreviewBlock, index: number) => {
+          if (block.type === 'heading') {
+            Text(block.text)
+              .fontSize(block.level <= 1 ? 22 : 18)
+              .fontWeight(FontWeight.Bold)
+              .fontColor('#162033')
+              .width('100%')
+          } else if (block.type === 'formula') {
+            Text(block.text)
+              .fontSize(14)
+              .fontColor('#0B57D0')
+              .padding(12)
+              .width('100%')
+              .backgroundColor('#EEF4FF')
+              .borderRadius(14)
+          } else if (block.type === 'code') {
+            Text(block.text)
+              .fontSize(12)
+              .fontColor('#E2E8F0')
+              .padding(12)
+              .width('100%')
+              .backgroundColor('#162033')
+              .borderRadius(14)
+          } else {
+            Text(block.type === 'list' ? `- ${block.text}` : block.text)
+              .fontSize(14)
+              .fontColor('#344054')
+              .width('100%')
+              .lineHeight(22)
+          }
+        }, (block: MarkdownPreviewBlock, index: number): string =>
+          `composer-preview-${this.embeddedComposerPreviewVersion}-${index}-${block.type}-${block.text}`
+        )
+      }
+      .width('100%')
+      .alignItems(HorizontalAlign.Start)
+      .padding({ top: 4, bottom: 8 })
+    }
+    .width('100%')
+  }
+
+  @Builder
   private buildFloatingBackButton(): void {
     Row() {
       Button('< Back')
@@ -3887,6 +3940,7 @@ struct EditorWorkspace {
           .padding(16)
           .onChange((value: string) => {
             this.embeddedComposerText = value;
+            this.embeddedComposerPreviewVersion += 1;
           })
         Column({ space: 8 }) {
           Text('Live preview')
@@ -3894,7 +3948,7 @@ struct EditorWorkspace {
             .fontWeight(FontWeight.Medium)
             .fontColor('#162033')
             .width('100%')
-          this.buildPreviewBlockList(MarkdownUtils.buildPreviewBlocks(this.embeddedComposerText))
+          this.buildEmbeddedComposerPreview()
         }
         .width('100%')
         .layoutWeight(1)
