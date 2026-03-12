@@ -15,6 +15,9 @@ import {
 import {
   DOCUMENT_MODE_LABELS,
   DOCUMENT_TYPE_LABELS,
+  DocumentEmbeddedBlock,
+  DocumentEmbeddedBlockBounds,
+  DocumentEmbeddedBlockKind,
   DocumentMode,
   DocumentPageEntry,
   DocumentRecord,
@@ -82,26 +85,36 @@ interface EditorWorkspaceCopy {
   sourcePlaceholder: string;
 }
 
+type EmbeddedOverlayDraft = DocumentEmbeddedBlock;
+
 const EDITOR_HOME_ROUTE: string = 'pages/Index';
 const BACK_HIT_TARGET_WIDTH: number = 156;
 const BACK_HIT_TARGET_HEIGHT: number = 56;
 const NATIVE_PAGE_METHOD_SET_ACTIVE: string = 'setActivePage';
 const NATIVE_PAGE_METHOD_INSERT: string = 'insertPage';
 const NATIVE_PAGE_METHOD_DELETE: string = 'deletePage';
-const EDITOR_INSPECTOR_WIDTH: number = 336;
-const EDITOR_PAGE_RAIL_WIDTH: number = 214;
-const PAGE_RAIL_THUMBNAIL_WIDTH: number = 132;
-const PAGE_RAIL_THUMBNAIL_HEIGHT: number = 176;
+const EDITOR_INSPECTOR_WIDTH: number = 688;
+const EDITOR_PAGE_RAIL_WIDTH: number = 188;
+const PAGE_RAIL_THUMBNAIL_WIDTH: number = 116;
+const PAGE_RAIL_THUMBNAIL_HEIGHT: number = 156;
 const PAGE_RAIL_MENU_WIDTH: number = 184;
 const PAGE_RAIL_ACTION_BUTTON_SIZE: number = 34;
 const PAGE_RAIL_CARD_RADIUS: number = 18;
 const PAGE_RAIL_PAGE_MENU_BUTTON_SIZE: number = 28;
-const FLOATING_TOOLBAR_WIDTH: number = 612;
-const FLOATING_TOOL_BUTTON_SIZE: number = 44;
+const FLOATING_TOOLBAR_WIDTH: number = 544;
+const FLOATING_TOOL_BUTTON_SIZE: number = 40;
 const FLOATING_TOOLBAR_MORE_BUTTON_SIZE: number = 34;
 const FLOATING_TOOLBAR_COLOR_CHIP_SIZE: number = 18;
 const PAGE_SWIPE_DRAG_LIMIT: number = 132;
 const PAGE_SWIPE_TRIGGER_DISTANCE: number = 84;
+const PAGE_STACK_GAP: number = 44;
+const PAGE_STACK_SIDE_PADDING: number = 72;
+const PAGE_STACK_VERTICAL_PADDING: number = 84;
+const PAGE_STACK_MIN_ZOOM: number = 0.72;
+const PAGE_STACK_MAX_ZOOM: number = 1.95;
+const PAGE_STACK_BOUNDARY_PADDING: number = 52;
+const TOOLBAR_DRAG_BOUNDARY: number = 36;
+const EMBED_SELECTION_MIN_SIZE: number = 32;
 const EDITOR_WORKSPACE_COPY: EditorWorkspaceCopy = {
   back: '返回',
   save: '保存',
@@ -164,6 +177,16 @@ struct EditorWorkspace {
   private debugRefreshTimerId: number = -1;
   private persistTask: Promise<boolean> | null = null;
   private pageSelectionInFlight: boolean = false;
+  private pageViewportInitialized: boolean = false;
+  private toolbarDragOriginX: number = 0;
+  private toolbarDragOriginY: number = 0;
+  private viewportPanOriginX: number = 0;
+  private viewportPanOriginY: number = 0;
+  private viewportPinchOriginScale: number = 1;
+  private embeddedSelectionOriginX: number = 0;
+  private embeddedSelectionOriginY: number = 0;
+  private readonly embeddedOverlaysByPage: Map<string, EmbeddedOverlayDraft[]> = new Map<string, EmbeddedOverlayDraft[]>();
+  private readonly pageBookmarkIds: Set<string> = new Set<string>();
 
   @State private loading: boolean = true;
   @State private errorMessage: string = '';
@@ -192,6 +215,26 @@ struct EditorWorkspace {
   @State private traceActionMessage: string = '';
   @State private surfaceReady: boolean = false;
   @State private saveState: 'idle' | 'saving' | 'saved' | 'failed' = 'idle';
+  @State private writingViewportWidth: number = 0;
+  @State private writingViewportHeight: number = 0;
+  @State private pageStackPanX: number = 0;
+  @State private pageStackPanY: number = 0;
+  @State private pageStackScale: number = 1;
+  @State private floatingToolbarOffsetX: number = 0;
+  @State private floatingToolbarOffsetY: number = 0;
+  @State private overlaysVersion: number = 0;
+  @State private bookmarksVersion: number = 0;
+  @State private embedPlacementArmed: boolean = false;
+  @State private embedSelectionVisible: boolean = false;
+  @State private embedSelectionPageId: string = '';
+  @State private embedSelectionX: number = 0;
+  @State private embedSelectionY: number = 0;
+  @State private embedSelectionWidth: number = 0;
+  @State private embedSelectionHeight: number = 0;
+  @State private showEmbeddedComposer: boolean = false;
+  @State private embeddedComposerText: string = '';
+  @State private embeddedComposerPageId: string = '';
+  @State private embeddedComposerPageIndex: number = -1;
 
   aboutToAppear(): void {
     if (this.bootstrapping || this.engineId.length > 0 || this.document !== null || !this.loading) {
@@ -473,6 +516,7 @@ struct EditorWorkspace {
         this.markdownText = await this.libraryService.getDocumentMarkdown(documentId);
         this.activePageIndex = this.document.previewSnapshot?.pageIndex ?? 0;
       }
+      await this.reloadDocumentEmbeddedBlocks();
 
       const engineConfig: EngineConfig = {
         backend: this.currentBackend,
@@ -903,8 +947,33 @@ struct EditorWorkspace {
     this.pageMarkdownDrafts.set(this.activePageId, sourceMarkdown);
     this.markdownText = sourceMarkdown;
     nextDocument = await this.libraryService.saveDocumentMarkdown(nextDocument.id, sourceMarkdown, this.activePageId, false);
+    const sourceBlocks: DocumentEmbeddedBlock[] = this.pageEmbeddedBlocks(sourcePageId);
+    if (sourceBlocks.length > 0) {
+      const duplicatedBlocks: DocumentEmbeddedBlock[] = sourceBlocks.map((block: DocumentEmbeddedBlock, index: number) => {
+        const createdAt: number = Date.now();
+        const bounds: DocumentEmbeddedBlockBounds = {
+          x: block.bounds.x,
+          y: block.bounds.y,
+          width: block.bounds.width,
+          height: block.bounds.height
+        };
+        const duplicatedBlock: DocumentEmbeddedBlock = {
+          id: `embedded-${createdAt}-${index}`,
+          kind: block.kind,
+          sourceText: block.sourceText,
+          bounds,
+          renderMeta: block.renderMeta,
+          createdAt,
+          updatedAt: createdAt
+        };
+        return duplicatedBlock;
+      });
+      nextDocument = await this.libraryService.replacePageEmbeddedBlocks(nextDocument.id, this.activePageId, duplicatedBlocks, false);
+    }
     this.applyDocumentActivePage(nextDocument, nextDocument.activePageId);
     await this.loadPageMarkdown(this.activePageId);
+    await this.reloadDocumentEmbeddedBlocks();
+    this.syncViewportToActivePage(true);
     if (!this.notifyNativeActivePage(this.activePageId)) {
       await this.primeBlankPagedRuntime(this.activePageId);
       await this.reopenNativeDocumentForCurrentState();
@@ -921,7 +990,9 @@ struct EditorWorkspace {
     this.pageMarkdownDrafts.set(this.activePageId, '');
     this.dirtyPageIds.add(this.activePageId);
     await this.libraryService.saveDocumentMarkdown(this.document.id, '', this.activePageId, false);
+    await this.libraryService.clearPageEmbeddedBlocks(this.document.id, this.activePageId, false);
     this.dirtyPageIds.delete(this.activePageId);
+    await this.reloadDocumentEmbeddedBlocks();
     this.saveState = 'idle';
     this.traceActionMessage = 'page-cleared';
     this.closeRailMenus();
@@ -1293,6 +1364,539 @@ struct EditorWorkspace {
     return indexes;
   }
 
+  private pageContentAspectRatio(index: number): number {
+    const width: number = Math.max(1, this.pageSceneWidthAt(index));
+    const height: number = Math.max(1, this.pageSceneHeightAt(index));
+    return height / width;
+  }
+
+  private baseWritingPageWidth(): number {
+    if (this.writingViewportWidth <= 0) {
+      return 620;
+    }
+    return clampToRange(this.writingViewportWidth - (PAGE_STACK_SIDE_PADDING * 2), 280, 860);
+  }
+
+  private renderedWritingPageWidth(index: number): number {
+    return Math.max(240, this.baseWritingPageWidth() * this.pageStackScale);
+  }
+
+  private renderedWritingPageHeight(index: number): number {
+    return Math.max(320, this.renderedWritingPageWidth(index) * this.pageContentAspectRatio(index));
+  }
+
+  private pageStackGap(): number {
+    return PAGE_STACK_GAP * this.pageStackScale;
+  }
+
+  private pageTopOffsetAt(index: number): number {
+    let top: number = PAGE_STACK_VERTICAL_PADDING;
+    for (let cursor = 0; cursor < index; cursor += 1) {
+      top += this.renderedWritingPageHeight(cursor) + this.pageStackGap();
+    }
+    return top;
+  }
+
+  private totalPageStackHeight(): number {
+    const count: number = this.pageCount();
+    if (count <= 0) {
+      return this.writingViewportHeight;
+    }
+    let totalHeight: number = PAGE_STACK_VERTICAL_PADDING * 2;
+    for (let index = 0; index < count; index += 1) {
+      totalHeight += this.renderedWritingPageHeight(index);
+      if (index < count - 1) {
+        totalHeight += this.pageStackGap();
+      }
+    }
+    return totalHeight;
+  }
+
+  private widestRenderedPageWidth(): number {
+    let width: number = this.baseWritingPageWidth() * this.pageStackScale;
+    for (let index = 0; index < this.pageCount(); index += 1) {
+      width = Math.max(width, this.renderedWritingPageWidth(index));
+    }
+    return width;
+  }
+
+  private clampedPageStackPanX(value: number): number {
+    if (this.writingViewportWidth <= 0) {
+      return value;
+    }
+    const contentWidth: number = this.widestRenderedPageWidth();
+    const overflow: number = Math.max(0, (contentWidth - this.writingViewportWidth) / 2);
+    return clampToRange(value, -(overflow + PAGE_STACK_BOUNDARY_PADDING), overflow + PAGE_STACK_BOUNDARY_PADDING);
+  }
+
+  private clampedPageStackPanY(value: number): number {
+    if (this.writingViewportHeight <= 0) {
+      return value;
+    }
+    const contentHeight: number = this.totalPageStackHeight();
+    if (contentHeight + (PAGE_STACK_BOUNDARY_PADDING * 2) <= this.writingViewportHeight) {
+      return (this.writingViewportHeight - contentHeight) / 2;
+    }
+    const minPanY: number = this.writingViewportHeight - contentHeight - PAGE_STACK_BOUNDARY_PADDING;
+    const maxPanY: number = PAGE_STACK_BOUNDARY_PADDING;
+    return clampToRange(value, minPanY, maxPanY);
+  }
+
+  private pageCardOffsetX(index: number): number {
+    return ((this.writingViewportWidth - this.renderedWritingPageWidth(index)) / 2) + this.pageStackPanX;
+  }
+
+  private pageCardOffsetY(index: number): number {
+    return this.pageTopOffsetAt(index) + this.pageStackPanY;
+  }
+
+  private pageFocusTargetPanY(index: number): number {
+    return (this.writingViewportHeight / 2) - (this.pageTopOffsetAt(index) + (this.renderedWritingPageHeight(index) / 2));
+  }
+
+  private nearestPageIndexToViewportCenter(): number {
+    let nearestIndex: number = this.activePageIndex;
+    let nearestDistance: number = Number.MAX_VALUE;
+    const viewportCenterY: number = this.writingViewportHeight / 2;
+    this.pageIndexes().forEach((pageIndex: number) => {
+      const pageCenterY: number = this.pageTopOffsetAt(pageIndex) +
+        (this.renderedWritingPageHeight(pageIndex) / 2) +
+        this.pageStackPanY;
+      const distance: number = Math.abs(pageCenterY - viewportCenterY);
+      if (distance < nearestDistance) {
+        nearestDistance = distance;
+        nearestIndex = pageIndex;
+      }
+    });
+    return nearestIndex;
+  }
+
+  private async settleViewportToNearestPage(): Promise<void> {
+    const clampedX: number = this.clampedPageStackPanX(this.pageStackPanX);
+    const clampedY: number = this.clampedPageStackPanY(this.pageStackPanY);
+    if (clampedX !== this.pageStackPanX) {
+      this.pageStackPanX = clampedX;
+    }
+    if (clampedY !== this.pageStackPanY) {
+      this.pageStackPanY = clampedY;
+    }
+    const nearestIndex: number = this.nearestPageIndexToViewportCenter();
+    if (nearestIndex !== this.activePageIndex) {
+      await this.selectPage(nearestIndex);
+    }
+  }
+
+  private async focusPageInViewport(index: number): Promise<void> {
+    await this.selectPage(index);
+    this.pageStackPanY = this.clampedPageStackPanY(this.pageFocusTargetPanY(index));
+    this.pageStackPanX = this.clampedPageStackPanX(this.pageStackPanX);
+  }
+
+  private syncViewportToActivePage(forceFocus: boolean = false): void {
+    if (this.writingViewportWidth <= 0 || this.writingViewportHeight <= 0) {
+      return;
+    }
+    if (!this.pageViewportInitialized || forceFocus) {
+      this.pageStackPanX = this.clampedPageStackPanX(0);
+      this.pageStackPanY = this.clampedPageStackPanY(this.pageFocusTargetPanY(this.activePageIndex));
+      this.pageViewportInitialized = true;
+      return;
+    }
+    this.pageStackPanX = this.clampedPageStackPanX(this.pageStackPanX);
+    this.pageStackPanY = this.clampedPageStackPanY(this.pageStackPanY);
+  }
+
+  private updateWritingViewportSize(newValue: Object): void {
+    const width: number = parseAreaValue((newValue as Record<string, Object>).width);
+    const height: number = parseAreaValue((newValue as Record<string, Object>).height);
+    if (width <= 0 || height <= 0) {
+      return;
+    }
+    this.writingViewportWidth = width;
+    this.writingViewportHeight = height;
+    this.syncViewportToActivePage();
+    this.floatingToolbarOffsetX = this.clampedFloatingToolbarX(this.floatingToolbarOffsetX);
+    this.floatingToolbarOffsetY = this.clampedFloatingToolbarY(this.floatingToolbarOffsetY);
+  }
+
+  private toolUsesColorPalette(): boolean {
+    return this.currentTool === ToolType.PEN ||
+      this.currentTool === ToolType.PENCIL ||
+      this.currentTool === ToolType.HIGHLIGHTER;
+  }
+
+  private toolUsesContextActions(): boolean {
+    return this.currentTool === ToolType.TEXT || this.currentTool === ToolType.LASSO;
+  }
+
+  private shouldShowSecondaryToolbar(): boolean {
+    return this.toolUsesColorPalette() || this.toolUsesContextActions();
+  }
+
+  private compactToolGlyph(tool: ToolType): string {
+    switch (tool) {
+      case ToolType.PEN:
+        return 'P';
+      case ToolType.PENCIL:
+        return 'Pc';
+      case ToolType.HIGHLIGHTER:
+        return 'Hi';
+      case ToolType.ERASER:
+        return 'Er';
+      case ToolType.LASSO:
+        return 'La';
+      case ToolType.TEXT:
+        return 'Tx';
+      case ToolType.HAND:
+        return 'Hd';
+      default:
+        return tool;
+    }
+  }
+
+  private canSingleFingerPanViewport(): boolean {
+    return this.currentTool === ToolType.HAND &&
+      !this.embedPlacementArmed &&
+      !this.showEmbeddedComposer &&
+      !this.showInspectorDrawer;
+  }
+
+  private canTwoFingerPanViewport(): boolean {
+    return !this.embedPlacementArmed && !this.showEmbeddedComposer && !this.showInspectorDrawer;
+  }
+
+  private handleViewportPanStart(): void {
+    this.viewportPanOriginX = this.pageStackPanX;
+    this.viewportPanOriginY = this.pageStackPanY;
+  }
+
+  private updateViewportPan(event: Object, fingers: number): void {
+    const canPan: boolean = fingers === 1 ? this.canSingleFingerPanViewport() : this.canTwoFingerPanViewport();
+    if (!canPan) {
+      return;
+    }
+    const nextX: number = this.viewportPanOriginX + this.readGestureNumber(event, 'offsetX', 0);
+    const nextY: number = this.viewportPanOriginY + this.readGestureNumber(event, 'offsetY', 0);
+    this.pageStackPanX = this.clampedPageStackPanX(nextX);
+    this.pageStackPanY = this.clampedPageStackPanY(nextY);
+  }
+
+  private async finishViewportPan(fingers: number): Promise<void> {
+    const canPan: boolean = fingers === 1 ? this.canSingleFingerPanViewport() : this.canTwoFingerPanViewport();
+    if (!canPan) {
+      return;
+    }
+    await this.settleViewportToNearestPage();
+  }
+
+  private handleViewportPinchStart(): void {
+    this.viewportPinchOriginScale = this.pageStackScale;
+  }
+
+  private updateViewportPinch(event: Object): void {
+    if (!this.canTwoFingerPanViewport()) {
+      return;
+    }
+    const scaleDelta: number = this.readGestureNumber(event, 'scale', 1);
+    const nextScale: number = clampToRange(
+      this.viewportPinchOriginScale * (Number.isNaN(scaleDelta) ? 1 : scaleDelta),
+      PAGE_STACK_MIN_ZOOM,
+      PAGE_STACK_MAX_ZOOM
+    );
+    this.pageStackScale = nextScale;
+    this.pageStackPanX = this.clampedPageStackPanX(this.pageStackPanX);
+    this.pageStackPanY = this.clampedPageStackPanY(this.pageStackPanY);
+  }
+
+  private async finishViewportPinch(): Promise<void> {
+    if (!this.canTwoFingerPanViewport()) {
+      return;
+    }
+    await this.settleViewportToNearestPage();
+  }
+
+  private clampedFloatingToolbarX(value: number): number {
+    if (this.writingViewportWidth <= 0) {
+      return value;
+    }
+    const overflow: number = Math.max(0, (this.writingViewportWidth - FLOATING_TOOLBAR_WIDTH) / 2) - TOOLBAR_DRAG_BOUNDARY;
+    if (overflow <= 0) {
+      return 0;
+    }
+    return clampToRange(value, -overflow, overflow);
+  }
+
+  private clampedFloatingToolbarY(value: number): number {
+    if (this.writingViewportHeight <= 0) {
+      return value;
+    }
+    const maxOffset: number = Math.max(0, (this.writingViewportHeight * 0.28));
+    return clampToRange(value, -8, maxOffset);
+  }
+
+  private handleToolbarDragStart(): void {
+    this.toolbarDragOriginX = this.floatingToolbarOffsetX;
+    this.toolbarDragOriginY = this.floatingToolbarOffsetY;
+  }
+
+  private updateToolbarDrag(event: Object): void {
+    const nextX: number = this.toolbarDragOriginX + this.readGestureNumber(event, 'offsetX', 0);
+    const nextY: number = this.toolbarDragOriginY + this.readGestureNumber(event, 'offsetY', 0);
+    this.floatingToolbarOffsetX = this.clampedFloatingToolbarX(nextX);
+    this.floatingToolbarOffsetY = this.clampedFloatingToolbarY(nextY);
+  }
+
+  private readGestureNumber(event: Object | undefined, key: string, fallback: number = 0): number {
+    const eventMap: Record<string, Object> = (event ?? {}) as Record<string, Object>;
+    const direct: number = Number.parseFloat(`${eventMap[key] ?? ''}`);
+    if (!Number.isNaN(direct)) {
+      return direct;
+    }
+    const fingerList: Object | undefined = eventMap['fingerList'];
+    if (Array.isArray(fingerList) && fingerList.length > 0) {
+      const firstFinger: Record<string, Object> = fingerList[0] as Record<string, Object>;
+      const nested: number = Number.parseFloat(`${firstFinger[key] ?? ''}`);
+      if (!Number.isNaN(nested)) {
+        return nested;
+      }
+    }
+    return fallback;
+  }
+
+  private async reloadDocumentEmbeddedBlocks(): Promise<void> {
+    if (!this.document || !this.libraryService) {
+      return;
+    }
+    const blocksByPageId: Record<string, DocumentEmbeddedBlock[]> =
+      await this.libraryService.getDocumentEmbeddedBlocks(this.document.id);
+    this.embeddedOverlaysByPage.clear();
+    Object.keys(blocksByPageId).forEach((pageId: string) => {
+      this.embeddedOverlaysByPage.set(pageId, [...blocksByPageId[pageId]]);
+    });
+    this.overlaysVersion += 1;
+  }
+
+  private pageEmbeddedBlocks(pageId: string): EmbeddedOverlayDraft[] {
+    this.overlaysVersion;
+    return [...(this.embeddedOverlaysByPage.get(pageId) ?? [])];
+  }
+
+  private pageEmbeddedBlocksAt(index: number): EmbeddedOverlayDraft[] {
+    return this.pageEmbeddedBlocks(this.pageKeyAt(index));
+  }
+
+  private detectEmbeddedBlockKind(sourceText: string): DocumentEmbeddedBlockKind {
+    const hasMath: boolean = sourceText.includes('$$') || sourceText.includes('\\(') || sourceText.includes('\\[') ||
+      /\$[^$]+\$/.test(sourceText);
+    const hasMarkdown: boolean = /^#{1,6}\s|\*\*|__|^- |\d+\. |```|>\s/m.test(sourceText);
+    if (hasMarkdown && hasMath) {
+      return 'mixed';
+    }
+    if (hasMath) {
+      return 'latex';
+    }
+    return 'markdown';
+  }
+
+  private embeddedBlockPlainText(block: EmbeddedOverlayDraft): string {
+    const fromMeta: string = block.renderMeta?.plainText?.trim() ?? '';
+    if (fromMeta.length > 0) {
+      return fromMeta;
+    }
+    const previewText: string = MarkdownUtils.buildPreviewBlocks(block.sourceText)
+      .map((item: MarkdownPreviewBlock) => item.text.trim())
+      .filter((item: string) => item.length > 0)
+      .join(' ')
+      .trim();
+    if (previewText.length > 0) {
+      return previewText;
+    }
+    return block.sourceText.trim();
+  }
+
+  private embeddedBlockPixelX(pageIndex: number, block: EmbeddedOverlayDraft): number {
+    const pageWidth: number = this.renderedWritingPageWidth(pageIndex);
+    const blockWidth: number = this.embeddedBlockPixelWidth(pageIndex, block);
+    return clampToRange(pageWidth * block.bounds.x, 0, Math.max(0, pageWidth - blockWidth - 12));
+  }
+
+  private embeddedBlockPixelY(pageIndex: number, block: EmbeddedOverlayDraft): number {
+    const pageHeight: number = this.renderedWritingPageHeight(pageIndex);
+    const blockHeight: number = this.embeddedBlockPixelHeight(pageIndex, block);
+    return clampToRange(pageHeight * block.bounds.y, 0, Math.max(0, pageHeight - blockHeight - 12));
+  }
+
+  private embeddedBlockPixelWidth(pageIndex: number, block: EmbeddedOverlayDraft): number {
+    return clampToRange(this.renderedWritingPageWidth(pageIndex) * block.bounds.width, 120, this.renderedWritingPageWidth(pageIndex) - 18);
+  }
+
+  private embeddedBlockPixelHeight(pageIndex: number, block: EmbeddedOverlayDraft): number {
+    return clampToRange(this.renderedWritingPageHeight(pageIndex) * block.bounds.height, 68, this.renderedWritingPageHeight(pageIndex) - 18);
+  }
+
+  private isPageBookmarked(pageIndex: number): boolean {
+    return Boolean(this.pageEntryAt(pageIndex)?.bookmarked);
+  }
+
+  private async toggleBookmarkForPage(pageIndex: number): Promise<void> {
+    const pageId: string = this.pageKeyAt(pageIndex);
+    if (!this.document || !this.libraryService || pageId.length === 0) {
+      return;
+    }
+    const nextBookmarked: boolean = !this.isPageBookmarked(pageIndex);
+    const nextDocument: DocumentRecord = await this.libraryService.togglePageBookmark(this.document.id, pageId, nextBookmarked);
+    if (this.supportsPagedDocumentRuntime(nextDocument)) {
+      this.applyDocumentActivePage(nextDocument, this.activePageId.length > 0 ? this.activePageId : nextDocument.activePageId);
+    } else {
+      this.document = nextDocument;
+    }
+    this.bookmarksVersion += 1;
+    this.traceActionMessage = nextBookmarked ? 'page-bookmarked' : 'page-unbookmarked';
+  }
+
+  private armEmbeddedPlacement(): void {
+    if (!this.toolUsesContextActions()) {
+      return;
+    }
+    this.embedPlacementArmed = true;
+    this.embedSelectionVisible = false;
+    this.traceActionMessage = 'drag-on-active-page-to-place-embedded-block';
+  }
+
+  private clearEmbeddedPlacement(resetArm: boolean = true): void {
+    this.embedSelectionVisible = false;
+    this.embedSelectionPageId = '';
+    this.embedSelectionX = 0;
+    this.embedSelectionY = 0;
+    this.embedSelectionWidth = 0;
+    this.embedSelectionHeight = 0;
+    if (resetArm) {
+      this.embedPlacementArmed = false;
+    }
+  }
+
+  private beginEmbeddedSelection(event: Object, pageIndex: number): void {
+    if (!this.embedPlacementArmed || !this.isSelectedPageIndex(pageIndex)) {
+      return;
+    }
+    this.embedSelectionPageId = this.pageKeyAt(pageIndex);
+    this.embeddedSelectionOriginX = this.readGestureNumber(event, 'localX', 0);
+    this.embeddedSelectionOriginY = this.readGestureNumber(event, 'localY', 0);
+    this.embedSelectionX = this.embeddedSelectionOriginX;
+    this.embedSelectionY = this.embeddedSelectionOriginY;
+    this.embedSelectionWidth = 0;
+    this.embedSelectionHeight = 0;
+    this.embedSelectionVisible = true;
+  }
+
+  private updateEmbeddedSelection(event: Object): void {
+    if (!this.embedSelectionVisible) {
+      return;
+    }
+    const currentX: number = this.readGestureNumber(event, 'localX', this.embeddedSelectionOriginX);
+    const currentY: number = this.readGestureNumber(event, 'localY', this.embeddedSelectionOriginY);
+    this.embedSelectionX = Math.min(this.embeddedSelectionOriginX, currentX);
+    this.embedSelectionY = Math.min(this.embeddedSelectionOriginY, currentY);
+    this.embedSelectionWidth = Math.abs(currentX - this.embeddedSelectionOriginX);
+    this.embedSelectionHeight = Math.abs(currentY - this.embeddedSelectionOriginY);
+  }
+
+  private openEmbeddedComposer(): void {
+    if (!this.embedSelectionVisible || this.embedSelectionPageId.length === 0) {
+      return;
+    }
+    if (this.embedSelectionWidth < EMBED_SELECTION_MIN_SIZE || this.embedSelectionHeight < EMBED_SELECTION_MIN_SIZE) {
+      this.clearEmbeddedPlacement(false);
+      return;
+    }
+    this.showEmbeddedComposer = true;
+    this.embeddedComposerText = '';
+    this.embeddedComposerPageId = this.embedSelectionPageId;
+    this.embeddedComposerPageIndex = this.activePageIndex;
+  }
+
+  private finishEmbeddedSelection(): void {
+    if (!this.embedSelectionVisible) {
+      return;
+    }
+    this.openEmbeddedComposer();
+  }
+
+  private cancelEmbeddedComposer(): void {
+    this.showEmbeddedComposer = false;
+    this.embeddedComposerText = '';
+    this.embeddedComposerPageId = '';
+    this.embeddedComposerPageIndex = -1;
+    this.clearEmbeddedPlacement();
+  }
+
+  private embeddedSelectionBounds(): DocumentEmbeddedBlockBounds | undefined {
+    if (this.embeddedComposerPageIndex < 0) {
+      return undefined;
+    }
+    const pageWidth: number = this.renderedWritingPageWidth(this.embeddedComposerPageIndex);
+    const pageHeight: number = this.renderedWritingPageHeight(this.embeddedComposerPageIndex);
+    if (pageWidth <= 0 || pageHeight <= 0) {
+      return undefined;
+    }
+    return {
+      x: clampToRange(this.embedSelectionX / pageWidth, 0, 0.98),
+      y: clampToRange(this.embedSelectionY / pageHeight, 0, 0.98),
+      width: clampToRange(this.embedSelectionWidth / pageWidth, 0.04, 0.98),
+      height: clampToRange(this.embedSelectionHeight / pageHeight, 0.04, 0.98)
+    };
+  }
+
+  private async commitEmbeddedComposer(): Promise<void> {
+    if (!this.document || !this.libraryService || this.embeddedComposerPageId.length === 0) {
+      this.cancelEmbeddedComposer();
+      return;
+    }
+    const sourceText: string = this.embeddedComposerText.trim();
+    const bounds: DocumentEmbeddedBlockBounds | undefined = this.embeddedSelectionBounds();
+    if (sourceText.length === 0 || bounds === undefined) {
+      return;
+    }
+    const previewBlocks: MarkdownPreviewBlock[] = MarkdownUtils.buildPreviewBlocks(sourceText);
+    const plainText: string = previewBlocks
+      .map((block: MarkdownPreviewBlock) => block.text.trim())
+      .filter((text: string) => text.length > 0)
+      .join(' ')
+      .trim();
+    const now: number = Date.now();
+    const block: DocumentEmbeddedBlock = {
+      id: `embedded-${now}`,
+      kind: this.detectEmbeddedBlockKind(sourceText),
+      sourceText,
+      bounds,
+      renderMeta: {
+        plainText,
+        estimatedHeight: bounds.height,
+        measuredHeight: bounds.height,
+        version: 1
+      },
+      createdAt: now,
+      updatedAt: now
+    };
+    const nextDocument: DocumentRecord = await this.libraryService.upsertPageEmbeddedBlock(
+      this.document.id,
+      this.embeddedComposerPageId,
+      block,
+      true
+    );
+    if (this.supportsPagedDocumentRuntime(nextDocument)) {
+      this.applyDocumentActivePage(
+        nextDocument,
+        this.activePageId.length > 0 ? this.activePageId : nextDocument.activePageId
+      );
+    } else {
+      this.document = nextDocument;
+    }
+    await this.reloadDocumentEmbeddedBlocks();
+    this.traceActionMessage = 'embedded-block-saved';
+    this.cancelEmbeddedComposer();
+  }
+
   private async selectPage(index: number): Promise<void> {
     if (index < 0 || index >= this.pageCount() || this.pageSelectionInFlight) {
       return;
@@ -1348,6 +1952,8 @@ struct EditorWorkspace {
     const insertedPage: DocumentPageEntry | undefined = nextDocument.pages.find((page) => page.id === nextDocument.activePageId);
     this.applyDocumentActivePage(nextDocument, nextDocument.activePageId);
     await this.loadPageMarkdown(this.activePageId);
+    await this.reloadDocumentEmbeddedBlocks();
+    this.syncViewportToActivePage(true);
     const inserted: boolean = insertedPage !== undefined ? this.notifyNativeInsertPage(insertedPage) : false;
     const activated: boolean = inserted && this.notifyNativeActivePage(this.activePageId);
     if (!activated) {
@@ -1369,6 +1975,8 @@ struct EditorWorkspace {
     this.dirtyPageIds.delete(deletedPageId);
     this.applyDocumentActivePage(nextDocument, nextDocument.activePageId);
     await this.loadPageMarkdown(this.activePageId);
+    await this.reloadDocumentEmbeddedBlocks();
+    this.syncViewportToActivePage(true);
     const deleted: boolean = this.notifyNativeDeletePage(deletedPageId);
     const activated: boolean = deleted && this.notifyNativeActivePage(this.activePageId);
     if (!activated) {
@@ -1436,12 +2044,18 @@ struct EditorWorkspace {
     if (this.pageEntryAt(index)?.pageKind === 'pdf' || this.pageEntryAt(index)?.pageKind === 'pdf-fragment') {
       return [];
     }
+    const normalizedBlocks: MarkdownPreviewBlock[] = [];
     const markdownText: string = this.pageMarkdownTextAt(index).trim();
-    if (markdownText.length === 0) {
+    const embeddedText: string = this.pageEmbeddedBlocksAt(index)
+      .map((block: DocumentEmbeddedBlock) => block.sourceText.trim())
+      .filter((text: string) => text.length > 0)
+      .join('\n\n')
+      .trim();
+    const previewSourceText: string = markdownText.length > 0 ? markdownText : embeddedText;
+    if (previewSourceText.length === 0) {
       return [];
     }
-    const normalizedBlocks: MarkdownPreviewBlock[] = [];
-    MarkdownUtils.buildPreviewBlocks(markdownText).forEach((block: MarkdownPreviewBlock) => {
+    MarkdownUtils.buildPreviewBlocks(previewSourceText).forEach((block: MarkdownPreviewBlock) => {
       const normalizedText: string = block.text.replace(/\s+/g, ' ').trim();
       if (normalizedText.length === 0 || normalizedText === 'No text content yet.') {
         return;
@@ -2722,6 +3336,793 @@ struct EditorWorkspace {
     .borderRadius(22)
   }
 
+  @Builder
+  private buildPreviewBlockList(blocks: MarkdownPreviewBlock[]): void {
+    Scroll() {
+      Column({ space: 10 }) {
+        if (blocks.length === 0) {
+          Text('No preview content yet.')
+            .fontSize(13)
+            .fontColor('#667085')
+        } else {
+          ForEach(blocks, (block: MarkdownPreviewBlock, index: number) => {
+            if (block.type === 'heading') {
+              Text(block.text)
+                .fontSize(block.level <= 1 ? 22 : 18)
+                .fontWeight(FontWeight.Bold)
+                .fontColor('#162033')
+                .width('100%')
+            } else if (block.type === 'formula') {
+              Text(block.text)
+                .fontSize(14)
+                .fontColor('#0B57D0')
+                .padding(12)
+                .width('100%')
+                .backgroundColor('#EEF4FF')
+                .borderRadius(14)
+            } else if (block.type === 'code') {
+              Text(block.text)
+                .fontSize(12)
+                .fontColor('#E2E8F0')
+                .padding(12)
+                .width('100%')
+                .backgroundColor('#162033')
+                .borderRadius(14)
+            } else {
+              Text(block.type === 'list' ? `- ${block.text}` : block.text)
+                .fontSize(14)
+                .fontColor('#344054')
+                .width('100%')
+                .lineHeight(22)
+            }
+          }, (_: MarkdownPreviewBlock, index: number): string => `preview-${index}`)
+        }
+      }
+      .width('100%')
+      .alignItems(HorizontalAlign.Start)
+      .padding({ top: 4, bottom: 8 })
+    }
+    .width('100%')
+  }
+
+  @Builder
+  private buildFloatingBackButton(): void {
+    Row() {
+      Button('< Back')
+        .height(42)
+        .padding({ left: 14, right: 14 })
+        .backgroundColor('#FFFFFF')
+        .fontColor('#162033')
+        .fontSize(13)
+        .border({ width: 1, color: '#D8E0EA' })
+        .borderRadius(16)
+        .onClick(() => {
+          this.goBack();
+        })
+    }
+    .position({ x: 18, y: 18 })
+  }
+
+  @Builder
+  private buildToolbarPrimaryRow(): void {
+    Row({ space: 6 }) {
+      Row({ space: 3 }) {
+        Text('::')
+          .fontSize(13)
+          .fontColor('#667085')
+        Text('Drag')
+          .fontSize(11)
+          .fontColor('#667085')
+      }
+      .height(FLOATING_TOOL_BUTTON_SIZE)
+      .padding({ left: 10, right: 10 })
+      .backgroundColor('#EEF2F6')
+      .borderRadius(12)
+      .gesture(
+        PanGesture({ fingers: 1, distance: 0 })
+          .onActionStart(() => {
+            this.handleToolbarDragStart();
+          })
+          .onActionUpdate((event) => {
+            this.updateToolbarDrag(event as Object);
+          })
+      )
+      ForEach([
+        ToolType.PEN,
+        ToolType.PENCIL,
+        ToolType.ERASER,
+        ToolType.TEXT,
+        ToolType.LASSO,
+        ToolType.HIGHLIGHTER,
+        ToolType.HAND
+      ], (tool: ToolType) => {
+        Button(this.compactToolGlyph(tool))
+          .width(FLOATING_TOOL_BUTTON_SIZE)
+          .height(FLOATING_TOOL_BUTTON_SIZE)
+          .backgroundColor(this.currentTool === tool ? '#16324F' : '#FFFFFF')
+          .fontColor(this.currentTool === tool ? '#FFFFFF' : '#344054')
+          .fontSize(tool === ToolType.TEXT ? 12 : 11)
+          .fontWeight(FontWeight.Medium)
+          .border({ width: 1, color: this.currentTool === tool ? '#16324F' : '#D8E0EA' })
+          .borderRadius(14)
+          .onClick(() => {
+            this.setTool(tool);
+            this.embedPlacementArmed = false;
+          })
+      }, (tool: ToolType): string => `toolbar-${tool}`)
+      Blank()
+        .layoutWeight(1)
+      Button(this.saveButtonLabel())
+        .height(FLOATING_TOOL_BUTTON_SIZE)
+        .padding({ left: 12, right: 12 })
+        .enabled(this.saveState !== 'saving')
+        .backgroundColor(this.saveState === 'saving' ? '#98A2B3' : '#0F766E')
+        .fontColor('#FFFFFF')
+        .fontSize(12)
+        .borderRadius(14)
+        .onClick(async () => {
+          await this.saveDocument();
+        })
+    }
+    .width('100%')
+  }
+
+  @Builder
+  private buildToolbarSecondaryRow(): void {
+    if (this.toolUsesColorPalette()) {
+      Row({ space: 10 }) {
+        Text('Color')
+          .fontSize(11)
+          .fontColor('#667085')
+        ForEach(PALETTE_COLORS, (color: string) => {
+          Blank()
+            .width(FLOATING_TOOLBAR_COLOR_CHIP_SIZE)
+            .height(FLOATING_TOOLBAR_COLOR_CHIP_SIZE)
+            .backgroundColor(color)
+            .border({
+              width: this.currentColor === color ? 3 : 1,
+              color: this.currentColor === color ? '#16324F' : '#D0D5DD'
+            })
+            .borderRadius(999)
+            .onClick(() => {
+              this.currentColor = color;
+              if (this.engineId.length > 0) {
+                this.nativeEngine.setBrushColor(this.engineId, color);
+                this.refreshDebugState();
+              }
+            })
+        }, (color: string): string => `toolbar-color-${color}`)
+      }
+      .width('100%')
+    } else if (this.toolUsesContextActions()) {
+      Row({ space: 8 }) {
+        Button(this.embedPlacementArmed ? 'Cancel placement' : 'Insert Markdown / LaTeX')
+          .height(34)
+          .padding({ left: 12, right: 12 })
+          .backgroundColor(this.embedPlacementArmed ? '#FEE4E2' : '#162033')
+          .fontColor(this.embedPlacementArmed ? '#B42318' : '#FFFFFF')
+          .fontSize(12)
+          .borderRadius(12)
+          .onClick(() => {
+            if (this.embedPlacementArmed) {
+              this.clearEmbeddedPlacement();
+            } else {
+              this.armEmbeddedPlacement();
+            }
+          })
+        Button('Preview')
+          .height(34)
+          .padding({ left: 12, right: 12 })
+          .backgroundColor('#FFFFFF')
+          .fontColor('#162033')
+          .fontSize(12)
+          .border({ width: 1, color: '#D8E0EA' })
+          .borderRadius(12)
+          .onClick(() => {
+            this.previewMode = 'preview';
+            this.showInspectorDrawer = true;
+          })
+        Button('Markdown')
+          .height(34)
+          .padding({ left: 12, right: 12 })
+          .backgroundColor('#FFFFFF')
+          .fontColor('#162033')
+          .fontSize(12)
+          .border({ width: 1, color: '#D8E0EA' })
+          .borderRadius(12)
+          .onClick(() => {
+            this.previewMode = 'source';
+            this.showInspectorDrawer = true;
+          })
+        Blank()
+          .layoutWeight(1)
+        Text(this.currentTool === ToolType.TEXT ? 'Drag on the active page to place a text block.' : 'Lasso flow can insert mixed Markdown + LaTeX blocks.')
+          .fontSize(11)
+          .fontColor('#667085')
+          .maxLines(2)
+      }
+      .width('100%')
+    }
+  }
+
+  @Builder
+  private buildFloatingToolbarChrome(): void {
+    Column({ space: 8 }) {
+      this.buildToolbarPrimaryRow()
+      if (this.shouldShowSecondaryToolbar()) {
+        this.buildToolbarSecondaryRow()
+      }
+    }
+    .width(FLOATING_TOOLBAR_WIDTH)
+    .padding(12)
+    .backgroundColor('#F8FAFC')
+    .border({ width: 1, color: '#D8E0EA' })
+    .borderRadius(20)
+    .position({
+      x: Math.max(16, ((this.writingViewportWidth - FLOATING_TOOLBAR_WIDTH) / 2) + this.floatingToolbarOffsetX),
+      y: 18 + this.floatingToolbarOffsetY
+    })
+  }
+
+  @Builder
+  private buildPageEmbeddedOverlayLayer(pageIndex: number): void {
+    ForEach(this.pageEmbeddedBlocksAt(pageIndex), (block: EmbeddedOverlayDraft) => {
+      Column({ space: 6 }) {
+        Text(block.kind.toUpperCase())
+          .fontSize(10)
+          .fontWeight(FontWeight.Medium)
+          .fontColor('#0F172A')
+        Text(this.embeddedBlockPlainText(block))
+          .fontSize(12)
+          .fontColor('#344054')
+          .lineHeight(18)
+          .maxLines(4)
+          .textOverflow({ overflow: TextOverflow.Ellipsis })
+      }
+      .alignItems(HorizontalAlign.Start)
+      .width(this.embeddedBlockPixelWidth(pageIndex, block))
+      .height(this.embeddedBlockPixelHeight(pageIndex, block))
+      .padding(12)
+      .backgroundColor('#FFFCF3')
+      .border({ width: 1, color: '#E9D7A5' })
+      .borderRadius(16)
+      .opacity(0.96)
+      .position({
+        x: this.embeddedBlockPixelX(pageIndex, block),
+        y: this.embeddedBlockPixelY(pageIndex, block)
+      })
+    }, (block: EmbeddedOverlayDraft): string => `embedded-${pageIndex}-${block.id}`)
+  }
+
+  @Builder
+  private buildEmbeddedSelectionOverlay(pageIndex: number): void {
+    if (this.embedPlacementArmed && this.isSelectedPageIndex(pageIndex)) {
+      Stack({ alignContent: Alignment.TopStart }) {
+        Row()
+          .width('100%')
+          .height('100%')
+          .backgroundColor('#01000000')
+          .gesture(
+            PanGesture({ fingers: 1, distance: 0 })
+              .onActionStart((event) => {
+                this.beginEmbeddedSelection(event as Object, pageIndex);
+              })
+              .onActionUpdate((event) => {
+                this.updateEmbeddedSelection(event as Object);
+              })
+              .onActionEnd(() => {
+                this.finishEmbeddedSelection();
+              })
+          )
+        if (this.embedSelectionVisible && this.embedSelectionPageId === this.pageKeyAt(pageIndex)) {
+          Row()
+            .width(this.embedSelectionWidth)
+            .height(this.embedSelectionHeight)
+            .border({ width: 2, color: '#0F766E' })
+            .backgroundColor('#160F766E')
+            .borderRadius(14)
+            .position({ x: this.embedSelectionX, y: this.embedSelectionY })
+          Text('Drag a rectangle on the active page.')
+            .fontSize(12)
+            .fontColor('#0F766E')
+            .padding({ left: 12, right: 12, top: 8, bottom: 8 })
+            .backgroundColor('#FFFFFF')
+            .border({ width: 1, color: '#CFE7DF' })
+            .borderRadius(14)
+            .position({ x: 18, y: 18 })
+        }
+      }
+      .width('100%')
+      .height('100%')
+    }
+  }
+
+  @Builder
+  private buildWritingPageFallback(pageIndex: number): void {
+    Stack({ alignContent: Alignment.TopStart }) {
+      if (this.pagePreviewSnapshotAt(pageIndex) !== undefined) {
+        PreviewThumbnail({
+          previewSnapshot: this.pagePreviewSnapshotAt(pageIndex) as DocumentPreviewSnapshot,
+          fallbackSummary: '',
+          thumbnailWidth: this.renderedWritingPageWidth(pageIndex),
+          thumbnailHeight: this.renderedWritingPageHeight(pageIndex)
+        })
+      } else {
+        Column({ space: 8 }) {
+          Text(this.pagePlaceholderTitle(pageIndex))
+            .fontSize(16)
+            .fontWeight(FontWeight.Medium)
+            .fontColor('#162033')
+            .margin({ top: 18, left: 18, right: 18 })
+            .width('100%')
+          Text(this.pagePlaceholderDetail(pageIndex))
+            .fontSize(12)
+            .fontColor('#667085')
+            .margin({ left: 18, right: 18 })
+            .width('100%')
+          Column({ space: 8 }) {
+            ForEach(this.pagePreviewFallbackBlocks(pageIndex), (block: MarkdownPreviewBlock, blockIndex: number) => {
+              Text(block.type === 'list' ? `- ${block.text}` : block.text)
+                .fontSize(block.type === 'heading' ? 15 : 13)
+                .fontWeight(block.type === 'heading' ? FontWeight.Medium : FontWeight.Normal)
+                .fontColor(block.type === 'heading' ? '#162033' : '#475467')
+                .lineHeight(block.type === 'heading' ? 22 : 20)
+                .maxLines(blockIndex === 0 ? 4 : 3)
+                .textOverflow({ overflow: TextOverflow.Ellipsis })
+                .width('100%')
+            }, (_: MarkdownPreviewBlock, blockIndex: number): string => `page-fallback-${pageIndex}-${blockIndex}`)
+          }
+          .margin({ left: 18, right: 18, top: 8 })
+          .width(this.renderedWritingPageWidth(pageIndex) - 36)
+          Blank()
+            .layoutWeight(1)
+        }
+        .width('100%')
+        .height('100%')
+        .backgroundColor('#FFFDF8')
+        .alignItems(HorizontalAlign.Start)
+      }
+      this.buildPageEmbeddedOverlayLayer(pageIndex)
+    }
+    .width('100%')
+    .height('100%')
+  }
+
+  @Builder
+  private buildContinuousWritingPage(pageIndex: number): void {
+    Stack({ alignContent: Alignment.TopStart }) {
+      Column() {}
+        .width(this.renderedWritingPageWidth(pageIndex))
+        .height(this.renderedWritingPageHeight(pageIndex))
+        .backgroundColor('#FFFFFF')
+        .border({
+          width: this.isSelectedPageIndex(pageIndex) ? 2 : 1,
+          color: this.isSelectedPageIndex(pageIndex) ? '#16324F' : '#D8E0EA'
+        })
+        .borderRadius(28)
+      if (this.isSelectedPageIndex(pageIndex)) {
+        this.buildPageMotionLayer()
+        this.buildPageEmbeddedOverlayLayer(pageIndex)
+        this.buildEmbeddedSelectionOverlay(pageIndex)
+      } else {
+        this.buildWritingPageFallback(pageIndex)
+      }
+      Row({ space: 8 }) {
+        Text(`Page ${pageIndex + 1}`)
+          .fontSize(12)
+          .fontWeight(FontWeight.Medium)
+          .fontColor('#162033')
+        if (this.isPageBookmarked(pageIndex)) {
+          Text('Bookmarked')
+            .fontSize(10)
+            .fontColor('#0F766E')
+        }
+      }
+      .padding({ left: 14, right: 14, top: 8, bottom: 8 })
+      .backgroundColor('#FFFFFF')
+      .border({ width: 1, color: '#E4E7EC' })
+      .borderRadius(14)
+      .position({ x: 18, y: 18 })
+    }
+    .width(this.renderedWritingPageWidth(pageIndex))
+    .height(this.renderedWritingPageHeight(pageIndex))
+    .position({ x: this.pageCardOffsetX(pageIndex), y: this.pageCardOffsetY(pageIndex) })
+  }
+
+  @Builder
+  private buildContinuousWritingViewport(): void {
+    Stack({ alignContent: Alignment.TopStart }) {
+      Column() {}
+        .width('100%')
+        .height('100%')
+        .backgroundColor('#EEF2F8')
+      ForEach(this.pageIndexes(), (pageIndex: number) => {
+        this.buildContinuousWritingPage(pageIndex)
+      }, (pageIndex: number): string => `writing-page-${this.pageKeyAt(pageIndex)}`)
+      if (!this.showTracePanel) {
+        Row() {
+          this.buildBottomHint()
+        }
+        .position({ x: 18, y: Math.max(18, this.writingViewportHeight - 58) })
+      }
+      if (this.showTracePanel) {
+        Row() {
+          this.buildTracePanel()
+        }
+        .position({ x: 18, y: Math.max(92, this.writingViewportHeight - 260) })
+      }
+    }
+    .width('100%')
+    .height('100%')
+    .onAreaChange((_, newValue) => {
+      this.updateWritingViewportSize(newValue);
+    })
+    .gesture(
+      GestureGroup(
+        GestureMode.Parallel,
+        LongPressGesture({ repeat: false, duration: 600 })
+          .onAction(() => {
+            if (!this.embedPlacementArmed) {
+              this.toggleTracePanel();
+            }
+          }),
+        PanGesture({ fingers: 1, distance: this.canSingleFingerPanViewport() ? 0 : 100000 })
+          .onActionStart(() => {
+            this.handleViewportPanStart();
+          })
+          .onActionUpdate((event) => {
+            this.updateViewportPan(event as Object, 1);
+          })
+          .onActionEnd(async () => {
+            await this.finishViewportPan(1);
+          }),
+        PanGesture({ fingers: 2, distance: this.canTwoFingerPanViewport() ? 0 : 100000 })
+          .onActionStart(() => {
+            this.handleViewportPanStart();
+          })
+          .onActionUpdate((event) => {
+            this.updateViewportPan(event as Object, 2);
+          })
+          .onActionEnd(async () => {
+            await this.finishViewportPan(2);
+          }),
+        PinchGesture({ fingers: 2 })
+          .onActionStart(() => {
+            this.handleViewportPinchStart();
+          })
+          .onActionUpdate((event) => {
+            this.updateViewportPinch(event as Object);
+          })
+          .onActionEnd(async () => {
+            await this.finishViewportPinch();
+          })
+      )
+    )
+  }
+
+  @Builder
+  private buildInspectorModal(): void {
+    Stack({ alignContent: Alignment.Center }) {
+      Column() {}
+        .width('100%')
+        .height('100%')
+        .backgroundColor('#660B1F33')
+      Column({ space: 12 }) {
+        Row({ space: 8 }) {
+          Text(this.previewMode === 'preview' ? 'Page Preview' : 'Page Markdown')
+            .fontSize(18)
+            .fontWeight(FontWeight.Bold)
+            .fontColor('#162033')
+          Blank()
+            .layoutWeight(1)
+          Button('Preview')
+            .height(34)
+            .backgroundColor(this.previewMode === 'preview' ? '#162033' : '#FFFFFF')
+            .fontColor(this.previewMode === 'preview' ? '#FFFFFF' : '#162033')
+            .fontSize(12)
+            .borderRadius(12)
+            .onClick(() => {
+              this.previewMode = 'preview';
+            })
+          Button('Markdown')
+            .height(34)
+            .backgroundColor(this.previewMode === 'source' ? '#162033' : '#FFFFFF')
+            .fontColor(this.previewMode === 'source' ? '#FFFFFF' : '#162033')
+            .fontSize(12)
+            .borderRadius(12)
+            .onClick(() => {
+              this.previewMode = 'source';
+            })
+          Button('Close')
+            .height(34)
+            .backgroundColor('#F3F6FB')
+            .fontColor('#162033')
+            .fontSize(12)
+            .borderRadius(12)
+            .onClick(() => {
+              this.closeInspector();
+            })
+        }
+        if (this.previewMode === 'preview') {
+          this.buildPreviewDrawerBody()
+        } else {
+          this.buildSourceDrawerBody()
+        }
+      }
+      .width(EDITOR_INSPECTOR_WIDTH)
+      .height(Math.max(420, this.writingViewportHeight - 96))
+      .padding(18)
+      .backgroundColor('#FFFFFF')
+      .borderRadius(26)
+    }
+    .width('100%')
+    .height('100%')
+  }
+
+  @Builder
+  private buildEmbeddedComposerModal(): void {
+    Stack({ alignContent: Alignment.Center }) {
+      Column() {}
+        .width('100%')
+        .height('100%')
+        .backgroundColor('#660B1F33')
+      Column({ space: 12 }) {
+        Text('Insert Markdown / LaTeX')
+          .fontSize(20)
+          .fontWeight(FontWeight.Bold)
+          .fontColor('#162033')
+          .width('100%')
+        Text('Use mixed Markdown + LaTeX source. The saved block is stored through the finalized A service contract.')
+          .fontSize(12)
+          .fontColor('#667085')
+          .width('100%')
+        TextArea({
+          text: this.embeddedComposerText,
+          placeholder: EDITOR_WORKSPACE_COPY.sourcePlaceholder
+        })
+          .height(168)
+          .backgroundColor('#FFFFFF')
+          .border({ width: 1, color: '#D0D5DD' })
+          .borderRadius(18)
+          .padding(16)
+          .onChange((value: string) => {
+            this.embeddedComposerText = value;
+          })
+        Column({ space: 8 }) {
+          Text('Live preview')
+            .fontSize(13)
+            .fontWeight(FontWeight.Medium)
+            .fontColor('#162033')
+            .width('100%')
+          this.buildPreviewBlockList(MarkdownUtils.buildPreviewBlocks(this.embeddedComposerText))
+        }
+        .width('100%')
+        .layoutWeight(1)
+        .padding(14)
+        .backgroundColor('#F8FAFC')
+        .borderRadius(18)
+        Row({ space: 10 }) {
+          Blank()
+            .layoutWeight(1)
+          Button('Cancel')
+            .height(38)
+            .padding({ left: 14, right: 14 })
+            .backgroundColor('#FFFFFF')
+            .fontColor('#344054')
+            .fontSize(12)
+            .border({ width: 1, color: '#D0D5DD' })
+            .borderRadius(12)
+            .onClick(() => {
+              this.cancelEmbeddedComposer();
+            })
+          Button('Save block')
+            .height(38)
+            .padding({ left: 14, right: 14 })
+            .backgroundColor('#162033')
+            .fontColor('#FFFFFF')
+            .fontSize(12)
+            .borderRadius(12)
+            .enabled(this.embeddedComposerText.trim().length > 0)
+            .onClick(async () => {
+              await this.commitEmbeddedComposer();
+            })
+        }
+        .width('100%')
+      }
+      .width(760)
+      .height(Math.max(520, this.writingViewportHeight - 88))
+      .padding(20)
+      .backgroundColor('#FFFFFF')
+      .borderRadius(28)
+    }
+    .width('100%')
+    .height('100%')
+  }
+
+  @Builder
+  private buildModernPageRailItem(pageIndex: number): void {
+    Column({ space: 8 }) {
+      this.buildPageRailPreviewCard(pageIndex)
+      Row({ space: 6 }) {
+        Button(this.isPageBookmarked(pageIndex) ? 'Bk' : '+Bk')
+          .height(26)
+          .padding({ left: 8, right: 8 })
+          .backgroundColor(this.isPageBookmarked(pageIndex) ? '#16324F' : '#FFFFFF')
+          .fontColor(this.isPageBookmarked(pageIndex) ? '#FFFFFF' : '#344054')
+          .fontSize(10)
+          .borderRadius(12)
+          .onClick(async () => {
+            await this.toggleBookmarkForPage(pageIndex);
+          })
+        Blank()
+          .layoutWeight(1)
+        Button('...')
+          .width(PAGE_RAIL_PAGE_MENU_BUTTON_SIZE)
+          .height(PAGE_RAIL_PAGE_MENU_BUTTON_SIZE)
+          .fontSize(12)
+          .backgroundColor('#FFFFFF')
+          .fontColor('#475467')
+          .borderRadius(14)
+          .onClick(async () => {
+            await this.togglePageMenu(pageIndex);
+          })
+      }
+      .width(PAGE_RAIL_THUMBNAIL_WIDTH)
+      Row() {
+        Text(`P${pageIndex + 1}`)
+          .fontSize(10)
+          .fontWeight(this.isSelectedPageIndex(pageIndex) ? FontWeight.Medium : FontWeight.Normal)
+          .fontColor(this.isSelectedPageIndex(pageIndex) ? '#0F766E' : '#475467')
+        Blank()
+          .layoutWeight(1)
+        Text(this.isPageBookmarked(pageIndex) ? 'Marked' : '')
+          .fontSize(9)
+          .fontColor('#0F766E')
+      }
+      .width(PAGE_RAIL_THUMBNAIL_WIDTH)
+      if (this.isPageMenuOpen(pageIndex)) {
+        this.buildPageMenu(pageIndex)
+      }
+    }
+    .width('100%')
+    .padding({ top: 2, bottom: 14 })
+    .alignItems(HorizontalAlign.Center)
+    .onClick(async () => {
+      await this.focusPageInViewport(pageIndex);
+    })
+  }
+
+  @Builder
+  private buildModernPageRail(): void {
+    Column({ space: 10 }) {
+      Row({ space: 6 }) {
+        Button('Undo')
+          .width(PAGE_RAIL_ACTION_BUTTON_SIZE + 10)
+          .height(PAGE_RAIL_ACTION_BUTTON_SIZE)
+          .backgroundColor('#FFFFFF')
+          .fontColor('#667085')
+          .fontSize(11)
+          .borderRadius(14)
+          .onClick(() => {
+            this.undoStroke();
+          })
+        Button('Redo')
+          .width(PAGE_RAIL_ACTION_BUTTON_SIZE + 10)
+          .height(PAGE_RAIL_ACTION_BUTTON_SIZE)
+          .backgroundColor('#FFFFFF')
+          .fontColor('#667085')
+          .fontSize(11)
+          .borderRadius(14)
+          .onClick(() => {
+            this.redoStroke();
+          })
+        Button('Menu')
+          .width(PAGE_RAIL_ACTION_BUTTON_SIZE + 8)
+          .height(PAGE_RAIL_ACTION_BUTTON_SIZE)
+          .backgroundColor('#FFFFFF')
+          .fontColor('#344054')
+          .fontSize(11)
+          .borderRadius(14)
+          .onClick(() => {
+            this.toggleRailMenu();
+          })
+        if (this.canAddRealPages()) {
+          Button('+')
+            .width(PAGE_RAIL_ACTION_BUTTON_SIZE)
+            .height(PAGE_RAIL_ACTION_BUTTON_SIZE)
+            .backgroundColor('#0F766E')
+            .fontColor('#FFFFFF')
+            .fontSize(16)
+            .fontWeight(FontWeight.Medium)
+            .borderRadius(14)
+            .onClick(async () => {
+              await this.addPage();
+            })
+        }
+      }
+      .width('100%')
+      Row({ space: 8 }) {
+        TextInput({ text: this.pageSearchText, placeholder: 'Search pages' })
+          .layoutWeight(1)
+          .height(34)
+          .backgroundColor('#FFFFFF')
+          .fontSize(12)
+          .borderRadius(12)
+          .onChange((value: string) => {
+            this.pageSearchText = value;
+          })
+      }
+      .width('100%')
+      Row() {
+        Text(`Pages ${this.selectedPageLabel()}`)
+          .fontSize(13)
+          .fontWeight(FontWeight.Medium)
+          .fontColor('#101828')
+        Blank()
+          .layoutWeight(1)
+        Button('Jump')
+          .height(30)
+          .padding({ left: 10, right: 10 })
+          .backgroundColor('#FFFFFF')
+          .fontColor('#344054')
+          .fontSize(11)
+          .borderRadius(12)
+          .onClick(() => {
+            this.openPageJumpInput();
+          })
+      }
+      .width('100%')
+      if (this.showPageJumpInput) {
+        Row({ space: 6 }) {
+          TextInput({ text: this.pageJumpDraft, placeholder: `${this.activePageIndex + 1}` })
+            .layoutWeight(1)
+            .height(34)
+            .backgroundColor('#FFFFFF')
+            .textAlign(TextAlign.Center)
+            .borderRadius(12)
+            .onChange((value: string) => {
+              this.pageJumpDraft = value.replace(/[^0-9]/g, '');
+            })
+          Button('Go')
+            .height(34)
+            .enabled(this.pageJumpTargetIndex() >= 0)
+            .backgroundColor('#162033')
+            .fontColor('#FFFFFF')
+            .fontSize(11)
+            .padding({ left: 12, right: 12 })
+            .borderRadius(12)
+            .onClick(async () => {
+              const targetIndex: number = this.pageJumpTargetIndex();
+              if (targetIndex >= 0) {
+                await this.focusPageInViewport(targetIndex);
+              }
+              this.closePageJumpInput();
+            })
+        }
+        .width('100%')
+      }
+      Scroll() {
+        Column({ space: 2 }) {
+          ForEach(this.filteredPageIndexes(), (pageIndex: number) => {
+            this.buildModernPageRailItem(pageIndex)
+          }, (pageIndex: number): string => `modern-page-rail-${this.pageKeyAt(pageIndex)}`)
+        }
+        .width('100%')
+        .padding({ top: 4, bottom: 18 })
+      }
+      .layoutWeight(1)
+      if (this.showRailMenu) {
+        this.buildRailMenu()
+      }
+    }
+    .width(EDITOR_PAGE_RAIL_WIDTH)
+    .height('100%')
+    .padding(10)
+    .backgroundColor('#F3F4F6')
+    .border({ width: 1, color: '#D8E0EA' })
+    .borderRadius(22)
+  }
+
   build() {
     Stack() {
       if (this.loading) {
@@ -2762,65 +4163,22 @@ struct EditorWorkspace {
         .backgroundColor('#EEF2F8')
       } else {
         Row({ space: 10 }) {
-          Column({ space: 8 }) {
-            this.buildHeaderArea()
-            Row({ space: 10 }) {
-              Column({ space: 8 }) {
-                Row({ space: 10 }) {
-                  Blank()
-                    .layoutWeight(1)
-                    .hitTestBehavior(HitTestMode.None)
-                  this.buildFloatingToolbar()
-                  Blank()
-                    .layoutWeight(1)
-                    .hitTestBehavior(HitTestMode.None)
-                }
-                .width('100%')
-                .alignItems(VerticalAlign.Top)
-                Stack({ alignContent: Alignment.BottomStart }) {
-                  this.buildWritingSurface()
-                  if (!this.showTracePanel && !this.shouldUseSimulatorStubUi()) {
-                    Row() {
-                      this.buildBottomHint()
-                      Blank()
-                        .layoutWeight(1)
-                        .hitTestBehavior(HitTestMode.None)
-                    }
-                    .width('100%')
-                    .padding(12)
-                    .hitTestBehavior(HitTestMode.Transparent)
-                  }
-                  if (this.showTracePanel) {
-                    Row() {
-                      this.buildTracePanel()
-                      Blank()
-                        .layoutWeight(1)
-                        .hitTestBehavior(HitTestMode.None)
-                    }
-                    .width('100%')
-                    .height('100%')
-                    .padding(12)
-                    .hitTestBehavior(HitTestMode.Transparent)
-                  }
-                }
-                .layoutWeight(1)
-                .width('100%')
-                .backgroundColor('#F4F7FB')
-                .borderRadius(22)
-              }
-              .layoutWeight(1)
-              .height('100%')
-              if (this.showInspectorDrawer) {
-                this.buildInspectorDrawer()
-              }
+          Stack({ alignContent: Alignment.TopStart }) {
+            this.buildContinuousWritingViewport()
+            this.buildFloatingBackButton()
+            this.buildFloatingToolbarChrome()
+            if (this.showInspectorDrawer) {
+              this.buildInspectorModal()
             }
-            .layoutWeight(1)
-            .width('100%')
-            .alignItems(VerticalAlign.Top)
+            if (this.showEmbeddedComposer) {
+              this.buildEmbeddedComposerModal()
+            }
           }
           .layoutWeight(1)
           .height('100%')
-          this.buildPageRail()
+          .backgroundColor('#E9EEF5')
+          .borderRadius(26)
+          this.buildModernPageRail()
         }
         .width('100%')
         .height('100%')
