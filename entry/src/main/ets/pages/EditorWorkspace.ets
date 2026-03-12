@@ -844,6 +844,18 @@ struct EditorWorkspace {
     return `${currentPageNumber}/${this.pageCount()}`;
   }
 
+  private shouldUseWideComposerLayout(): boolean {
+    return this.writingViewportWidth >= 920 && this.writingViewportWidth > this.writingViewportHeight;
+  }
+
+  private embeddedComposerModalWidth(): number {
+    const viewportWidth: number = this.writingViewportWidth > 0 ? this.writingViewportWidth : 760;
+    if (this.shouldUseWideComposerLayout()) {
+      return Math.min(980, Math.max(880, viewportWidth - 40));
+    }
+    return Math.min(760, Math.max(560, viewportWidth - 24));
+  }
+
   private currentDocumentCreatedLabel(): string {
     const createdAt: number = this.document?.createdAt ?? Date.now();
     const createdDate: Date = new Date(createdAt);
@@ -2127,7 +2139,7 @@ struct EditorWorkspace {
     }
     MarkdownUtils.buildPreviewBlocks(previewSourceText).forEach((block: MarkdownPreviewBlock) => {
       const normalizedText: string = block.text.replace(/\s+/g, ' ').trim();
-      if (normalizedText.length === 0 || normalizedText === 'No text content yet.') {
+      if (this.isPreviewPlaceholderText(normalizedText)) {
         return;
       }
       normalizedBlocks.push({
@@ -2137,6 +2149,27 @@ struct EditorWorkspace {
       });
     });
     return normalizedBlocks.slice(0, 4);
+  }
+
+  private isPreviewPlaceholderText(text: string): boolean {
+    const normalizedText: string = text.replace(/\s+/g, ' ').trim();
+    return normalizedText.length === 0 || normalizedText === 'No text content yet.';
+  }
+
+  private embeddedComposerVisibleBlocks(): MarkdownPreviewBlock[] {
+    const visibleBlocks: MarkdownPreviewBlock[] = [];
+    this.embeddedComposerPreviewBlocks().forEach((block: MarkdownPreviewBlock) => {
+      const normalizedText: string = block.text.replace(/\s+/g, ' ').trim();
+      if (this.isPreviewPlaceholderText(normalizedText)) {
+        return;
+      }
+      visibleBlocks.push({
+        type: block.type,
+        level: block.level,
+        text: normalizedText
+      });
+    });
+    return visibleBlocks;
   }
 
   private pageSceneAt(index: number): NativePreviewPage | undefined {
@@ -3459,12 +3492,12 @@ struct EditorWorkspace {
   private buildEmbeddedComposerPreview(): void {
     Scroll() {
       Column({ space: 10 }) {
-        if (this.embeddedComposerPreviewBlocks().length === 0) {
+        if (this.embeddedComposerVisibleBlocks().length === 0) {
           Text('暂无预览内容')
             .fontSize(13)
             .fontColor('#667085')
         } else {
-          ForEach(this.embeddedComposerPreviewBlocks(), (block: MarkdownPreviewBlock, index: number) => {
+          ForEach(this.embeddedComposerVisibleBlocks(), (block: MarkdownPreviewBlock, index: number) => {
             if (block.type === 'heading') {
               Text(block.text)
                 .fontSize(block.level <= 1 ? 22 : 18)
@@ -3835,12 +3868,12 @@ struct EditorWorkspace {
         this.buildWritingPageFallback(pageIndex)
       }
       Row({ space: 8 }) {
-        Text(`Page ${pageIndex + 1}`)
+        Text(`第${pageIndex + 1}页`)
           .fontSize(12)
           .fontWeight(FontWeight.Medium)
           .fontColor('#162033')
         if (this.isPageBookmarked(pageIndex)) {
-          Text('Bookmarked')
+          Text('已加书签')
             .fontSize(10)
             .fontColor('#0F766E')
         }
@@ -4035,7 +4068,7 @@ struct EditorWorkspace {
               await this.commitEmbeddedComposer();
             })
         }
-        if (this.writingViewportWidth >= 1180) {
+        if (this.shouldUseWideComposerLayout()) {
           Row({ space: 14 }) {
             Column({ space: 8 }) {
               Text('输入')
@@ -4122,7 +4155,7 @@ struct EditorWorkspace {
           .width('100%')
         }
       }
-      .width(this.writingViewportWidth >= 1180 ? 980 : 760)
+      .width(this.embeddedComposerModalWidth())
       .height(Math.max(520, this.writingViewportHeight - 88))
       .padding(20)
       .backgroundColor('#FFFFFF')
