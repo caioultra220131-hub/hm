@@ -5,7 +5,7 @@ param(
     [string]$Message,
     [string]$WindowTitleRegex,
     [double]$ComposerClickXRatio = 0.470,
-    [double]$ComposerClickYRatio = 0.840,
+    [double]$ComposerClickYRatio = 0.800,
     [ValidateRange(1, 10)]
     [int]$SelectionAttempts = 1,
     [ValidateRange(200, 10000)]
