@@ -1,4 +1,4 @@
-import { router } from '@kit.ArkUI';
+﻿import { router } from '@kit.ArkUI';
 import { common } from '@kit.AbilityKit';
 import nativeModule from 'libentry.so';
 import { PreviewThumbnail } from '../components/PreviewThumbnail';
@@ -94,17 +94,18 @@ const NATIVE_PAGE_METHOD_SET_ACTIVE: string = 'setActivePage';
 const NATIVE_PAGE_METHOD_INSERT: string = 'insertPage';
 const NATIVE_PAGE_METHOD_DELETE: string = 'deletePage';
 const EDITOR_INSPECTOR_WIDTH: number = 688;
-const EDITOR_PAGE_RAIL_WIDTH: number = 188;
-const PAGE_RAIL_THUMBNAIL_WIDTH: number = 116;
-const PAGE_RAIL_THUMBNAIL_HEIGHT: number = 156;
-const PAGE_RAIL_MENU_WIDTH: number = 184;
-const PAGE_RAIL_ACTION_BUTTON_SIZE: number = 34;
-const PAGE_RAIL_CARD_RADIUS: number = 18;
-const PAGE_RAIL_PAGE_MENU_BUTTON_SIZE: number = 28;
-const FLOATING_TOOLBAR_WIDTH: number = 544;
-const FLOATING_TOOL_BUTTON_SIZE: number = 40;
+const EDITOR_PAGE_RAIL_WIDTH: number = 172;
+const EDITOR_PAGE_RAIL_COLLAPSED_WIDTH: number = 68;
+const PAGE_RAIL_THUMBNAIL_WIDTH: number = 104;
+const PAGE_RAIL_THUMBNAIL_HEIGHT: number = 142;
+const PAGE_RAIL_MENU_WIDTH: number = 176;
+const PAGE_RAIL_ACTION_BUTTON_SIZE: number = 30;
+const PAGE_RAIL_CARD_RADIUS: number = 16;
+const PAGE_RAIL_PAGE_MENU_BUTTON_SIZE: number = 26;
+const FLOATING_TOOLBAR_WIDTH: number = 488;
+const FLOATING_TOOL_BUTTON_SIZE: number = 36;
 const FLOATING_TOOLBAR_MORE_BUTTON_SIZE: number = 34;
-const FLOATING_TOOLBAR_COLOR_CHIP_SIZE: number = 18;
+const FLOATING_TOOLBAR_COLOR_CHIP_SIZE: number = 16;
 const PAGE_SWIPE_DRAG_LIMIT: number = 132;
 const PAGE_SWIPE_TRIGGER_DISTANCE: number = 84;
 const PAGE_STACK_GAP: number = 44;
@@ -118,45 +119,45 @@ const EMBED_SELECTION_MIN_SIZE: number = 32;
 const EDITOR_WORKSPACE_COPY: EditorWorkspaceCopy = {
   back: '返回',
   save: '保存',
-  undo: '撤',
-  redo: '重',
-  toolPen: '笔',
-  toolPencil: '铅',
-  toolHighlighter: '荧',
-  toolEraser: '橡',
-  toolLasso: '套',
-  toolText: '文',
-  toolHand: '手',
+  undo: '撤销',
+  redo: '重做',
+  toolPen: '钢笔',
+  toolPencil: '铅笔',
+  toolHighlighter: '荧光笔',
+  toolEraser: '橡皮',
+  toolLasso: '套索',
+  toolText: '文字',
+  toolHand: '拖手',
   collapseOptions: '收起选项',
   more: '更多',
   collapsePanel: '收起面板',
-  openPanel: '打开面板',
+  openPanel: '展开面板',
   render: '渲染',
   mode: '模式',
   placeholder: '占位',
   longPressCollapseDebugPanel: '长按画布可收起调试面板',
-  longPressExpandTracePanel: '长按画布可展开 trace/debug',
+  longPressExpandTracePanel: '长按画布可展开调试面板',
   formula: '公式',
   previewPanel: '预览面板',
-  sourcePanel: 'Markdown 面板',
+  sourcePanel: '源码面板',
   close: '关闭',
   preview: '预览',
-  source: 'Markdown',
+  source: '源码',
   debugPanel: '调试面板',
   collapse: '收起',
-  startTrace: '开始 Trace',
-  stopTrace: '停止 Trace',
-  replayLastTrace: '回放最近 Trace',
+  startTrace: '开始录制',
+  stopTrace: '停止录制',
+  replayLastTrace: '回放上次记录',
   traceStatus: '状态',
   tracePath: '路径',
   traceSampleCount: '采样数',
-  traceUnsupported: '模拟器冒烟模式不支持 trace 录制与回放，因此这些控件保持禁用。',
+  traceUnsupported: '当前模拟器模式不支持轨迹录制与回放，因此相关控件保持禁用。',
   recentAction: '最近操作',
   openingEditor: '正在打开编辑器...',
   openDocumentFailed: '无法打开文档',
   documentNotFound: '未找到文档',
   returnLibrary: '返回笔记库',
-  sourcePlaceholder: '输入 Markdown 和公式，例如 $x^2$ 或 $$\\int_0^1 x dx$$'
+  sourcePlaceholder: '输入图文与公式，例如 $x^2$ 或 $\\int_0^1 x dx$'
 };
 
 @Entry
@@ -194,7 +195,7 @@ struct EditorWorkspace {
   @State private markdownText: string = '';
   @State private previewMode: 'preview' | 'source' = 'preview';
   @State private showInspectorDrawer: boolean = false;
-  @State private showToolExtras: boolean = false;
+  @State private showToolExtras: boolean = true;
   @State private activePageId: string = '';
   @State private activePageIndex: number = 0;
   @State private pageSearchText: string = '';
@@ -202,6 +203,7 @@ struct EditorWorkspace {
   @State private pageJumpDraft: string = '';
   @State private showRailMenu: boolean = false;
   @State private openPageMenuId: string = '';
+  @State private railCollapsed: boolean = false;
   @State private pageSwipeOffset: number = 0;
   @State private engineId: string = '';
   @State private currentTool: ToolType = ToolType.PEN;
@@ -572,7 +574,7 @@ struct EditorWorkspace {
     const state: NativeDebugState | null = this.nativeEngine.getDebugState(this.engineId);
     if (!state) {
       this.debugState = null;
-      this.debugStateText = 'native debug unavailable';
+      this.debugStateText = '原生调试信息不可用';
       this.simulatorSceneSnapshot = null;
       return;
     }
@@ -634,13 +636,13 @@ struct EditorWorkspace {
 
   private saveButtonLabel(): string {
     if (this.saveState === 'saving') {
-      return 'Saving...';
+      return '保存中';
     }
     if (this.saveState === 'saved') {
-      return 'Saved';
+      return '已保存';
     }
     if (this.saveState === 'failed') {
-      return 'Save failed';
+      return '保存失败';
     }
     return EDITOR_WORKSPACE_COPY.save;
   }
@@ -706,10 +708,10 @@ struct EditorWorkspace {
         }
         this.activePageIndex = Math.min(this.activePageIndex, this.pageCount() - 1);
         this.refreshDebugState();
-        this.traceActionMessage = 'save-complete';
+        this.traceActionMessage = '保存完成';
         return true;
       } catch (error) {
-        this.traceActionMessage = `save-failed ${this.formatError(error as Object)}`;
+        this.traceActionMessage = `保存失败 ${this.formatError(error as Object)}`;
         return false;
       }
     };
@@ -782,7 +784,13 @@ struct EditorWorkspace {
   }
 
   private setTool(tool: ToolType): void {
+    const previousTool: ToolType = this.currentTool;
+    const isSameTool: boolean = previousTool === tool;
     this.currentTool = tool;
+    this.showToolExtras = isSameTool ? false : this.toolHasSecondaryControls(tool);
+    if (previousTool !== tool || !this.toolUsesContextActions() || isSameTool) {
+      this.clearEmbeddedPlacement();
+    }
     if (this.engineId.length > 0) {
       this.nativeEngine.setTool(this.engineId, tool);
       this.refreshDebugState();
@@ -813,17 +821,17 @@ struct EditorWorkspace {
   private toolGlyph(tool: ToolType): string {
     switch (tool) {
       case ToolType.PEN:
-        return '✎';
+        return '✒';
       case ToolType.PENCIL:
-        return '✐';
+        return '✎';
       case ToolType.HIGHLIGHTER:
-        return '▇';
+        return '⎍';
       case ToolType.ERASER:
         return '⌫';
       case ToolType.LASSO:
-        return '▢';
+        return '◌';
       case ToolType.TEXT:
-        return 'Tt';
+        return '⊡';
       case ToolType.HAND:
         return '☞';
       default:
@@ -844,11 +852,11 @@ struct EditorWorkspace {
   }
 
   private inspectorTabLabel(mode: 'preview' | 'source'): string {
-    return mode === 'source' ? 'Markdown' : EDITOR_WORKSPACE_COPY.preview;
+    return mode === 'source' ? EDITOR_WORKSPACE_COPY.source : EDITOR_WORKSPACE_COPY.preview;
   }
 
   private inspectorPanelTitle(): string {
-    return this.previewMode === 'preview' ? EDITOR_WORKSPACE_COPY.previewPanel : 'Markdown';
+    return this.previewMode === 'preview' ? EDITOR_WORKSPACE_COPY.previewPanel : EDITOR_WORKSPACE_COPY.source;
   }
 
   private pageJumpTargetIndex(): number {
@@ -905,7 +913,16 @@ struct EditorWorkspace {
     this.openPageMenuId = '';
   }
 
+  private setRailCollapsed(collapsed: boolean): void {
+    this.railCollapsed = collapsed;
+    this.closeRailMenus();
+    this.showPageJumpInput = false;
+  }
+
   private toggleRailMenu(): void {
+    if (this.railCollapsed) {
+      return;
+    }
     this.showPageJumpInput = false;
     this.showRailMenu = !this.showRailMenu;
     this.openPageMenuId = '';
@@ -995,7 +1012,7 @@ struct EditorWorkspace {
     this.dirtyPageIds.delete(this.activePageId);
     await this.reloadDocumentEmbeddedBlocks();
     this.saveState = 'idle';
-    this.traceActionMessage = 'page-cleared';
+    this.traceActionMessage = '页面已清空';
     this.closeRailMenus();
   }
 
@@ -1292,9 +1309,9 @@ struct EditorWorkspace {
     }
     try {
       const ok: boolean = this.nativeEngine.startInputTraceRecording(this.engineId);
-      this.traceActionMessage = ok ? 'recording' : 'start-failed';
+      this.traceActionMessage = ok ? '正在录制' : '开始录制失败';
     } catch (_) {
-      this.traceActionMessage = 'start-failed';
+      this.traceActionMessage = '开始录制失败';
     }
     this.refreshDebugState();
   }
@@ -1305,9 +1322,9 @@ struct EditorWorkspace {
     }
     try {
       const result: TraceActionResult | null = this.nativeEngine.stopInputTraceRecording(this.engineId);
-      this.updateTraceActionMessage(result, 'stop-failed');
+      this.updateTraceActionMessage(result, '停止录制失败');
     } catch (_) {
-      this.traceActionMessage = 'stop-failed';
+      this.traceActionMessage = '停止录制失败';
     }
     this.refreshDebugState();
   }
@@ -1319,9 +1336,9 @@ struct EditorWorkspace {
     try {
       const tracePath: string = this.debugState?.inputTracePath ?? '';
       const result: TraceActionResult | null = this.nativeEngine.replayInputTrace(this.engineId, tracePath);
-      this.updateTraceActionMessage(result, 'replay-failed');
+      this.updateTraceActionMessage(result, '回放失败');
     } catch (_) {
-      this.traceActionMessage = 'replay-failed';
+      this.traceActionMessage = '回放失败';
     }
     this.refreshDebugState();
   }
@@ -1487,6 +1504,21 @@ struct EditorWorkspace {
     }
   }
 
+  private async syncViewportAfterGesture(): Promise<void> {
+    const clampedX: number = this.clampedPageStackPanX(this.pageStackPanX);
+    const clampedY: number = this.clampedPageStackPanY(this.pageStackPanY);
+    if (clampedX !== this.pageStackPanX) {
+      this.pageStackPanX = clampedX;
+    }
+    if (clampedY !== this.pageStackPanY) {
+      this.pageStackPanY = clampedY;
+    }
+    const nearestIndex: number = this.nearestPageIndexToViewportCenter();
+    if (nearestIndex !== this.activePageIndex) {
+      await this.selectPage(nearestIndex);
+    }
+  }
+
   private async focusPageInViewport(index: number): Promise<void> {
     await this.selectPage(index);
     this.pageStackPanY = this.clampedPageStackPanY(this.pageFocusTargetPanY(index));
@@ -1530,29 +1562,59 @@ struct EditorWorkspace {
     return this.currentTool === ToolType.TEXT || this.currentTool === ToolType.LASSO;
   }
 
+  private toolHasSecondaryControls(tool: ToolType): boolean {
+    return tool === ToolType.PEN ||
+      tool === ToolType.PENCIL ||
+      tool === ToolType.HIGHLIGHTER ||
+      tool === ToolType.TEXT ||
+      tool === ToolType.LASSO;
+  }
+
   private shouldShowSecondaryToolbar(): boolean {
-    return this.toolUsesColorPalette() || this.toolUsesContextActions();
+    return this.showToolExtras && this.toolHasSecondaryControls(this.currentTool);
   }
 
   private compactToolGlyph(tool: ToolType): string {
     switch (tool) {
       case ToolType.PEN:
-        return 'P';
+        return '✒';
       case ToolType.PENCIL:
-        return 'Pc';
+        return '✎';
       case ToolType.HIGHLIGHTER:
-        return 'Hi';
+        return '⎍';
       case ToolType.ERASER:
-        return 'Er';
+        return '⌫';
       case ToolType.LASSO:
-        return 'La';
+        return '◌';
       case ToolType.TEXT:
-        return 'Tx';
+        return '⊡';
       case ToolType.HAND:
-        return 'Hd';
+        return '☞';
       default:
         return tool;
     }
+  }
+
+  private secondaryToolbarAssistText(): string {
+    return this.toolLabel(this.currentTool);
+  }
+
+  private secondaryToolbarHintText(): string {
+    if (this.currentTool === ToolType.TEXT) {
+      return this.embedPlacementArmed ? '在当前页拖出放置区域' : '放置图文块';
+    }
+    if (this.currentTool === ToolType.LASSO) {
+      return this.embedPlacementArmed ? '在当前页拖出混排区域' : '套索后可插入图文块';
+    }
+    return '颜色';
+  }
+
+  private railToggleGlyph(): string {
+    return this.railCollapsed ? '⇤' : '⇥';
+  }
+
+  private bookmarkGlyph(bookmarked: boolean): string {
+    return bookmarked ? '⚑' : '⚐';
   }
 
   private canSingleFingerPanViewport(): boolean {
@@ -1587,7 +1649,7 @@ struct EditorWorkspace {
     if (!canPan) {
       return;
     }
-    await this.settleViewportToNearestPage();
+    await this.syncViewportAfterGesture();
   }
 
   private handleViewportPinchStart(): void {
@@ -1613,7 +1675,7 @@ struct EditorWorkspace {
     if (!this.canTwoFingerPanViewport()) {
       return;
     }
-    await this.settleViewportToNearestPage();
+    await this.syncViewportAfterGesture();
   }
 
   private clampedFloatingToolbarX(value: number): number {
@@ -1757,7 +1819,7 @@ struct EditorWorkspace {
       this.document = nextDocument;
     }
     this.bookmarksVersion += 1;
-    this.traceActionMessage = nextBookmarked ? 'page-bookmarked' : 'page-unbookmarked';
+    this.traceActionMessage = nextBookmarked ? '页面已加书签' : '页面已取消书签';
   }
 
   private armEmbeddedPlacement(): void {
@@ -1766,7 +1828,7 @@ struct EditorWorkspace {
     }
     this.embedPlacementArmed = true;
     this.embedSelectionVisible = false;
-    this.traceActionMessage = 'drag-on-active-page-to-place-embedded-block';
+    this.traceActionMessage = '请在当前页拖出图文块区域';
   }
 
   private clearEmbeddedPlacement(resetArm: boolean = true): void {
@@ -1901,7 +1963,7 @@ struct EditorWorkspace {
       this.document = nextDocument;
     }
     await this.reloadDocumentEmbeddedBlocks();
-    this.traceActionMessage = 'embedded-block-saved';
+    this.traceActionMessage = '图文块已保存';
     this.cancelEmbeddedComposer();
   }
 
@@ -2158,26 +2220,26 @@ struct EditorWorkspace {
 
   private pagePlaceholderTitle(index: number): string {
     if (!this.supportsPagedDocumentRuntime()) {
-      return 'Document page';
+      return '文档页';
     }
     const pageEntry: DocumentPageEntry | undefined = this.pageEntryAt(index);
     if (pageEntry?.pageKind === 'pdf') {
-      return 'PDF page';
+      return 'PDF 页面';
     }
     if (pageEntry?.pageKind === 'pdf-fragment') {
-      return 'Fragment';
+      return '片段';
     }
-    return 'Blank page';
+    return '空白页';
   }
 
   private pagePlaceholderDetail(index: number): string {
     if (!this.supportsPagedDocumentRuntime()) {
-      return 'Document summary only';
+      return '仅文档摘要';
     }
     if (this.pageSceneObjectsAt(index).length > 0) {
-      return 'Runtime preview available';
+      return '运行时预览可用';
     }
-    return this.pagePreviewFallbackBlocks(index).length > 0 ? 'Markdown preview available' : 'No preview cached';
+    return this.pagePreviewFallbackBlocks(index).length > 0 ? '已有预览' : '暂无预览';
   }
 
   @Builder
@@ -2622,7 +2684,7 @@ struct EditorWorkspace {
         .fontSize(11)
         .fontColor('#475467')
       if (this.canSwipeBetweenPages()) {
-        Text('Swipe up or down to change page')
+        Text('上下滑动可切换页面')
           .fontSize(11)
           .fontColor('#0F766E')
       }
@@ -3164,7 +3226,7 @@ struct EditorWorkspace {
             this.showInspectorDrawer = true;
             this.closeRailMenus();
           })
-        Button('Markdown')
+        Button(EDITOR_WORKSPACE_COPY.source)
           .layoutWeight(1)
           .height(42)
           .backgroundColor(this.previewMode === 'source' ? '#162033' : '#FFFFFF')
@@ -3349,7 +3411,7 @@ struct EditorWorkspace {
     Scroll() {
       Column({ space: 10 }) {
         if (blocks.length === 0) {
-          Text('No preview content yet.')
+          Text('暂无预览内容')
             .fontSize(13)
             .fontColor('#667085')
         } else {
@@ -3397,39 +3459,45 @@ struct EditorWorkspace {
   private buildEmbeddedComposerPreview(): void {
     Scroll() {
       Column({ space: 10 }) {
-        ForEach(this.embeddedComposerPreviewBlocks(), (block: MarkdownPreviewBlock, index: number) => {
-          if (block.type === 'heading') {
-            Text(block.text)
-              .fontSize(block.level <= 1 ? 22 : 18)
-              .fontWeight(FontWeight.Bold)
-              .fontColor('#162033')
-              .width('100%')
-          } else if (block.type === 'formula') {
-            Text(block.text)
-              .fontSize(14)
-              .fontColor('#0B57D0')
-              .padding(12)
-              .width('100%')
-              .backgroundColor('#EEF4FF')
-              .borderRadius(14)
-          } else if (block.type === 'code') {
-            Text(block.text)
-              .fontSize(12)
-              .fontColor('#E2E8F0')
-              .padding(12)
-              .width('100%')
-              .backgroundColor('#162033')
-              .borderRadius(14)
-          } else {
-            Text(block.type === 'list' ? `- ${block.text}` : block.text)
-              .fontSize(14)
-              .fontColor('#344054')
-              .width('100%')
-              .lineHeight(22)
-          }
-        }, (block: MarkdownPreviewBlock, index: number): string =>
-          `composer-preview-${this.embeddedComposerPreviewVersion}-${index}-${block.type}-${block.text}`
-        )
+        if (this.embeddedComposerPreviewBlocks().length === 0) {
+          Text('暂无预览内容')
+            .fontSize(13)
+            .fontColor('#667085')
+        } else {
+          ForEach(this.embeddedComposerPreviewBlocks(), (block: MarkdownPreviewBlock, index: number) => {
+            if (block.type === 'heading') {
+              Text(block.text)
+                .fontSize(block.level <= 1 ? 22 : 18)
+                .fontWeight(FontWeight.Bold)
+                .fontColor('#162033')
+                .width('100%')
+            } else if (block.type === 'formula') {
+              Text(block.text)
+                .fontSize(14)
+                .fontColor('#0B57D0')
+                .padding(12)
+                .width('100%')
+                .backgroundColor('#EEF4FF')
+                .borderRadius(14)
+            } else if (block.type === 'code') {
+              Text(block.text)
+                .fontSize(12)
+                .fontColor('#E2E8F0')
+                .padding(12)
+                .width('100%')
+                .backgroundColor('#162033')
+                .borderRadius(14)
+            } else {
+              Text(block.type === 'list' ? `- ${block.text}` : block.text)
+                .fontSize(14)
+                .fontColor('#344054')
+                .width('100%')
+                .lineHeight(22)
+            }
+          }, (block: MarkdownPreviewBlock, index: number): string =>
+            `composer-preview-${this.embeddedComposerPreviewVersion}-${index}-${block.type}-${block.text}`
+          )
+        }
       }
       .width('100%')
       .alignItems(HorizontalAlign.Start)
@@ -3441,12 +3509,12 @@ struct EditorWorkspace {
   @Builder
   private buildFloatingBackButton(): void {
     Row() {
-      Button('< Back')
+      Button('←')
+        .width(42)
         .height(42)
-        .padding({ left: 14, right: 14 })
         .backgroundColor('#FFFFFF')
         .fontColor('#162033')
-        .fontSize(13)
+        .fontSize(18)
         .border({ width: 1, color: '#D8E0EA' })
         .borderRadius(16)
         .onClick(() => {
@@ -3458,17 +3526,14 @@ struct EditorWorkspace {
 
   @Builder
   private buildToolbarPrimaryRow(): void {
-    Row({ space: 6 }) {
-      Row({ space: 3 }) {
-        Text('::')
-          .fontSize(13)
-          .fontColor('#667085')
-        Text('Drag')
-          .fontSize(11)
+    Row({ space: 4 }) {
+      Row() {
+        Text('⋮⋮')
+          .fontSize(12)
           .fontColor('#667085')
       }
-      .height(FLOATING_TOOL_BUTTON_SIZE)
-      .padding({ left: 10, right: 10 })
+      .height(FLOATING_TOOL_BUTTON_SIZE - 2)
+      .padding({ left: 8, right: 8 })
       .backgroundColor('#EEF2F6')
       .borderRadius(12)
       .gesture(
@@ -3494,13 +3559,12 @@ struct EditorWorkspace {
           .height(FLOATING_TOOL_BUTTON_SIZE)
           .backgroundColor(this.currentTool === tool ? '#16324F' : '#FFFFFF')
           .fontColor(this.currentTool === tool ? '#FFFFFF' : '#344054')
-          .fontSize(tool === ToolType.TEXT ? 12 : 11)
+          .fontSize(tool === ToolType.TEXT ? 14 : 16)
           .fontWeight(FontWeight.Medium)
           .border({ width: 1, color: this.currentTool === tool ? '#16324F' : '#D8E0EA' })
           .borderRadius(14)
           .onClick(() => {
             this.setTool(tool);
-            this.embedPlacementArmed = false;
           })
       }, (tool: ToolType): string => `toolbar-${tool}`)
       Blank()
@@ -3523,10 +3587,11 @@ struct EditorWorkspace {
   @Builder
   private buildToolbarSecondaryRow(): void {
     if (this.toolUsesColorPalette()) {
-      Row({ space: 10 }) {
-        Text('Color')
+      Row({ space: 8 }) {
+        Text(this.secondaryToolbarAssistText())
           .fontSize(11)
-          .fontColor('#667085')
+          .fontWeight(FontWeight.Medium)
+          .fontColor('#344054')
         ForEach(PALETTE_COLORS, (color: string) => {
           Blank()
             .width(FLOATING_TOOLBAR_COLOR_CHIP_SIZE)
@@ -3545,11 +3610,20 @@ struct EditorWorkspace {
               }
             })
         }, (color: string): string => `toolbar-color-${color}`)
+        Blank()
+          .layoutWeight(1)
+        Text(this.secondaryToolbarHintText())
+          .fontSize(11)
+          .fontColor('#667085')
       }
       .width('100%')
     } else if (this.toolUsesContextActions()) {
       Row({ space: 8 }) {
-        Button(this.embedPlacementArmed ? 'Cancel placement' : 'Insert Markdown / LaTeX')
+        Text(this.secondaryToolbarAssistText())
+          .fontSize(11)
+          .fontWeight(FontWeight.Medium)
+          .fontColor('#344054')
+        Button(this.embedPlacementArmed ? '取消放置' : '插入图文')
           .height(34)
           .padding({ left: 12, right: 12 })
           .backgroundColor(this.embedPlacementArmed ? '#FEE4E2' : '#162033')
@@ -3563,7 +3637,7 @@ struct EditorWorkspace {
               this.armEmbeddedPlacement();
             }
           })
-        Button('Preview')
+        Button('预览')
           .height(34)
           .padding({ left: 12, right: 12 })
           .backgroundColor('#FFFFFF')
@@ -3575,7 +3649,7 @@ struct EditorWorkspace {
             this.previewMode = 'preview';
             this.showInspectorDrawer = true;
           })
-        Button('Markdown')
+        Button('源码')
           .height(34)
           .padding({ left: 12, right: 12 })
           .backgroundColor('#FFFFFF')
@@ -3589,7 +3663,7 @@ struct EditorWorkspace {
           })
         Blank()
           .layoutWeight(1)
-        Text(this.currentTool === ToolType.TEXT ? 'Drag on the active page to place a text block.' : 'Lasso flow can insert mixed Markdown + LaTeX blocks.')
+        Text(this.secondaryToolbarHintText())
           .fontSize(11)
           .fontColor('#667085')
           .maxLines(2)
@@ -3862,13 +3936,13 @@ struct EditorWorkspace {
         .backgroundColor('#660B1F33')
       Column({ space: 12 }) {
         Row({ space: 8 }) {
-          Text(this.previewMode === 'preview' ? 'Page Preview' : 'Page Markdown')
+          Text(this.previewMode === 'preview' ? '页面预览' : '源码')
             .fontSize(18)
             .fontWeight(FontWeight.Bold)
             .fontColor('#162033')
           Blank()
             .layoutWeight(1)
-          Button('Preview')
+          Button('预览')
             .height(34)
             .backgroundColor(this.previewMode === 'preview' ? '#162033' : '#FFFFFF')
             .fontColor(this.previewMode === 'preview' ? '#FFFFFF' : '#162033')
@@ -3877,7 +3951,7 @@ struct EditorWorkspace {
             .onClick(() => {
               this.previewMode = 'preview';
             })
-          Button('Markdown')
+          Button('源码')
             .height(34)
             .backgroundColor(this.previewMode === 'source' ? '#162033' : '#FFFFFF')
             .fontColor(this.previewMode === 'source' ? '#FFFFFF' : '#162033')
@@ -3886,7 +3960,7 @@ struct EditorWorkspace {
             .onClick(() => {
               this.previewMode = 'source';
             })
-          Button('Close')
+          Button('关闭')
             .height(34)
             .backgroundColor('#F3F6FB')
             .fontColor('#162033')
@@ -3919,47 +3993,20 @@ struct EditorWorkspace {
         .width('100%')
         .height('100%')
         .backgroundColor('#660B1F33')
-      Column({ space: 12 }) {
-        Text('Insert Markdown / LaTeX')
-          .fontSize(20)
-          .fontWeight(FontWeight.Bold)
-          .fontColor('#162033')
-          .width('100%')
-        Text('Use mixed Markdown + LaTeX source. The saved block is stored through the finalized A service contract.')
-          .fontSize(12)
-          .fontColor('#667085')
-          .width('100%')
-        TextArea({
-          text: this.embeddedComposerText,
-          placeholder: EDITOR_WORKSPACE_COPY.sourcePlaceholder
-        })
-          .height(168)
-          .backgroundColor('#FFFFFF')
-          .border({ width: 1, color: '#D0D5DD' })
-          .borderRadius(18)
-          .padding(16)
-          .onChange((value: string) => {
-            this.embeddedComposerText = value;
-            this.embeddedComposerPreviewVersion += 1;
-          })
-        Column({ space: 8 }) {
-          Text('Live preview')
-            .fontSize(13)
-            .fontWeight(FontWeight.Medium)
-            .fontColor('#162033')
-            .width('100%')
-          this.buildEmbeddedComposerPreview()
-        }
-        .width('100%')
-        .layoutWeight(1)
-        .padding(14)
-        .backgroundColor('#F8FAFC')
-        .borderRadius(18)
-        Row({ space: 10 }) {
-          Blank()
-            .layoutWeight(1)
-          Button('Cancel')
-            .height(38)
+      Column({ space: 16 }) {
+        Row({ space: 8 }) {
+          Column({ space: 4 }) {
+            Text('插入图文 / 公式')
+              .fontSize(20)
+              .fontWeight(FontWeight.Bold)
+              .fontColor('#162033')
+            Text('左侧输入，右侧实时预览。')
+              .fontSize(12)
+              .fontColor('#667085')
+          }
+          .layoutWeight(1)
+          Button('取消')
+            .height(36)
             .padding({ left: 14, right: 14 })
             .backgroundColor('#FFFFFF')
             .fontColor('#344054')
@@ -3969,8 +4016,15 @@ struct EditorWorkspace {
             .onClick(() => {
               this.cancelEmbeddedComposer();
             })
-          Button('Save block')
-            .height(38)
+          Text('预览')
+            .fontSize(12)
+            .fontWeight(FontWeight.Medium)
+            .fontColor('#162033')
+            .padding({ left: 14, right: 14, top: 10, bottom: 10 })
+            .backgroundColor('#EEF2F6')
+            .borderRadius(12)
+          Button('完成')
+            .height(36)
             .padding({ left: 14, right: 14 })
             .backgroundColor('#162033')
             .fontColor('#FFFFFF')
@@ -3981,9 +4035,94 @@ struct EditorWorkspace {
               await this.commitEmbeddedComposer();
             })
         }
-        .width('100%')
+        if (this.writingViewportWidth >= 1180) {
+          Row({ space: 14 }) {
+            Column({ space: 8 }) {
+              Text('输入')
+                .fontSize(13)
+                .fontWeight(FontWeight.Medium)
+                .fontColor('#162033')
+                .width('100%')
+              TextArea({
+                text: this.embeddedComposerText,
+                placeholder: EDITOR_WORKSPACE_COPY.sourcePlaceholder
+              })
+                .layoutWeight(1)
+                .backgroundColor('#FFFFFF')
+                .border({ width: 1, color: '#D0D5DD' })
+                .borderRadius(18)
+                .padding(16)
+                .onChange((value: string) => {
+                  this.embeddedComposerText = value;
+                  this.embeddedComposerPreviewVersion += 1;
+                })
+            }
+            .layoutWeight(1)
+            .height('100%')
+            .padding(14)
+            .backgroundColor('#F8FAFC')
+            .borderRadius(18)
+            Column({ space: 8 }) {
+              Text('实时预览')
+                .fontSize(13)
+                .fontWeight(FontWeight.Medium)
+                .fontColor('#162033')
+                .width('100%')
+              this.buildEmbeddedComposerPreview()
+            }
+            .layoutWeight(1)
+            .height('100%')
+            .padding(14)
+            .backgroundColor('#F8FAFC')
+            .borderRadius(18)
+          }
+          .layoutWeight(1)
+          .width('100%')
+        } else {
+          Column({ space: 12 }) {
+            Column({ space: 8 }) {
+              Text('输入')
+                .fontSize(13)
+                .fontWeight(FontWeight.Medium)
+                .fontColor('#162033')
+                .width('100%')
+              TextArea({
+                text: this.embeddedComposerText,
+                placeholder: EDITOR_WORKSPACE_COPY.sourcePlaceholder
+              })
+                .height(176)
+                .backgroundColor('#FFFFFF')
+                .border({ width: 1, color: '#D0D5DD' })
+                .borderRadius(18)
+                .padding(16)
+                .onChange((value: string) => {
+                  this.embeddedComposerText = value;
+                  this.embeddedComposerPreviewVersion += 1;
+                })
+            }
+            .width('100%')
+            .padding(14)
+            .backgroundColor('#F8FAFC')
+            .borderRadius(18)
+            Column({ space: 8 }) {
+              Text('实时预览')
+                .fontSize(13)
+                .fontWeight(FontWeight.Medium)
+                .fontColor('#162033')
+                .width('100%')
+              this.buildEmbeddedComposerPreview()
+            }
+            .width('100%')
+            .layoutWeight(1)
+            .padding(14)
+            .backgroundColor('#F8FAFC')
+            .borderRadius(18)
+          }
+          .layoutWeight(1)
+          .width('100%')
+        }
       }
-      .width(760)
+      .width(this.writingViewportWidth >= 1180 ? 980 : 760)
       .height(Math.max(520, this.writingViewportHeight - 88))
       .padding(20)
       .backgroundColor('#FFFFFF')
@@ -3995,25 +4134,25 @@ struct EditorWorkspace {
 
   @Builder
   private buildModernPageRailItem(pageIndex: number): void {
-    Column({ space: 8 }) {
+    Column({ space: 6 }) {
       this.buildPageRailPreviewCard(pageIndex)
-      Row({ space: 6 }) {
-        Button(this.isPageBookmarked(pageIndex) ? 'Bk' : '+Bk')
+      Row({ space: 4 }) {
+        Button(this.bookmarkGlyph(this.isPageBookmarked(pageIndex)))
           .height(26)
-          .padding({ left: 8, right: 8 })
+          .width(34)
           .backgroundColor(this.isPageBookmarked(pageIndex) ? '#16324F' : '#FFFFFF')
           .fontColor(this.isPageBookmarked(pageIndex) ? '#FFFFFF' : '#344054')
-          .fontSize(10)
+          .fontSize(14)
           .borderRadius(12)
           .onClick(async () => {
             await this.toggleBookmarkForPage(pageIndex);
           })
         Blank()
           .layoutWeight(1)
-        Button('...')
+        Button('⋯')
           .width(PAGE_RAIL_PAGE_MENU_BUTTON_SIZE)
           .height(PAGE_RAIL_PAGE_MENU_BUTTON_SIZE)
-          .fontSize(12)
+          .fontSize(16)
           .backgroundColor('#FFFFFF')
           .fontColor('#475467')
           .borderRadius(14)
@@ -4023,15 +4162,10 @@ struct EditorWorkspace {
       }
       .width(PAGE_RAIL_THUMBNAIL_WIDTH)
       Row() {
-        Text(`P${pageIndex + 1}`)
+        Text(`第${pageIndex + 1}页`)
           .fontSize(10)
           .fontWeight(this.isSelectedPageIndex(pageIndex) ? FontWeight.Medium : FontWeight.Normal)
           .fontColor(this.isSelectedPageIndex(pageIndex) ? '#0F766E' : '#475467')
-        Blank()
-          .layoutWeight(1)
-        Text(this.isPageBookmarked(pageIndex) ? 'Marked' : '')
-          .fontSize(9)
-          .fontColor('#0F766E')
       }
       .width(PAGE_RAIL_THUMBNAIL_WIDTH)
       if (this.isPageMenuOpen(pageIndex)) {
@@ -4039,7 +4173,7 @@ struct EditorWorkspace {
       }
     }
     .width('100%')
-    .padding({ top: 2, bottom: 14 })
+    .padding({ top: 2, bottom: 10 })
     .alignItems(HorizontalAlign.Center)
     .onClick(async () => {
       await this.focusPageInViewport(pageIndex);
@@ -4048,34 +4182,74 @@ struct EditorWorkspace {
 
   @Builder
   private buildModernPageRail(): void {
-    Column({ space: 10 }) {
-      Row({ space: 6 }) {
-        Button('Undo')
-          .width(PAGE_RAIL_ACTION_BUTTON_SIZE + 10)
+    if (this.railCollapsed) {
+      Column({ space: 12 }) {
+        Button(this.railToggleGlyph())
+          .width(40)
+          .height(40)
+          .backgroundColor('#FFFFFF')
+          .fontColor('#344054')
+          .fontSize(16)
+          .borderRadius(14)
+          .onClick(() => {
+            this.setRailCollapsed(false);
+          })
+        Text('页')
+          .fontSize(11)
+          .fontColor('#667085')
+        Text(this.selectedPageLabel())
+          .fontSize(12)
+          .fontWeight(FontWeight.Medium)
+          .fontColor('#162033')
+          .textAlign(TextAlign.Center)
+      }
+      .width(EDITOR_PAGE_RAIL_COLLAPSED_WIDTH)
+      .height('100%')
+      .padding({ top: 12, bottom: 12, left: 8, right: 8 })
+      .backgroundColor('#F3F4F6')
+      .border({ width: 1, color: '#D8E0EA' })
+      .borderRadius(20)
+      .justifyContent(FlexAlign.Start)
+      .alignItems(HorizontalAlign.Center)
+    } else {
+      Column({ space: 10 }) {
+      Row({ space: 4 }) {
+        Button(this.railToggleGlyph())
+          .width(PAGE_RAIL_ACTION_BUTTON_SIZE)
+          .height(PAGE_RAIL_ACTION_BUTTON_SIZE)
+          .backgroundColor('#FFFFFF')
+          .fontColor('#344054')
+          .fontSize(15)
+          .borderRadius(14)
+          .onClick(() => {
+            this.setRailCollapsed(true);
+          })
+        Button('↶')
+          .width(PAGE_RAIL_ACTION_BUTTON_SIZE)
           .height(PAGE_RAIL_ACTION_BUTTON_SIZE)
           .backgroundColor('#FFFFFF')
           .fontColor('#667085')
-          .fontSize(11)
+          .fontSize(16)
           .borderRadius(14)
           .onClick(() => {
             this.undoStroke();
           })
-        Button('Redo')
-          .width(PAGE_RAIL_ACTION_BUTTON_SIZE + 10)
+        Button('↷')
+          .width(PAGE_RAIL_ACTION_BUTTON_SIZE)
           .height(PAGE_RAIL_ACTION_BUTTON_SIZE)
           .backgroundColor('#FFFFFF')
           .fontColor('#667085')
-          .fontSize(11)
+          .fontSize(16)
           .borderRadius(14)
           .onClick(() => {
             this.redoStroke();
           })
-        Button('Menu')
-          .width(PAGE_RAIL_ACTION_BUTTON_SIZE + 8)
+        Button('⋯')
+          .width(PAGE_RAIL_ACTION_BUTTON_SIZE)
           .height(PAGE_RAIL_ACTION_BUTTON_SIZE)
           .backgroundColor('#FFFFFF')
           .fontColor('#344054')
-          .fontSize(11)
+          .fontSize(18)
           .borderRadius(14)
           .onClick(() => {
             this.toggleRailMenu();
@@ -4096,7 +4270,7 @@ struct EditorWorkspace {
       }
       .width('100%')
       Row({ space: 8 }) {
-        TextInput({ text: this.pageSearchText, placeholder: 'Search pages' })
+        TextInput({ text: this.pageSearchText, placeholder: '搜索页面' })
           .layoutWeight(1)
           .height(34)
           .backgroundColor('#FFFFFF')
@@ -4108,13 +4282,13 @@ struct EditorWorkspace {
       }
       .width('100%')
       Row() {
-        Text(`Pages ${this.selectedPageLabel()}`)
+        Text(`页面 ${this.selectedPageLabel()}`)
           .fontSize(13)
           .fontWeight(FontWeight.Medium)
           .fontColor('#101828')
         Blank()
           .layoutWeight(1)
-        Button('Jump')
+        Button('跳页')
           .height(30)
           .padding({ left: 10, right: 10 })
           .backgroundColor('#FFFFFF')
@@ -4134,10 +4308,10 @@ struct EditorWorkspace {
             .backgroundColor('#FFFFFF')
             .textAlign(TextAlign.Center)
             .borderRadius(12)
-            .onChange((value: string) => {
-              this.pageJumpDraft = value.replace(/[^0-9]/g, '');
-            })
-          Button('Go')
+              .onChange((value: string) => {
+                this.pageJumpDraft = value.replace(/[^0-9]/g, '');
+              })
+          Button('前往')
             .height(34)
             .enabled(this.pageJumpTargetIndex() >= 0)
             .backgroundColor('#162033')
@@ -4168,13 +4342,14 @@ struct EditorWorkspace {
       if (this.showRailMenu) {
         this.buildRailMenu()
       }
+      }
+      .width(EDITOR_PAGE_RAIL_WIDTH)
+      .height('100%')
+      .padding(8)
+      .backgroundColor('#F3F4F6')
+      .border({ width: 1, color: '#D8E0EA' })
+      .borderRadius(22)
     }
-    .width(EDITOR_PAGE_RAIL_WIDTH)
-    .height('100%')
-    .padding(10)
-    .backgroundColor('#F3F4F6')
-    .border({ width: 1, color: '#D8E0EA' })
-    .borderRadius(22)
   }
 
   build() {
@@ -4242,3 +4417,4 @@ struct EditorWorkspace {
     }
   }
 }
+
