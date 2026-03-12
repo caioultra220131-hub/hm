@@ -1,6 +1,6 @@
 # Thread Work Automation
 
-This project provides a Windows PowerShell automation script that opens one target thread, waits 5 seconds, and then sends the configured command. When an executor thread is supplied, the script appends `<executor> finish` to the message.
+This project provides a Windows PowerShell automation script that wakes a Codex thread by clicking a fixed composer coordinate and then sending the configured command. When an executor thread is supplied, the script appends `<executor> finish` to the message.
 
 ## Run
 
@@ -22,10 +22,16 @@ Specify both the target thread and the executor thread:
 powershell -ExecutionPolicy Bypass -File .\run-thread-work.ps1 -ThreadName "H" -ExecutorThreadName "A"
 ```
 
-With the example above, the script clicks thread `H` and sends:
+Use the stable logical thread prefix such as `B`, not a volatile visible label:
+
+```powershell
+& 'C:\Users\lasrorder\hw\MyApplication\run-thread-work.ps1' -ThreadName 'B' -ExecutorThreadName 'H' -WindowTitleRegex '^Codex$'
+```
+
+With the example above, the script clicks the configured composer coordinate for thread `B` and sends:
 
 ```text
-work run, A finish
+work run, H finish
 ```
 
 ## Agent Behavior
@@ -40,17 +46,42 @@ They should not stop at:
 They should instead:
 - request desktop-automation permission if the environment requires it
 - run `run-thread-work.ps1` directly
+- check the child process `ExitCode`
+- inspect `tmp/thread-work-last.log` when the wake-up script fails
 - report only success or failure of that execution
 
 ## Config
 
 - `TargetThreadName`: default target thread, for example `H`.
 - `ExecutorThreadName`: optional executor/source thread name. If set to `A`, the final message becomes `work run, A finish`.
-- `WindowTitleRegex`: optional regex used to limit the search to one top-level window.
 - `Message`: text to send after opening the thread.
+- `ThreadTargets`: optional per-thread coordinate map. Each entry can define absolute `X` / `Y` pixels, normalized full-screen `XRatio` / `YRatio`, or a window rectangle via `LeftRatio` / `TopRatio` / `WidthRatio` / `HeightRatio`.
+- `ComposerClickXRatio`: click position inside the target window rectangle on the X axis. Default `0.470`.
+- `ComposerClickYRatio`: click position inside the target window rectangle on the Y axis. Default `0.905`.
+- `WindowTitleRegex`: kept only for backward-compatible callers and ignored in fixed-coordinate mode.
+- `SelectionAttempts`: kept only for backward-compatible callers and ignored in fixed-coordinate mode.
+- `SelectionTimeoutMs`: kept only for backward-compatible callers and ignored in fixed-coordinate mode.
+
+Example `thread-work.config.json` override:
+
+```json
+{
+  "ThreadTargets": {
+    "H": { "LeftRatio": 0.0, "TopRatio": 0.0, "WidthRatio": 0.5, "HeightRatio": 0.5 },
+    "A": { "LeftRatio": 0.5, "TopRatio": 0.0, "WidthRatio": 0.5, "HeightRatio": 0.5 },
+    "B": { "LeftRatio": 0.0, "TopRatio": 0.5, "WidthRatio": 0.5, "HeightRatio": 0.5 },
+    "T": { "LeftRatio": 0.5, "TopRatio": 0.5, "WidthRatio": 0.5, "HeightRatio": 0.5 },
+    "Test": { "LeftRatio": 0.5, "TopRatio": 0.5, "WidthRatio": 0.5, "HeightRatio": 0.5 }
+  }
+}
+```
 
 ## Notes
 
-- The script uses Windows UI Automation first and falls back to a direct click at the element center.
-- After opening the thread, it tries to locate the most likely input control near the bottom of the active window.
-- If the target thread cannot be found, the script exits with an error.
+- The default built-in layout assumes a fixed 2x2 Codex window grid: `H` = top-left, `A` = top-right, `B` = bottom-left, `T/Test` = bottom-right.
+- The actual click point is resolved from the target window rectangle plus `ComposerClickXRatio` / `ComposerClickYRatio`, so the default click lands near the prompt box instead of the window center.
+- Pass stable logical names such as `A`, `B`, `H`, and `Test`. The script no longer reads visible sidebar labels.
+- If your window layout changes, override `ThreadTargets` in `thread-work.config.json` instead of editing the script.
+- The script allows only one active wake-up run at a time so repeated retries do not overlap UI automation against the same Codex desktop layout.
+- It writes step-by-step diagnostics to `tmp/thread-work-last.log`.
+- If the target thread has no configured coordinate, the script exits with an error.

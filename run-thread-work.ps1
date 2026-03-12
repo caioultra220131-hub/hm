@@ -5,15 +5,87 @@ param(
     [string]$Message,
     [string]$WindowTitleRegex,
     [double]$ComposerClickXRatio = 0.470,
-    [double]$ComposerClickYRatio = 0.905
+    [double]$ComposerClickYRatio = 0.905,
+    [ValidateRange(1, 10)]
+    [int]$SelectionAttempts = 1,
+    [ValidateRange(200, 10000)]
+    [int]$SelectionTimeoutMs = 1200,
+    [string]$LogPath
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
 Add-Type -AssemblyName System.Windows.Forms
-Add-Type -AssemblyName UIAutomationClient
-Add-Type -AssemblyName UIAutomationTypes
+
+$script:ThreadWorkLogPath = if ([string]::IsNullOrWhiteSpace($LogPath)) {
+    Join-Path $PSScriptRoot 'tmp\thread-work-last.log'
+}
+else {
+    $LogPath
+}
+$script:ThreadWorkMutex = $null
+$script:ThreadWorkMutexAcquired = $false
+
+function Write-ThreadWorkLog {
+    param([string]$Message)
+
+    try {
+        $logDirectory = Split-Path -Path $script:ThreadWorkLogPath -Parent
+        if (-not [string]::IsNullOrWhiteSpace($logDirectory) -and -not (Test-Path -LiteralPath $logDirectory)) {
+            New-Item -ItemType Directory -Path $logDirectory -Force | Out-Null
+        }
+
+        $timestamp = Get-Date -Format 'yyyy-MM-ddTHH:mm:ss.fffK'
+        Add-Content -LiteralPath $script:ThreadWorkLogPath -Value "[$timestamp] $Message"
+    }
+    catch {
+        # Logging must never block the wake-up flow.
+    }
+}
+
+function Get-ThreadWorkMutexName {
+    $workspaceKey = ($PSScriptRoot -replace '[^A-Za-z0-9]+', '_').Trim('_')
+    if ([string]::IsNullOrWhiteSpace($workspaceKey)) {
+        $workspaceKey = 'workspace'
+    }
+
+    return "Local\CodexThreadWork_$workspaceKey"
+}
+
+function Enter-ThreadWorkMutex {
+    $mutexName = Get-ThreadWorkMutexName
+    $script:ThreadWorkMutex = New-Object System.Threading.Mutex($false, $mutexName)
+
+    try {
+        $script:ThreadWorkMutexAcquired = $script:ThreadWorkMutex.WaitOne(0)
+    }
+    catch [System.Threading.AbandonedMutexException] {
+        $script:ThreadWorkMutexAcquired = $true
+    }
+
+    if (-not $script:ThreadWorkMutexAcquired) {
+        throw 'Another run-thread-work.ps1 instance is already active. Wait for it to finish or terminate the stuck wake-up process before retrying.'
+    }
+}
+
+function Exit-ThreadWorkMutex {
+    if ($script:ThreadWorkMutexAcquired -and $script:ThreadWorkMutex) {
+        try {
+            $script:ThreadWorkMutex.ReleaseMutex()
+        }
+        catch {
+            # Ignore release errors during shutdown.
+        }
+    }
+
+    if ($script:ThreadWorkMutex) {
+        $script:ThreadWorkMutex.Dispose()
+    }
+
+    $script:ThreadWorkMutex = $null
+    $script:ThreadWorkMutexAcquired = $false
+}
 
 if (-not ('ThreadWork.NativeMethods' -as [type])) {
     Add-Type -TypeDefinition @'
@@ -24,15 +96,6 @@ namespace ThreadWork
 {
     public static class NativeMethods
     {
-        [DllImport("user32.dll")]
-        public static extern bool SetForegroundWindow(IntPtr hWnd);
-
-        [DllImport("user32.dll")]
-        public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
-
-        [DllImport("user32.dll")]
-        public static extern IntPtr GetForegroundWindow();
-
         [DllImport("user32.dll")]
         public static extern bool SetCursorPos(int x, int y);
 
@@ -74,86 +137,6 @@ function Resolve-Setting {
     return $DefaultValue
 }
 
-function Get-CurrentPattern {
-    param(
-        [System.Windows.Automation.AutomationElement]$Element,
-        [System.Windows.Automation.AutomationPattern]$Pattern
-    )
-
-    $patternObject = $null
-    if ($Element -and $Element.TryGetCurrentPattern($Pattern, [ref]$patternObject)) {
-        return $patternObject
-    }
-
-    return $null
-}
-
-function Get-ForegroundWindowElement {
-    $handle = [ThreadWork.NativeMethods]::GetForegroundWindow()
-    if ($handle -eq [IntPtr]::Zero) {
-        return $null
-    }
-
-    try {
-        return [System.Windows.Automation.AutomationElement]::FromHandle($handle)
-    }
-    catch {
-        return $null
-    }
-}
-
-function Get-TopLevelWindows {
-    param([string]$TitleRegex)
-
-    $allChildren = [System.Windows.Automation.AutomationElement]::RootElement.FindAll(
-        [System.Windows.Automation.TreeScope]::Children,
-        [System.Windows.Automation.Condition]::TrueCondition
-    )
-
-    $windows = New-Object System.Collections.Generic.List[System.Windows.Automation.AutomationElement]
-    foreach ($child in $allChildren) {
-        if ($child.Current.ControlType -ne [System.Windows.Automation.ControlType]::Window) {
-            continue
-        }
-
-        if ([string]::IsNullOrWhiteSpace($child.Current.Name)) {
-            continue
-        }
-
-        if (-not [string]::IsNullOrWhiteSpace($TitleRegex) -and $child.Current.Name -notmatch $TitleRegex) {
-            continue
-        }
-
-        $windows.Add($child)
-    }
-
-    return $windows
-}
-
-function Get-SearchRoots {
-    param([string]$TitleRegex)
-
-    $roots = New-Object System.Collections.Generic.List[System.Windows.Automation.AutomationElement]
-    $foregroundWindow = Get-ForegroundWindowElement
-    if ($foregroundWindow) {
-        $roots.Add($foregroundWindow)
-    }
-
-    foreach ($window in (Get-TopLevelWindows -TitleRegex $TitleRegex)) {
-        if ($foregroundWindow -and $window.Current.NativeWindowHandle -eq $foregroundWindow.Current.NativeWindowHandle) {
-            continue
-        }
-
-        $roots.Add($window)
-    }
-
-    if ($roots.Count -eq 0) {
-        $roots.Add([System.Windows.Automation.AutomationElement]::RootElement)
-    }
-
-    return $roots
-}
-
 function Get-ThreadAliases {
     param([string]$Name)
 
@@ -164,159 +147,132 @@ function Get-ThreadAliases {
     }
 }
 
-function Get-ControlTypeRank {
-    param([System.Windows.Automation.AutomationElement]$Element)
-
-    switch ($Element.Current.ControlType.ProgrammaticName) {
-        'ControlType.ListItem' { return 0 }
-        'ControlType.TabItem' { return 1 }
-        'ControlType.Button' { return 2 }
-        'ControlType.TreeItem' { return 3 }
-        default { return 4 }
+function Get-DefaultThreadTargets {
+    # Default layout assumes four Codex windows snapped in a stable 2x2 grid.
+    # The final click point is resolved inside each window rectangle by the
+    # composer ratios, so the click lands in the thread input box instead of
+    # the window center.
+    return @{
+        H    = [pscustomobject]@{ LeftRatio = 0.000; TopRatio = 0.000; WidthRatio = 0.500; HeightRatio = 0.500 }
+        A    = [pscustomobject]@{ LeftRatio = 0.500; TopRatio = 0.000; WidthRatio = 0.500; HeightRatio = 0.500 }
+        B    = [pscustomobject]@{ LeftRatio = 0.000; TopRatio = 0.500; WidthRatio = 0.500; HeightRatio = 0.500 }
+        T    = [pscustomobject]@{ LeftRatio = 0.500; TopRatio = 0.500; WidthRatio = 0.500; HeightRatio = 0.500 }
+        Test = [pscustomobject]@{ LeftRatio = 0.500; TopRatio = 0.500; WidthRatio = 0.500; HeightRatio = 0.500 }
     }
 }
 
-function Test-IsSidebarCandidate {
-    param([System.Windows.Rect]$Bounds)
-
-    return (
-        $Bounds.Left -ge 0 -and
-        $Bounds.Left -lt 500 -and
-        $Bounds.Top -ge 0 -and
-        $Bounds.Width -gt 80 -and
-        $Bounds.Width -lt 500
-    )
-}
-
-function Find-ThreadElement {
+function Merge-ThreadTargets {
     param(
-        [string]$Name,
-        [string]$TitleRegex
+        [hashtable]$BaseTargets,
+        [object]$ConfigTargets
     )
 
-    $controlTypeConditions = @(
-        (New-Object System.Windows.Automation.PropertyCondition(
-            [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
-            [System.Windows.Automation.ControlType]::Button
-        )),
-        (New-Object System.Windows.Automation.PropertyCondition(
-            [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
-            [System.Windows.Automation.ControlType]::ListItem
-        )),
-        (New-Object System.Windows.Automation.PropertyCondition(
-            [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
-            [System.Windows.Automation.ControlType]::TabItem
-        )),
-        (New-Object System.Windows.Automation.PropertyCondition(
-            [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
-            [System.Windows.Automation.ControlType]::TreeItem
-        )),
-        (New-Object System.Windows.Automation.PropertyCondition(
-            [System.Windows.Automation.AutomationElement]::ControlTypeProperty,
-            [System.Windows.Automation.ControlType]::Text
-        ))
-    )
-
-    $candidateCondition = New-Object System.Windows.Automation.OrCondition($controlTypeConditions)
-    $aliases = Get-ThreadAliases -Name $Name
-
-    $matches = @()
-    foreach ($root in (Get-SearchRoots -TitleRegex $TitleRegex)) {
-        $candidates = $root.FindAll([System.Windows.Automation.TreeScope]::Descendants, $candidateCondition)
-        foreach ($candidate in $candidates) {
-            if ($candidate.Current.IsOffscreen) {
-                continue
-            }
-
-            $bounds = $candidate.Current.BoundingRectangle
-            if ($bounds.Width -le 0 -or $bounds.Height -le 0) {
-                continue
-            }
-
-            foreach ($alias in $aliases) {
-                $candidateName = $candidate.Current.Name
-                $isExactMatch = $candidateName -eq $alias
-                $isPrefixMatch = $candidateName.StartsWith($alias, [System.StringComparison]::OrdinalIgnoreCase)
-
-                if ($isExactMatch -or $isPrefixMatch) {
-                    $matches += [pscustomobject]@{
-                        Element          = $candidate
-                        Name             = $candidateName
-                        MatchRank        = if ($isExactMatch) { 0 } else { 1 }
-                        SidebarRank      = if (Test-IsSidebarCandidate -Bounds $bounds) { 0 } else { 1 }
-                        ControlTypeRank  = Get-ControlTypeRank -Element $candidate
-                        Left             = $bounds.Left
-                        Top              = $bounds.Top
-                        NameLength       = $candidateName.Length
-                    }
-                }
-            }
-        }
+    $merged = @{}
+    foreach ($key in $BaseTargets.Keys) {
+        $merged[$key] = $BaseTargets[$key]
     }
 
-    if (-not $matches) {
+    if ($null -eq $ConfigTargets) {
+        return $merged
+    }
+
+    foreach ($property in $ConfigTargets.PSObject.Properties) {
+        $merged[$property.Name] = $property.Value
+    }
+
+    return $merged
+}
+
+function Get-TargetPropertyValue {
+    param(
+        [object]$Target,
+        [string[]]$Names
+    )
+
+    if ($null -eq $Target) {
         return $null
     }
 
-    return (
-        $matches |
-        Sort-Object -Property @(
-            @{ Expression = 'MatchRank'; Descending = $false },
-            @{ Expression = 'SidebarRank'; Descending = $false },
-            @{ Expression = 'ControlTypeRank'; Descending = $false },
-            @{ Expression = 'Left'; Descending = $false },
-            @{ Expression = 'Top'; Descending = $false },
-            @{ Expression = 'NameLength'; Descending = $false }
-        ) |
-        Select-Object -First 1
-    ).Element
-}
-
-function Get-ContainingWindow {
-    param([System.Windows.Automation.AutomationElement]$Element)
-
-    $walker = [System.Windows.Automation.TreeWalker]::ControlViewWalker
-    $current = $Element
-    while ($current) {
-        if ($current.Current.ControlType -eq [System.Windows.Automation.ControlType]::Window) {
-            return $current
+    if ($Target -is [hashtable]) {
+        foreach ($name in $Names) {
+            if ($Target.ContainsKey($name)) {
+                return $Target[$name]
+            }
         }
+    }
 
-        $current = $walker.GetParent($current)
+    foreach ($name in $Names) {
+        $property = $Target.PSObject.Properties[$name]
+        if ($null -ne $property) {
+            return $property.Value
+        }
     }
 
     return $null
 }
 
-function Activate-Window {
-    param([System.Windows.Automation.AutomationElement]$Window)
+function Resolve-ThreadTargetPoint {
+    param(
+        [string]$Name,
+        [object]$Config,
+        [double]$ComposerXRatio,
+        [double]$ComposerYRatio
+    )
 
-    if (-not $Window) {
-        return
+    $targets = Get-DefaultThreadTargets
+    if ($null -ne $Config -and $null -ne $Config.PSObject.Properties['ThreadTargets']) {
+        $targets = Merge-ThreadTargets -BaseTargets $targets -ConfigTargets $Config.ThreadTargets
     }
 
-    $handle = [IntPtr]$Window.Current.NativeWindowHandle
-    if ($handle -eq [IntPtr]::Zero) {
-        return
+    $target = $null
+    foreach ($alias in (Get-ThreadAliases -Name $Name)) {
+        if ($targets.ContainsKey($alias)) {
+            $target = $targets[$alias]
+            break
+        }
     }
 
-    [ThreadWork.NativeMethods]::ShowWindow($handle, 5) | Out-Null
-    [ThreadWork.NativeMethods]::SetForegroundWindow($handle) | Out-Null
-    Start-Sleep -Milliseconds 200
-}
+    if ($null -eq $target) {
+        throw "No coordinate target was configured for thread '$Name'."
+    }
 
-function Click-ElementCenter {
-    param([System.Windows.Automation.AutomationElement]$Element)
+    $screenBounds = [System.Windows.Forms.Screen]::PrimaryScreen.WorkingArea
 
-    $bounds = $Element.Current.BoundingRectangle
-    $centerX = [int][Math]::Round($bounds.Left + ($bounds.Width / 2))
-    $centerY = [int][Math]::Round($bounds.Top + ($bounds.Height / 2))
+    $xValue = Get-TargetPropertyValue -Target $target -Names @('X', 'x')
+    $yValue = Get-TargetPropertyValue -Target $target -Names @('Y', 'y')
+    if ($null -ne $xValue -and $null -ne $yValue) {
+        return [pscustomobject]@{
+            X = [int][Math]::Round([double]$xValue)
+            Y = [int][Math]::Round([double]$yValue)
+        }
+    }
 
-    [ThreadWork.NativeMethods]::SetCursorPos($centerX, $centerY) | Out-Null
-    Start-Sleep -Milliseconds 100
-    [ThreadWork.NativeMethods]::mouse_event(0x0002, 0, 0, 0, [UIntPtr]::Zero)
-    Start-Sleep -Milliseconds 50
-    [ThreadWork.NativeMethods]::mouse_event(0x0004, 0, 0, 0, [UIntPtr]::Zero)
+    $xRatio = Get-TargetPropertyValue -Target $target -Names @('XRatio', 'xRatio', 'x_ratio')
+    $yRatio = Get-TargetPropertyValue -Target $target -Names @('YRatio', 'yRatio', 'y_ratio')
+    if ($null -ne $xRatio -and $null -ne $yRatio) {
+        return [pscustomobject]@{
+            X = [int][Math]::Round($screenBounds.Left + ($screenBounds.Width * [double]$xRatio))
+            Y = [int][Math]::Round($screenBounds.Top + ($screenBounds.Height * [double]$yRatio))
+        }
+    }
+
+    $leftRatio = Get-TargetPropertyValue -Target $target -Names @('LeftRatio', 'leftRatio', 'left_ratio')
+    $topRatio = Get-TargetPropertyValue -Target $target -Names @('TopRatio', 'topRatio', 'top_ratio')
+    $widthRatio = Get-TargetPropertyValue -Target $target -Names @('WidthRatio', 'widthRatio', 'width_ratio')
+    $heightRatio = Get-TargetPropertyValue -Target $target -Names @('HeightRatio', 'heightRatio', 'height_ratio')
+    if ($null -eq $leftRatio -or $null -eq $topRatio -or $null -eq $widthRatio -or $null -eq $heightRatio) {
+        throw "Thread '$Name' target must define either X/Y, XRatio/YRatio, or LeftRatio/TopRatio/WidthRatio/HeightRatio."
+    }
+
+    $windowLeft = $screenBounds.Left + ($screenBounds.Width * [double]$leftRatio)
+    $windowTop = $screenBounds.Top + ($screenBounds.Height * [double]$topRatio)
+    $windowWidth = $screenBounds.Width * [double]$widthRatio
+    $windowHeight = $screenBounds.Height * [double]$heightRatio
+
+    return [pscustomobject]@{
+        X = [int][Math]::Round($windowLeft + ($windowWidth * $ComposerXRatio))
+        Y = [int][Math]::Round($windowTop + ($windowHeight * $ComposerYRatio))
+    }
 }
 
 function Click-ScreenPoint {
@@ -330,68 +286,6 @@ function Click-ScreenPoint {
     [ThreadWork.NativeMethods]::mouse_event(0x0002, 0, 0, 0, [UIntPtr]::Zero)
     Start-Sleep -Milliseconds 50
     [ThreadWork.NativeMethods]::mouse_event(0x0004, 0, 0, 0, [UIntPtr]::Zero)
-}
-
-function Click-ThreadHotspot {
-    param([System.Windows.Automation.AutomationElement]$Element)
-
-    $bounds = $Element.Current.BoundingRectangle
-    $targetX = [int][Math]::Round($bounds.Left + [Math]::Min(80, $bounds.Width * 0.25))
-    $targetY = [int][Math]::Round($bounds.Top + ($bounds.Height / 2))
-
-    Click-ScreenPoint -X $targetX -Y $targetY
-}
-
-function Click-ComposerHotspot {
-    param(
-        [System.Windows.Automation.AutomationElement]$Window,
-        [double]$XRatio,
-        [double]$YRatio
-    )
-
-    if (-not $Window) {
-        return
-    }
-
-    $bounds = $Window.Current.BoundingRectangle
-    if ($bounds.Width -le 0 -or $bounds.Height -le 0) {
-        return
-    }
-
-    $targetX = [int][Math]::Round($bounds.Left + ($bounds.Width * $XRatio))
-    $targetY = [int][Math]::Round($bounds.Top + ($bounds.Height * $YRatio))
-
-    Click-ScreenPoint -X $targetX -Y $targetY
-}
-
-function Open-ThreadElement {
-    param([System.Windows.Automation.AutomationElement]$Element)
-
-    if ($Element.Current.ControlType -eq [System.Windows.Automation.ControlType]::ListItem -and (Test-IsSidebarCandidate -Bounds $Element.Current.BoundingRectangle)) {
-        Click-ThreadHotspot -Element $Element
-        return
-    }
-
-    $invokePattern = Get-CurrentPattern -Element $Element -Pattern ([System.Windows.Automation.InvokePattern]::Pattern)
-    if ($invokePattern) {
-        ([System.Windows.Automation.InvokePattern]$invokePattern).Invoke()
-        return
-    }
-
-    $selectionPattern = Get-CurrentPattern -Element $Element -Pattern ([System.Windows.Automation.SelectionItemPattern]::Pattern)
-    if ($selectionPattern) {
-        ([System.Windows.Automation.SelectionItemPattern]$selectionPattern).Select()
-        return
-    }
-
-    try {
-        $Element.SetFocus()
-    }
-    catch {
-        Write-Verbose "Thread element does not accept focus; using direct click fallback."
-    }
-
-    Click-ElementCenter -Element $Element
 }
 
 function Convert-ToSendKeysLiteral {
@@ -427,26 +321,28 @@ function Send-TextByPaste {
         $hadClipboardText = $false
     }
 
+    Write-ThreadWorkLog "Setting clipboard text: $Text"
     Set-Clipboard -Value $Text
     Start-Sleep -Milliseconds 120
+    Write-ThreadWorkLog 'Sending Ctrl+V to paste.'
     [System.Windows.Forms.SendKeys]::SendWait('^v')
     Start-Sleep -Milliseconds 180
 
     if ($hadClipboardText) {
+        Write-ThreadWorkLog 'Restoring previous clipboard text.'
         Set-Clipboard -Value $previousClipboardText
     }
 }
 
 function Send-ThreadMessage {
     param(
-        [System.Windows.Automation.AutomationElement]$Window,
-        [string]$Text,
-        [double]$ComposerXRatio,
-        [double]$ComposerYRatio
+        [int]$X,
+        [int]$Y,
+        [string]$Text
     )
 
-    Activate-Window -Window $Window
-    Click-ComposerHotspot -Window $Window -XRatio $ComposerXRatio -YRatio $ComposerYRatio
+    Write-ThreadWorkLog "Clicking thread composer at ($X,$Y)."
+    Click-ScreenPoint -X $X -Y $Y
     Start-Sleep -Milliseconds 300
 
     $pasted = $false
@@ -459,11 +355,14 @@ function Send-ThreadMessage {
     }
 
     if (-not $pasted) {
+        Write-ThreadWorkLog 'Paste failed; falling back to direct SendKeys text input.'
         [System.Windows.Forms.SendKeys]::SendWait((Convert-ToSendKeysLiteral -Text $Text))
         Start-Sleep -Milliseconds 150
     }
 
+    Write-ThreadWorkLog 'Sending Enter key.'
     [System.Windows.Forms.SendKeys]::SendWait('{ENTER}')
+    Write-ThreadWorkLog 'Send pipeline completed.'
 }
 
 $config = Get-ThreadWorkConfig
@@ -483,35 +382,32 @@ else {
     "$resolvedBaseMessage, $resolvedExecutor finish"
 }
 
-Write-Host "Searching for thread '$resolvedThreadName'..."
-$threadElement = Find-ThreadElement -Name $resolvedThreadName -TitleRegex $resolvedWindowTitleRegex
-if (-not $threadElement) {
-    $scopeDescription = if ([string]::IsNullOrWhiteSpace($resolvedWindowTitleRegex)) {
-        'the foreground window and top-level windows'
+try {
+    Enter-ThreadWorkMutex
+    Set-Content -LiteralPath $script:ThreadWorkLogPath -Value ''
+    Write-ThreadWorkLog "Thread wake-up started. target=$resolvedThreadName executor=$resolvedExecutor message=$resolvedMessage"
+
+    if (-not [string]::IsNullOrWhiteSpace($resolvedWindowTitleRegex)) {
+        Write-ThreadWorkLog "WindowTitleRegex '$resolvedWindowTitleRegex' is ignored in fixed-coordinate mode."
     }
-    else {
-        "windows matching /$resolvedWindowTitleRegex/"
+
+    if ($SelectionAttempts -ne 1 -or $SelectionTimeoutMs -ne 1200) {
+        Write-ThreadWorkLog 'SelectionAttempts and SelectionTimeoutMs are ignored in fixed-coordinate mode.'
     }
 
-    throw "Could not find thread '$resolvedThreadName' in $scopeDescription."
+    $targetPoint = Resolve-ThreadTargetPoint `
+        -Name $resolvedThreadName `
+        -Config $config `
+        -ComposerXRatio $ComposerClickXRatio `
+        -ComposerYRatio $ComposerClickYRatio
+    Write-Host "Clicking thread '$resolvedThreadName' composer at ($($targetPoint.X), $($targetPoint.Y))..."
+    Send-ThreadMessage -X $targetPoint.X -Y $targetPoint.Y -Text $resolvedMessage
+    Write-Host "Wake-up message sent to thread '$resolvedThreadName'."
 }
-
-$threadWindow = Get-ContainingWindow -Element $threadElement
-Activate-Window -Window $threadWindow
-Open-ThreadElement -Element $threadElement
-
-Write-Host "Opened thread '$resolvedThreadName'. Waiting 5 seconds..."
-Start-Sleep -Seconds 5
-
-$activeWindow = Get-ForegroundWindowElement
-if (-not $activeWindow) {
-    $activeWindow = $threadWindow
+catch {
+    Write-ThreadWorkLog "ERROR: $($_.Exception.Message)"
+    throw
 }
-
-if (-not $activeWindow) {
-    throw 'Could not resolve the target window after opening the thread.'
+finally {
+    Exit-ThreadWorkMutex
 }
-
-Write-Host "Sending message: $resolvedMessage"
-Send-ThreadMessage -Window $activeWindow -Text $resolvedMessage -ComposerXRatio $ComposerClickXRatio -ComposerYRatio $ComposerClickYRatio
-Write-Host "Wake-up message sent to thread '$resolvedThreadName'."
