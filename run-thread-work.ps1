@@ -153,11 +153,11 @@ function Get-DefaultThreadTargets {
     # composer ratios, so the click lands in the thread input box instead of
     # the window center.
     return @{
-        H    = [pscustomobject]@{ LeftRatio = 0.000; TopRatio = 0.000; WidthRatio = 0.500; HeightRatio = 0.500 }
-        A    = [pscustomobject]@{ LeftRatio = 0.500; TopRatio = 0.000; WidthRatio = 0.500; HeightRatio = 0.500 }
-        B    = [pscustomobject]@{ LeftRatio = 0.000; TopRatio = 0.500; WidthRatio = 0.500; HeightRatio = 0.500 }
-        T    = [pscustomobject]@{ LeftRatio = 0.500; TopRatio = 0.500; WidthRatio = 0.500; HeightRatio = 0.500 }
-        Test = [pscustomobject]@{ LeftRatio = 0.500; TopRatio = 0.500; WidthRatio = 0.500; HeightRatio = 0.500 }
+        H    = [pscustomobject]@{ LeftRatio = 0.000; TopRatio = 0.000; WidthRatio = 0.500; HeightRatio = 0.500; ComposerYRatio = 0.800 }
+        A    = [pscustomobject]@{ LeftRatio = 0.500; TopRatio = 0.000; WidthRatio = 0.500; HeightRatio = 0.500; ComposerYRatio = 0.800 }
+        B    = [pscustomobject]@{ LeftRatio = 0.000; TopRatio = 0.500; WidthRatio = 0.500; HeightRatio = 0.500; ComposerYRatio = 0.840 }
+        T    = [pscustomobject]@{ LeftRatio = 0.500; TopRatio = 0.500; WidthRatio = 0.500; HeightRatio = 0.500; ComposerYRatio = 0.840 }
+        Test = [pscustomobject]@{ LeftRatio = 0.500; TopRatio = 0.500; WidthRatio = 0.500; HeightRatio = 0.500; ComposerYRatio = 0.840 }
     }
 }
 
@@ -264,14 +264,24 @@ function Resolve-ThreadTargetPoint {
         throw "Thread '$Name' target must define either X/Y, XRatio/YRatio, or LeftRatio/TopRatio/WidthRatio/HeightRatio."
     }
 
+    $resolvedComposerXRatio = Get-TargetPropertyValue -Target $target -Names @('ComposerXRatio', 'composerXRatio', 'composer_x_ratio')
+    if ($null -eq $resolvedComposerXRatio) {
+        $resolvedComposerXRatio = $ComposerXRatio
+    }
+
+    $resolvedComposerYRatio = Get-TargetPropertyValue -Target $target -Names @('ComposerYRatio', 'composerYRatio', 'composer_y_ratio')
+    if ($null -eq $resolvedComposerYRatio) {
+        $resolvedComposerYRatio = $ComposerYRatio
+    }
+
     $windowLeft = $screenBounds.Left + ($screenBounds.Width * [double]$leftRatio)
     $windowTop = $screenBounds.Top + ($screenBounds.Height * [double]$topRatio)
     $windowWidth = $screenBounds.Width * [double]$widthRatio
     $windowHeight = $screenBounds.Height * [double]$heightRatio
 
     return [pscustomobject]@{
-        X = [int][Math]::Round($windowLeft + ($windowWidth * $ComposerXRatio))
-        Y = [int][Math]::Round($windowTop + ($windowHeight * $ComposerYRatio))
+        X = [int][Math]::Round($windowLeft + ($windowWidth * [double]$resolvedComposerXRatio))
+        Y = [int][Math]::Round($windowTop + ($windowHeight * [double]$resolvedComposerYRatio))
     }
 }
 

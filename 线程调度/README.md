@@ -55,7 +55,7 @@ They should instead:
 - `TargetThreadName`: default target thread, for example `H`.
 - `ExecutorThreadName`: optional executor/source thread name. If set to `A`, the final message becomes `work run, A finish`.
 - `Message`: text to send after opening the thread.
-- `ThreadTargets`: optional per-thread coordinate map. Each entry can define absolute `X` / `Y` pixels, normalized full-screen `XRatio` / `YRatio`, or a window rectangle via `LeftRatio` / `TopRatio` / `WidthRatio` / `HeightRatio`.
+- `ThreadTargets`: optional per-thread coordinate map. Each entry can define absolute `X` / `Y` pixels, normalized full-screen `XRatio` / `YRatio`, or a window rectangle via `LeftRatio` / `TopRatio` / `WidthRatio` / `HeightRatio`. Rectangle entries can also override `ComposerXRatio` / `ComposerYRatio` per thread.
 - `ComposerClickXRatio`: click position inside the target window rectangle on the X axis. Default `0.470`.
 - `ComposerClickYRatio`: click position inside the target window rectangle on the Y axis. Default `0.800`.
 - `WindowTitleRegex`: kept only for backward-compatible callers and ignored in fixed-coordinate mode.
@@ -67,11 +67,11 @@ Example `thread-work.config.json` override:
 ```json
 {
   "ThreadTargets": {
-    "H": { "LeftRatio": 0.0, "TopRatio": 0.0, "WidthRatio": 0.5, "HeightRatio": 0.5 },
-    "A": { "LeftRatio": 0.5, "TopRatio": 0.0, "WidthRatio": 0.5, "HeightRatio": 0.5 },
-    "B": { "LeftRatio": 0.0, "TopRatio": 0.5, "WidthRatio": 0.5, "HeightRatio": 0.5 },
-    "T": { "LeftRatio": 0.5, "TopRatio": 0.5, "WidthRatio": 0.5, "HeightRatio": 0.5 },
-    "Test": { "LeftRatio": 0.5, "TopRatio": 0.5, "WidthRatio": 0.5, "HeightRatio": 0.5 }
+    "H": { "LeftRatio": 0.0, "TopRatio": 0.0, "WidthRatio": 0.5, "HeightRatio": 0.5, "ComposerYRatio": 0.8 },
+    "A": { "LeftRatio": 0.5, "TopRatio": 0.0, "WidthRatio": 0.5, "HeightRatio": 0.5, "ComposerYRatio": 0.8 },
+    "B": { "LeftRatio": 0.0, "TopRatio": 0.5, "WidthRatio": 0.5, "HeightRatio": 0.5, "ComposerYRatio": 0.84 },
+    "T": { "LeftRatio": 0.5, "TopRatio": 0.5, "WidthRatio": 0.5, "HeightRatio": 0.5, "ComposerYRatio": 0.84 },
+    "Test": { "LeftRatio": 0.5, "TopRatio": 0.5, "WidthRatio": 0.5, "HeightRatio": 0.5, "ComposerYRatio": 0.84 }
   }
 }
 ```
@@ -79,7 +79,7 @@ Example `thread-work.config.json` override:
 ## Notes
 
 - The default built-in layout assumes a fixed 2x2 Codex window grid: `H` = top-left, `A` = top-right, `B` = bottom-left, `T/Test` = bottom-right.
-- The actual click point is resolved from the target window rectangle plus `ComposerClickXRatio` / `ComposerClickYRatio`, so the default click lands near the prompt box instead of the window center.
+- The actual click point is resolved from the target window rectangle plus `ComposerClickXRatio` / `ComposerClickYRatio`, and each thread can override those ratios when one window needs a different height than the others.
 - Pass stable logical names such as `A`, `B`, `H`, and `Test`. The script no longer reads visible sidebar labels.
 - If your window layout changes, override `ThreadTargets` in `thread-work.config.json` instead of editing the script.
 - The script allows only one active wake-up run at a time so repeated retries do not overlap UI automation against the same Codex desktop layout.
