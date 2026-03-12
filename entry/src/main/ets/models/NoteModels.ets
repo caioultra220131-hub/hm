@@ -28,6 +28,32 @@ export enum ToolType {
 
 export type DocumentPageKind = 'blank' | 'pdf' | 'pdf-fragment';
 export type DocumentAttachmentKind = 'pdf';
+export type DocumentEmbeddedBlockKind = 'markdown' | 'latex' | 'mixed';
+
+export interface DocumentEmbeddedBlockBounds {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+export interface DocumentEmbeddedBlockRenderMeta {
+  plainText?: string;
+  html?: string;
+  estimatedHeight?: number;
+  measuredHeight?: number;
+  version?: number;
+}
+
+export interface DocumentEmbeddedBlock {
+  id: string;
+  kind: DocumentEmbeddedBlockKind;
+  sourceText: string;
+  bounds: DocumentEmbeddedBlockBounds;
+  renderMeta?: DocumentEmbeddedBlockRenderMeta;
+  createdAt?: number;
+  updatedAt?: number;
+}
 
 export interface FolderRecord {
   id: string;
@@ -56,6 +82,7 @@ export interface TagFilterVM extends TagRecord {
 export interface DocumentPageEntry {
   id: string;
   order: number;
+  bookmarked?: boolean;
   pageTemplateId?: string;
   pageSizeId?: string;
   paperBackgroundId?: string;

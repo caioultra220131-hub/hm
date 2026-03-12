@@ -18,6 +18,10 @@ import {
   DEFAULT_TAGS,
   DocumentAttachmentEntry,
   DocumentCreatePayload,
+  DocumentEmbeddedBlock,
+  DocumentEmbeddedBlockBounds,
+  DocumentEmbeddedBlockKind,
+  DocumentEmbeddedBlockRenderMeta,
   DocumentManifest,
   DocumentMode,
   DocumentPageEntry,
@@ -51,7 +55,12 @@ interface StrokeSnapshot {
 interface TextBoxesSnapshot {
   version: number;
   markdownText: string;
-  items: Object[];
+  items: DocumentEmbeddedBlock[];
+}
+
+interface TextBoxesWriteTarget {
+  pageId: string;
+  path: string;
 }
 
 interface DocumentPageStoragePaths {
@@ -1072,8 +1081,8 @@ export class DocumentLibraryService {
   async refreshPreview(documentId: string): Promise<DocumentRecord> {
     await this.ensureStore();
     const doc: DocumentRecord = await this.requireDocument(documentId);
-    const markdownText: string = this.readDocumentMarkdown(doc, doc.activePageId);
-    const summary: string = MarkdownUtils.preview(markdownText || doc.previewSummary);
+    const summarySource: string = this.readDocumentSummarySourceText(doc, doc.activePageId);
+    const summary: string = MarkdownUtils.preview(summarySource || doc.previewSummary);
     const now: number = Date.now();
     const previewSnapshot: DocumentPreviewSnapshot = this.buildPreviewSnapshot(doc, summary, now);
     const coverPage: number = this.resolveCoverPage(doc.pages, doc.activePageId, doc.coverPage);
@@ -1114,6 +1123,137 @@ export class DocumentLibraryService {
   async getDocumentMarkdown(documentId: string, pageId?: string): Promise<string> {
     const doc: DocumentRecord = await this.requireDocument(documentId);
     return this.readDocumentMarkdown(doc, pageId);
+  }
+
+  async getDocumentEmbeddedBlocks(documentId: string): Promise<Record<string, DocumentEmbeddedBlock[]>> {
+    let doc: DocumentRecord = await this.requireDocument(documentId);
+    if (this.isBlankPagedDocument(doc.documentType, doc.documentMode)) {
+      doc = await this.ensureBlankPagedDocumentV2(documentId);
+    }
+
+    if (this.supportsPagedDocumentStorage(doc)) {
+      const blocksByPageId: Record<string, DocumentEmbeddedBlock[]> = {};
+      doc.pages.forEach((page: DocumentPageEntry) => {
+        blocksByPageId[page.id] = this.readDocumentEmbeddedBlocks(doc, page.id);
+      });
+      return blocksByPageId;
+    }
+
+    const targetPageId: string = doc.activePageId.length > 0 ? doc.activePageId : NATIVE_PRIMARY_PAGE_ID;
+    const blocksByPageId: Record<string, DocumentEmbeddedBlock[]> = {};
+    blocksByPageId[targetPageId] = this.readDocumentEmbeddedBlocks(doc);
+    return blocksByPageId;
+  }
+
+  async replacePageEmbeddedBlocks(
+    documentId: string,
+    pageId: string,
+    blocks: DocumentEmbeddedBlock[],
+    refreshPreview: boolean = true
+  ): Promise<DocumentRecord> {
+    let doc: DocumentRecord = await this.requireDocument(documentId);
+    if (this.isBlankPagedDocument(doc.documentType, doc.documentMode)) {
+      doc = await this.ensureBlankPagedDocumentV2(documentId);
+    }
+
+    const writeTarget: TextBoxesWriteTarget = this.resolveTextBoxesWriteTarget(doc, pageId);
+    const snapshot: TextBoxesSnapshot = this.readDocumentTextBoxesSnapshot(doc, writeTarget.pageId);
+    snapshot.items = this.normalizeEmbeddedBlockList(blocks);
+    this.writeJsonFile(writeTarget.path, snapshot);
+    return refreshPreview ? this.refreshPreview(documentId) : this.requireDocument(documentId);
+  }
+
+  async upsertPageEmbeddedBlock(
+    documentId: string,
+    pageId: string,
+    block: DocumentEmbeddedBlock,
+    refreshPreview: boolean = true
+  ): Promise<DocumentRecord> {
+    let doc: DocumentRecord = await this.requireDocument(documentId);
+    if (this.isBlankPagedDocument(doc.documentType, doc.documentMode)) {
+      doc = await this.ensureBlankPagedDocumentV2(documentId);
+    }
+
+    const writeTarget: TextBoxesWriteTarget = this.resolveTextBoxesWriteTarget(doc, pageId);
+    const snapshot: TextBoxesSnapshot = this.readDocumentTextBoxesSnapshot(doc, writeTarget.pageId);
+    const normalizedBlock: DocumentEmbeddedBlock | undefined = this.normalizeEmbeddedBlock(
+      block as Object,
+      block.id && block.id.length > 0 ? block.id : `embedded-block-${snapshot.items.length}`
+    );
+    if (normalizedBlock === undefined) {
+      return doc;
+    }
+
+    const targetIndex: number = snapshot.items.findIndex((item) => item.id === normalizedBlock.id);
+    if (targetIndex >= 0) {
+      snapshot.items[targetIndex] = normalizedBlock;
+    } else {
+      snapshot.items = [...snapshot.items, normalizedBlock];
+    }
+    this.writeJsonFile(writeTarget.path, snapshot);
+    return refreshPreview ? this.refreshPreview(documentId) : this.requireDocument(documentId);
+  }
+
+  async removePageEmbeddedBlock(
+    documentId: string,
+    pageId: string,
+    blockId: string,
+    refreshPreview: boolean = true
+  ): Promise<DocumentRecord> {
+    let doc: DocumentRecord = await this.requireDocument(documentId);
+    if (this.isBlankPagedDocument(doc.documentType, doc.documentMode)) {
+      doc = await this.ensureBlankPagedDocumentV2(documentId);
+    }
+
+    const writeTarget: TextBoxesWriteTarget = this.resolveTextBoxesWriteTarget(doc, pageId);
+    const snapshot: TextBoxesSnapshot = this.readDocumentTextBoxesSnapshot(doc, writeTarget.pageId);
+    snapshot.items = snapshot.items.filter((item) => item.id !== blockId);
+    this.writeJsonFile(writeTarget.path, snapshot);
+    return refreshPreview ? this.refreshPreview(documentId) : this.requireDocument(documentId);
+  }
+
+  async clearPageEmbeddedBlocks(
+    documentId: string,
+    pageId: string,
+    refreshPreview: boolean = true
+  ): Promise<DocumentRecord> {
+    let doc: DocumentRecord = await this.requireDocument(documentId);
+    if (this.isBlankPagedDocument(doc.documentType, doc.documentMode)) {
+      doc = await this.ensureBlankPagedDocumentV2(documentId);
+    }
+
+    const writeTarget: TextBoxesWriteTarget = this.resolveTextBoxesWriteTarget(doc, pageId);
+    const snapshot: TextBoxesSnapshot = this.readDocumentTextBoxesSnapshot(doc, writeTarget.pageId);
+    snapshot.items = [];
+    this.writeJsonFile(writeTarget.path, snapshot);
+    return refreshPreview ? this.refreshPreview(documentId) : this.requireDocument(documentId);
+  }
+
+  async togglePageBookmark(documentId: string, pageId: string, bookmarked: boolean): Promise<DocumentRecord> {
+    let doc: DocumentRecord = await this.requireDocument(documentId);
+    if (this.isBlankPagedDocument(doc.documentType, doc.documentMode)) {
+      doc = await this.ensureBlankPagedDocumentV2(documentId);
+    }
+    if (!this.supportsPagedDocumentStorage(doc)) {
+      return doc;
+    }
+
+    const targetPageId: string = this.resolveTargetPageId(doc, pageId);
+    const targetPage: DocumentPageEntry | undefined = doc.pages.find((page) => page.id === targetPageId);
+    if (targetPage === undefined) {
+      return doc;
+    }
+
+    const now: number = Date.now();
+    await this.updateSchemaV2PagedManifest(documentId, (manifest) => {
+      const manifestPage: DocumentPageEntry | undefined = manifest.pages.find((page) => page.id === targetPageId);
+      if (manifestPage === undefined) {
+        return;
+      }
+      manifestPage.bookmarked = bookmarked;
+      manifest.updatedAt = now;
+    });
+    return this.requireDocument(documentId);
   }
 
   async prepareBlankPagedDocumentForSave(documentId: string): Promise<DocumentRecord> {
@@ -1183,19 +1323,10 @@ export class DocumentLibraryService {
     if (this.isBlankPagedDocument(doc.documentType, doc.documentMode)) {
       doc = await this.ensureBlankPagedDocumentV2(documentId);
     }
-    if (this.supportsPagedDocumentStorage(doc)) {
-      const targetPageId: string = this.resolveTargetPageId(doc, pageId);
-      const textBoxesPath: string = this.getPageStoragePaths(doc.packagePath, targetPageId).textBoxesPath;
-      const snapshot: TextBoxesSnapshot = this.readTextBoxesSnapshot(textBoxesPath);
-      snapshot.markdownText = markdownText;
-      this.writeJsonFile(textBoxesPath, snapshot);
-      return refreshPreview ? this.refreshPreview(documentId) : this.requireDocument(documentId);
-    }
-
-    const textBoxesPath: string = `${doc.packagePath}/text-boxes.json`;
-    const snapshot: TextBoxesSnapshot = this.readTextBoxesSnapshot(textBoxesPath);
+    const writeTarget: TextBoxesWriteTarget = this.resolveTextBoxesWriteTarget(doc, pageId);
+    const snapshot: TextBoxesSnapshot = this.readDocumentTextBoxesSnapshot(doc, writeTarget.pageId);
     snapshot.markdownText = markdownText;
-    this.writeJsonFile(textBoxesPath, snapshot);
+    this.writeJsonFile(writeTarget.path, snapshot);
     return refreshPreview ? this.refreshPreview(documentId) : this.requireDocument(documentId);
   }
 
@@ -1813,10 +1944,170 @@ export class DocumentLibraryService {
       return this.createEmptyTextBoxesSnapshot('');
     }
     try {
-      return JSON.parse(fileIo.readTextSync(path)) as TextBoxesSnapshot;
+      return this.normalizeTextBoxesSnapshot(JSON.parse(fileIo.readTextSync(path)) as Object);
     } catch (_) {
       return this.createEmptyTextBoxesSnapshot('');
     }
+  }
+
+  private normalizeTextBoxesSnapshot(value: Object | undefined): TextBoxesSnapshot {
+    const source: JsonMap | null = this.readJsonMap(value);
+    if (!source) {
+      return this.createEmptyTextBoxesSnapshot('');
+    }
+
+    return {
+      version: this.readIntegerValue(source, 'version', 1),
+      markdownText: this.readStringValue(source, 'markdownText', ''),
+      items: this.normalizeEmbeddedBlockEntries(source['items'])
+    };
+  }
+
+  private normalizeEmbeddedBlockList(blocks: DocumentEmbeddedBlock[]): DocumentEmbeddedBlock[] {
+    const normalizedBlocks: DocumentEmbeddedBlock[] = [];
+    blocks.forEach((block: DocumentEmbeddedBlock, index: number) => {
+      const fallbackId: string = block.id && block.id.length > 0 ? block.id : `embedded-block-${index}`;
+      const normalizedBlock: DocumentEmbeddedBlock | undefined = this.normalizeEmbeddedBlock(block as Object, fallbackId);
+      if (normalizedBlock !== undefined) {
+        normalizedBlocks.push(normalizedBlock);
+      }
+    });
+    return normalizedBlocks;
+  }
+
+  private normalizeEmbeddedBlockEntries(value: JsonValue | undefined): DocumentEmbeddedBlock[] {
+    if (!Array.isArray(value) || value.length === 0) {
+      return [];
+    }
+
+    const normalizedBlocks: DocumentEmbeddedBlock[] = [];
+    value.forEach((entry: JsonValue, index: number) => {
+      const normalizedBlock: DocumentEmbeddedBlock | undefined = this.normalizeEmbeddedBlock(
+        entry as Object,
+        `embedded-block-${index}`
+      );
+      if (normalizedBlock !== undefined) {
+        normalizedBlocks.push(normalizedBlock);
+      }
+    });
+    return normalizedBlocks;
+  }
+
+  private normalizeEmbeddedBlock(
+    value: Object | undefined,
+    fallbackId: string
+  ): DocumentEmbeddedBlock | undefined {
+    const source: JsonMap | null = this.readJsonMap(value);
+    if (!source) {
+      return undefined;
+    }
+
+    const bounds: DocumentEmbeddedBlockBounds | undefined = this.normalizeEmbeddedBlockBounds(source['bounds'], source);
+    if (bounds === undefined) {
+      return undefined;
+    }
+
+    const sourceText: string = this.readStringValueByKeys(
+      source,
+      ['sourceText', 'text', 'content', 'markdownText', 'plainText'],
+      ''
+    ).trim();
+    const renderMeta: DocumentEmbeddedBlockRenderMeta | undefined = this.normalizeEmbeddedBlockRenderMeta(
+      source['renderMeta'] ?? source['meta'] ?? source['render']
+    );
+    const normalizedSourceText: string = sourceText.length > 0 ? sourceText : (renderMeta?.plainText ?? '').trim();
+    if (normalizedSourceText.length === 0) {
+      return undefined;
+    }
+
+    const normalizedBlock: DocumentEmbeddedBlock = {
+      id: this.readStringValue(source, 'id', fallbackId),
+      kind: this.normalizeEmbeddedBlockKind(source['kind']),
+      sourceText: normalizedSourceText,
+      bounds
+    };
+    if (renderMeta !== undefined) {
+      normalizedBlock.renderMeta = renderMeta;
+    }
+    const createdAt: number | undefined = this.readOptionalIntegerValue(source, 'createdAt');
+    if (createdAt !== undefined) {
+      normalizedBlock.createdAt = createdAt;
+    }
+    const updatedAt: number | undefined = this.readOptionalIntegerValue(source, 'updatedAt');
+    if (updatedAt !== undefined) {
+      normalizedBlock.updatedAt = updatedAt;
+    }
+    return normalizedBlock;
+  }
+
+  private normalizeEmbeddedBlockKind(value: JsonValue | undefined): DocumentEmbeddedBlockKind {
+    if (value === 'markdown' || value === 'latex' || value === 'mixed') {
+      return value as DocumentEmbeddedBlockKind;
+    }
+    return 'markdown';
+  }
+
+  private normalizeEmbeddedBlockBounds(
+    value: JsonValue | undefined,
+    fallbackSource?: JsonMap
+  ): DocumentEmbeddedBlockBounds | undefined {
+    const source: JsonMap | null = this.readJsonMap(value) ?? fallbackSource ?? null;
+    if (!source) {
+      return undefined;
+    }
+
+    const x: number = this.readNumberValueByKeys(source, ['x', 'left'], Number.NaN);
+    const y: number = this.readNumberValueByKeys(source, ['y', 'top'], Number.NaN);
+    const width: number = this.readNumberValueByKeys(source, ['width', 'w'], Number.NaN);
+    const height: number = this.readNumberValueByKeys(source, ['height', 'h'], Number.NaN);
+    if (!Number.isFinite(x) || !Number.isFinite(y) || !Number.isFinite(width) || !Number.isFinite(height)) {
+      return undefined;
+    }
+
+    return {
+      x,
+      y,
+      width: Math.max(0, width),
+      height: Math.max(0, height)
+    };
+  }
+
+  private normalizeEmbeddedBlockRenderMeta(value: JsonValue | undefined): DocumentEmbeddedBlockRenderMeta | undefined {
+    const source: JsonMap | null = this.readJsonMap(value);
+    if (!source) {
+      return undefined;
+    }
+
+    const renderMeta: DocumentEmbeddedBlockRenderMeta = {};
+    const plainText: string = this.readStringValueByKeys(source, ['plainText', 'previewText'], '');
+    if (plainText.length > 0) {
+      renderMeta.plainText = plainText;
+    }
+    const html: string = this.readStringValue(source, 'html', '');
+    if (html.length > 0) {
+      renderMeta.html = html;
+    }
+    const estimatedHeight: number = this.readNumberValueByKeys(source, ['estimatedHeight'], Number.NaN);
+    if (Number.isFinite(estimatedHeight)) {
+      renderMeta.estimatedHeight = estimatedHeight;
+    }
+    const measuredHeight: number = this.readNumberValueByKeys(source, ['measuredHeight'], Number.NaN);
+    if (Number.isFinite(measuredHeight)) {
+      renderMeta.measuredHeight = measuredHeight;
+    }
+    const version: number | undefined = this.readOptionalIntegerValue(source, 'version');
+    if (version !== undefined) {
+      renderMeta.version = version;
+    }
+
+    if (renderMeta.plainText === undefined &&
+      renderMeta.html === undefined &&
+      renderMeta.estimatedHeight === undefined &&
+      renderMeta.measuredHeight === undefined &&
+      renderMeta.version === undefined) {
+      return undefined;
+    }
+    return renderMeta;
   }
 
   private isBlankPagedPayload(payload: DocumentCreatePayload): boolean {
@@ -1875,20 +2166,107 @@ export class DocumentLibraryService {
     );
   }
 
-  private readDocumentMarkdown(document: DocumentRecord, pageId?: string): string {
-    let textBoxesPath: string = `${document.packagePath}/text-boxes.json`;
+  private resolveTextBoxesReadPath(document: DocumentRecord, pageId?: string): string {
+    const legacyTextBoxesPath: string = `${document.packagePath}/text-boxes.json`;
+    if (!this.supportsPagedDocumentStorage(document)) {
+      return legacyTextBoxesPath;
+    }
+
+    const targetPageId: string = this.resolveTargetPageId(document, pageId);
+    const pagedTextBoxesPath: string = this.getPageStoragePaths(document.packagePath, targetPageId).textBoxesPath;
+    return this.exists(pagedTextBoxesPath) ? pagedTextBoxesPath : legacyTextBoxesPath;
+  }
+
+  private resolveTextBoxesWriteTarget(document: DocumentRecord, pageId?: string): TextBoxesWriteTarget {
     if (this.supportsPagedDocumentStorage(document)) {
-      const pageTextBoxesPath: string = this.getPageStoragePaths(
-        document.packagePath,
-        this.resolveTargetPageId(document, pageId)
-      ).textBoxesPath;
-      textBoxesPath = this.exists(pageTextBoxesPath) ? pageTextBoxesPath : textBoxesPath;
+      const targetPageId: string = this.resolveTargetPageId(document, pageId);
+      return {
+        pageId: targetPageId,
+        path: this.getPageStoragePaths(document.packagePath, targetPageId).textBoxesPath
+      };
     }
-    if (!this.exists(textBoxesPath)) {
-      return '';
+
+    const targetPageId: string = pageId && pageId.length > 0
+      ? pageId
+      : (document.activePageId.length > 0 ? document.activePageId : NATIVE_PRIMARY_PAGE_ID);
+    return {
+      pageId: targetPageId,
+      path: `${document.packagePath}/text-boxes.json`
+    };
+  }
+
+  private readDocumentTextBoxesSnapshot(document: DocumentRecord, pageId?: string): TextBoxesSnapshot {
+    return this.readTextBoxesSnapshot(this.resolveTextBoxesReadPath(document, pageId));
+  }
+
+  private readDocumentEmbeddedBlocks(document: DocumentRecord, pageId?: string): DocumentEmbeddedBlock[] {
+    return this.readDocumentTextBoxesSnapshot(document, pageId).items;
+  }
+
+  private readDocumentSummarySourceText(document: DocumentRecord, pageId?: string): string {
+    const snapshot: TextBoxesSnapshot = this.readDocumentTextBoxesSnapshot(document, pageId);
+    const markdownText: string = snapshot.markdownText.trim();
+    if (markdownText.length > 0) {
+      return markdownText;
     }
-    const parsed: JsonMap = JSON.parse(fileIo.readTextSync(textBoxesPath)) as JsonMap;
-    return String(parsed['markdownText'] ?? '');
+
+    return this.readDocumentEmbeddedBlocks(document, pageId)
+      .map((block: DocumentEmbeddedBlock) => block.sourceText.trim())
+      .filter((text: string) => text.length > 0)
+      .join('\n\n');
+  }
+
+  private readDocumentMarkdown(document: DocumentRecord, pageId?: string): string {
+    return this.readDocumentTextBoxesSnapshot(document, pageId).markdownText;
+  }
+
+  private readJsonMap(value: Object | undefined | null): JsonMap | null {
+    if (typeof value !== 'object' || value === null || Array.isArray(value)) {
+      return null;
+    }
+    return value as JsonMap;
+  }
+
+  private readStringValue(source: JsonMap, key: string, fallback: string = ''): string {
+    const value: JsonValue | undefined = source[key];
+    return typeof value === 'string' ? value : fallback;
+  }
+
+  private readStringValueByKeys(source: JsonMap, keys: string[], fallback: string = ''): string {
+    for (let index: number = 0; index < keys.length; index += 1) {
+      const key: string = keys[index];
+      if (source[key] !== undefined) {
+        return this.readStringValue(source, key, fallback);
+      }
+    }
+    return fallback;
+  }
+
+  private readNumberValueByKeys(source: JsonMap, keys: string[], fallback: number): number {
+    for (let index: number = 0; index < keys.length; index += 1) {
+      const key: string = keys[index];
+      const value: JsonValue | undefined = source[key];
+      if (typeof value === 'number' && Number.isFinite(value)) {
+        return value;
+      }
+      if (typeof value === 'string') {
+        const parsed: number = Number.parseFloat(value);
+        if (Number.isFinite(parsed)) {
+          return parsed;
+        }
+      }
+    }
+    return fallback;
+  }
+
+  private readIntegerValue(source: JsonMap, key: string, fallback: number): number {
+    const value: number = this.readNumberValueByKeys(source, [key], Number.NaN);
+    return Number.isFinite(value) ? Math.trunc(value) : fallback;
+  }
+
+  private readOptionalIntegerValue(source: JsonMap, key: string): number | undefined {
+    const value: number = this.readNumberValueByKeys(source, [key], Number.NaN);
+    return Number.isFinite(value) ? Math.trunc(value) : undefined;
   }
 
   private async updateManifest(documentId: string, updater: (manifest: DocumentManifest) => void): Promise<void> {
@@ -2227,6 +2605,7 @@ export class DocumentLibraryService {
       normalizedPages.push(await this.createDocumentPageEntry({
         id: sourcePage.id && sourcePage.id.length > 0 ? sourcePage.id : this.buildNextPageId(normalizedPages),
         order: index,
+        bookmarked: sourcePage.bookmarked,
         pageKind: sourcePage.pageKind || BLANK_PAGE_KIND,
         pageTemplateId: sourcePage.pageTemplateId ?? fallbackMetadata.pageTemplateId,
         pageSizeId: sourcePage.pageSizeId ?? fallbackMetadata.pageSizeId,
@@ -2270,6 +2649,7 @@ export class DocumentLibraryService {
     return {
       id: page.id,
       order: page.order,
+      bookmarked: page.bookmarked,
       pageKind: page.pageKind,
       pageTemplateId: compatFields.pageTemplateId,
       pageSizeId: compatFields.pageSizeId,
