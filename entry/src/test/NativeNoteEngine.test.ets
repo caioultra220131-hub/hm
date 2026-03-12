@@ -372,6 +372,106 @@ export default function nativeNoteEngineTest() {
       }
     });
 
+    it('simulatorBlankPagedSessionsExposeWritableCheckpointUndoRedoState', 0, () => {
+      const document = buildBlankPagedDocument();
+      const config = buildNativeOpenDocumentConfig(document, ToolType.PEN);
+      const handle: NativeEngineHandle = createNativeEngineHandle();
+      const engine: NativeNoteEngine = handle.engine;
+      const engineId: string = handle.engineId;
+      try {
+        expect(engine.openDocument(engineId, document.id, document.packagePath, config)).assertEqual(true);
+
+        const initialDebug = engine.getDebugState(engineId);
+        expect(initialDebug !== null).assertEqual(true);
+        expect(initialDebug?.activePageId).assertEqual('page-1');
+        expect(initialDebug?.pageCount).assertEqual(2);
+        expect(initialDebug?.committedStrokeCount).assertEqual(0);
+        expect(initialDebug?.undoDepth).assertEqual(0);
+        expect(initialDebug?.redoDepth).assertEqual(0);
+
+        const initialPreview = engine.requestPreviewRender(engineId, document.id, 1, 640, 480);
+        expect(initialPreview !== null).assertEqual(true);
+        expect(initialPreview?.pageId).assertEqual('page-1');
+        expect(initialPreview?.objectCount).assertEqual(0);
+        expect(initialPreview?.layers.length).assertEqual(0);
+
+        expect(engine.setTool(engineId, ToolType.HIGHLIGHTER)).assertEqual(true);
+        expect(engine.setBrushColor(engineId, '#FF5500')).assertEqual(true);
+        expect(engine.saveCheckpoint(engineId, document.id)).assertEqual(true);
+
+        const sceneAfterFirstCheckpoint = engine.exportSceneSnapshot(engineId, document.id);
+        expect(sceneAfterFirstCheckpoint !== null).assertEqual(true);
+        expect(sceneAfterFirstCheckpoint?.objectCount).assertEqual(1);
+        expect(sceneAfterFirstCheckpoint?.objects[0].pageId).assertEqual('page-1');
+        expect(sceneAfterFirstCheckpoint?.objects[0].tool).assertEqual('highlighter');
+        expect(sceneAfterFirstCheckpoint?.objects[0].colorHex).assertEqual('#FF5500');
+
+        const debugAfterFirstCheckpoint = engine.getDebugState(engineId);
+        expect(debugAfterFirstCheckpoint !== null).assertEqual(true);
+        expect(debugAfterFirstCheckpoint?.committedStrokeCount).assertEqual(1);
+        expect(debugAfterFirstCheckpoint?.undoDepth).assertEqual(1);
+        expect(debugAfterFirstCheckpoint?.redoDepth).assertEqual(0);
+        expect(debugAfterFirstCheckpoint?.lastCommittedStrokeType).assertEqual('highlight-stroke');
+
+        const previewAfterFirstCheckpoint = engine.requestPreviewRender(engineId, document.id, 1, 640, 480);
+        expect(previewAfterFirstCheckpoint !== null).assertEqual(true);
+        expect(previewAfterFirstCheckpoint?.objectCount).assertEqual(1);
+        expect(previewAfterFirstCheckpoint?.layers.length).assertEqual(1);
+        expect(previewAfterFirstCheckpoint?.layers[0]).assertEqual('ink');
+
+        expect(engine.undo(engineId)).assertEqual(true);
+        const sceneAfterUndo = engine.exportSceneSnapshot(engineId, document.id);
+        expect(sceneAfterUndo !== null).assertEqual(true);
+        expect(sceneAfterUndo?.objectCount).assertEqual(0);
+
+        const debugAfterUndo = engine.getDebugState(engineId);
+        expect(debugAfterUndo !== null).assertEqual(true);
+        expect(debugAfterUndo?.committedStrokeCount).assertEqual(0);
+        expect(debugAfterUndo?.undoDepth).assertEqual(0);
+        expect(debugAfterUndo?.redoDepth).assertEqual(1);
+
+        expect(engine.redo(engineId)).assertEqual(true);
+        expect(engine.setActivePage(engineId, 'page-0')).assertEqual(true);
+        expect(engine.setTool(engineId, ToolType.PEN)).assertEqual(true);
+        expect(engine.setBrushColor(engineId, '#0EA5E9')).assertEqual(true);
+        expect(engine.saveCheckpoint(engineId, document.id)).assertEqual(true);
+
+        const sceneAfterSecondCheckpoint = engine.exportSceneSnapshot(engineId, document.id);
+        expect(sceneAfterSecondCheckpoint !== null).assertEqual(true);
+        expect(sceneAfterSecondCheckpoint?.objectCount).assertEqual(2);
+        expect(sceneAfterSecondCheckpoint?.objects.some((object: { pageId?: string; tool: string; colorHex: string }) =>
+          object.pageId === 'page-0' && object.tool === 'pen' && object.colorHex === '#0EA5E9')).assertEqual(true);
+        expect(sceneAfterSecondCheckpoint?.objects.some((object: { pageId?: string; tool: string; colorHex: string }) =>
+          object.pageId === 'page-1' && object.tool === 'highlighter' && object.colorHex === '#FF5500')).assertEqual(true);
+
+        const insertedContract = {
+          ...(config.pageContracts?.['page-0'] ?? config.pageContract),
+          pageId: 'page-2'
+        };
+        expect(engine.insertPage(engineId, 'page-0', insertedContract)).assertEqual(true);
+
+        const debugAfterInsert = engine.getDebugState(engineId);
+        expect(debugAfterInsert !== null).assertEqual(true);
+        expect(debugAfterInsert?.activePageId).assertEqual('page-2');
+        expect(debugAfterInsert?.activePageIndex).assertEqual(1);
+        expect(debugAfterInsert?.pageCount).assertEqual(3);
+
+        const previewInsertedPage = engine.requestPreviewRender(engineId, document.id, 1, 640, 480);
+        expect(previewInsertedPage !== null).assertEqual(true);
+        expect(previewInsertedPage?.pageId).assertEqual('page-2');
+        expect(previewInsertedPage?.layout?.pageCount).assertEqual(3);
+        expect(previewInsertedPage?.objectCount).assertEqual(0);
+
+        expect(engine.deletePage(engineId, 'page-2')).assertEqual(true);
+        const debugAfterDelete = engine.getDebugState(engineId);
+        expect(debugAfterDelete !== null).assertEqual(true);
+        expect(debugAfterDelete?.activePageId).assertEqual('page-1');
+        expect(debugAfterDelete?.pageCount).assertEqual(2);
+      } finally {
+        disposeNativeEngineHandle(engine, engineId, document.id);
+      }
+    });
+
     it('keepsPagedPdfPreviewSceneAndDebugPageAware', 0, () => {
       const document = buildPdfPagedDocument();
       const config = buildNativeOpenDocumentConfig(document, ToolType.PEN);

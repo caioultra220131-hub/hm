@@ -25,6 +25,10 @@ constexpr const char* kPdfPageNodeIdPrefix = "pdf-page-";
 constexpr const char* kPdfFragmentNodeIdPrefix = "pdf-fragment-";
 constexpr int kPreviewSchemaVersion = 0;
 constexpr int kPrimaryPageIndex = 0;
+constexpr double kFallbackPageWidthPt = 612.0;
+constexpr double kFallbackPageHeightPt = 792.0;
+constexpr double kMinSyntheticStrokeWidthPt = 96.0;
+constexpr double kMinSyntheticStrokeHeightPt = 42.0;
 
 struct SimulatorPageContractDescriptor {
     double widthPt = 0.0;
@@ -42,6 +46,26 @@ struct SimulatorPageDescriptor {
     SimulatorPageContractDescriptor contract;
 };
 
+struct SimulatorSyntheticObject {
+    std::string id;
+    std::string pageId;
+    std::string nodeType = "ink-stroke";
+    std::string shapeType = "freehand";
+    std::string tool = "pen";
+    std::string colorHex = "#1D2736";
+    bool closed = false;
+    size_t pointCount = 0;
+    double minX = 0.0;
+    double minY = 0.0;
+    double maxX = 0.0;
+    double maxY = 0.0;
+};
+
+struct SimulatorSyntheticEdit {
+    std::string pageId;
+    SimulatorSyntheticObject object;
+};
+
 struct SimulatorDocumentSession {
     std::string documentId;
     std::string packagePath;
@@ -51,6 +75,10 @@ struct SimulatorDocumentSession {
     std::vector<std::string> pages;
     std::vector<SimulatorPageDescriptor> pageDescriptors;
     std::string activePageId;
+    int nextSyntheticObjectId = 1;
+    std::unordered_map<std::string, std::vector<SimulatorSyntheticObject>> committedObjectsByPage;
+    std::vector<SimulatorSyntheticEdit> undoStack;
+    std::vector<SimulatorSyntheticEdit> redoStack;
 };
 
 struct SimulatorEngineState {
@@ -530,6 +558,198 @@ std::string BuildPageBackgroundId(const SimulatorPageDescriptor* descriptor)
     return "paper/" + descriptor->contract.paperBackgroundId;
 }
 
+double ResolvePageWidth(const SimulatorPageDescriptor* descriptor)
+{
+    return HasPageBounds(descriptor) ? descriptor->contract.widthPt : kFallbackPageWidthPt;
+}
+
+double ResolvePageHeight(const SimulatorPageDescriptor* descriptor)
+{
+    return HasPageBounds(descriptor) ? descriptor->contract.heightPt : kFallbackPageHeightPt;
+}
+
+std::string ResolveSyntheticTool(const SimulatorEngineState& engine)
+{
+    if (engine.activeTool == "pen" ||
+        engine.activeTool == "pencil" ||
+        engine.activeTool == "highlighter" ||
+        engine.activeTool == "text") {
+        return engine.activeTool;
+    }
+    return engine.lastInkTool;
+}
+
+std::string ResolveSyntheticShapeType(const std::string& tool)
+{
+    if (tool == "highlighter") {
+        return "highlight-stroke";
+    }
+    if (tool == "text") {
+        return "text-box";
+    }
+    return "freehand";
+}
+
+std::string ResolveSyntheticNodeType(const std::string& tool)
+{
+    if (tool == "text") {
+        return "text-note";
+    }
+    return "ink-stroke";
+}
+
+size_t ResolveSyntheticPointCount(const std::string& tool, int ordinal)
+{
+    if (tool == "text") {
+        return 4;
+    }
+    if (tool == "highlighter") {
+        return static_cast<size_t>(10 + (ordinal % 3) * 2);
+    }
+    return static_cast<size_t>(16 + (ordinal % 4) * 3);
+}
+
+std::vector<SimulatorSyntheticObject>& AccessCommittedObjectsForPage(
+    SimulatorDocumentSession& session, const std::string& pageId)
+{
+    return session.committedObjectsByPage[pageId];
+}
+
+const std::vector<SimulatorSyntheticObject>* FindCommittedObjectsForPage(
+    const SimulatorDocumentSession& session, const std::string& pageId)
+{
+    const auto iterator = session.committedObjectsByPage.find(pageId);
+    if (iterator == session.committedObjectsByPage.end()) {
+        return nullptr;
+    }
+    return &iterator->second;
+}
+
+size_t CountCommittedObjectsForPage(const SimulatorDocumentSession& session, const std::string& pageId)
+{
+    const std::vector<SimulatorSyntheticObject>* objects = FindCommittedObjectsForPage(session, pageId);
+    return objects == nullptr ? 0 : objects->size();
+}
+
+size_t CountCommittedObjects(const SimulatorDocumentSession& session)
+{
+    size_t count = 0;
+    for (const auto& entry : session.committedObjectsByPage) {
+        count += entry.second.size();
+    }
+    return count;
+}
+
+size_t CountCommittedObjectsForPages(
+    const SimulatorDocumentSession& session, const std::vector<std::string>& pageIds)
+{
+    size_t count = 0;
+    for (const std::string& pageId : pageIds) {
+        count += CountCommittedObjectsForPage(session, pageId);
+    }
+    return count;
+}
+
+void RemoveCommittedObjectById(std::vector<SimulatorSyntheticObject>& objects, const std::string& objectId)
+{
+    objects.erase(std::remove_if(objects.begin(), objects.end(),
+        [&](const SimulatorSyntheticObject& object) {
+            return object.id == objectId;
+        }), objects.end());
+}
+
+void RemoveHistoryEntriesForPage(std::vector<SimulatorSyntheticEdit>& edits, const std::string& pageId)
+{
+    edits.erase(std::remove_if(edits.begin(), edits.end(),
+        [&](const SimulatorSyntheticEdit& edit) {
+            return edit.pageId == pageId;
+        }), edits.end());
+}
+
+void RefreshLastCommittedStrokeType(SimulatorEngineState& engine, const SimulatorDocumentSession& session)
+{
+    if (!session.undoStack.empty()) {
+        engine.lastCommittedStrokeType = session.undoStack.back().object.shapeType;
+        return;
+    }
+    engine.lastCommittedStrokeType = "none";
+}
+
+SimulatorSyntheticObject BuildSyntheticObject(
+    const SimulatorEngineState& engine, SimulatorDocumentSession& session, const std::string& pageId)
+{
+    const SimulatorPageDescriptor* descriptor = FindPageDescriptor(session, pageId);
+    const double pageWidth = ResolvePageWidth(descriptor);
+    const double pageHeight = ResolvePageHeight(descriptor);
+    const std::string tool = ResolveSyntheticTool(engine);
+    const int ordinal = session.nextSyntheticObjectId;
+
+    const double width = std::min(pageWidth * 0.58, std::max(kMinSyntheticStrokeWidthPt, pageWidth * 0.28));
+    const double heightBase = tool == "highlighter" ? pageHeight * 0.055 : pageHeight * 0.10;
+    const double height = std::min(pageHeight * 0.22, std::max(kMinSyntheticStrokeHeightPt, heightBase));
+    const double originX = std::min(
+        std::max(18.0, pageWidth * (0.10 + 0.09 * ((ordinal - 1) % 5))),
+        std::max(18.0, pageWidth - width - 18.0));
+    const double originY = std::min(
+        std::max(24.0, pageHeight * (0.12 + 0.10 * ((ordinal - 1) % 6))),
+        std::max(24.0, pageHeight - height - 24.0));
+
+    SimulatorSyntheticObject object;
+    object.id = "synthetic-" + pageId + "-" + std::to_string(session.nextSyntheticObjectId++);
+    object.pageId = pageId;
+    object.nodeType = ResolveSyntheticNodeType(tool);
+    object.shapeType = ResolveSyntheticShapeType(tool);
+    object.tool = tool;
+    object.colorHex = engine.activeColor;
+    object.closed = tool == "text";
+    object.pointCount = ResolveSyntheticPointCount(tool, ordinal);
+    object.minX = originX;
+    object.minY = originY;
+    object.maxX = std::min(pageWidth, originX + width);
+    object.maxY = std::min(pageHeight, originY + height);
+    return object;
+}
+
+bool CommitSyntheticCheckpoint(SimulatorEngineState& engine, SimulatorDocumentSession& session)
+{
+    const std::string pageId = ResolveSessionActivePageId(session);
+    if (pageId.empty()) {
+        return false;
+    }
+    SimulatorSyntheticObject object = BuildSyntheticObject(engine, session, pageId);
+    AccessCommittedObjectsForPage(session, pageId).push_back(object);
+    session.undoStack.push_back({ pageId, object });
+    session.redoStack.clear();
+    engine.lastCommittedStrokeType = object.shapeType;
+    return true;
+}
+
+bool UndoSyntheticCheckpoint(SimulatorEngineState& engine, SimulatorDocumentSession& session)
+{
+    if (session.undoStack.empty()) {
+        return false;
+    }
+    const SimulatorSyntheticEdit edit = session.undoStack.back();
+    session.undoStack.pop_back();
+    RemoveCommittedObjectById(AccessCommittedObjectsForPage(session, edit.pageId), edit.object.id);
+    session.redoStack.push_back(edit);
+    RefreshLastCommittedStrokeType(engine, session);
+    return true;
+}
+
+bool RedoSyntheticCheckpoint(SimulatorEngineState& engine, SimulatorDocumentSession& session)
+{
+    if (session.redoStack.empty()) {
+        return false;
+    }
+    const SimulatorSyntheticEdit edit = session.redoStack.back();
+    session.redoStack.pop_back();
+    AccessCommittedObjectsForPage(session, edit.pageId).push_back(edit.object);
+    session.undoStack.push_back(edit);
+    engine.lastCommittedStrokeType = edit.object.shapeType;
+    return true;
+}
+
 void AppendPageBounds(std::ostringstream& builder, const SimulatorPageDescriptor* descriptor)
 {
     const double width = descriptor != nullptr ? descriptor->contract.widthPt : 0.0;
@@ -539,6 +759,34 @@ void AppendPageBounds(std::ostringstream& builder, const SimulatorPageDescriptor
             << "\"minY\":0,"
             << "\"maxX\":" << width << ","
             << "\"maxY\":" << height
+            << "}";
+}
+
+void AppendSyntheticObjectBounds(std::ostringstream& builder, const SimulatorSyntheticObject& object)
+{
+    builder << "\"bounds\":{"
+            << "\"minX\":" << object.minX << ","
+            << "\"minY\":" << object.minY << ","
+            << "\"maxX\":" << object.maxX << ","
+            << "\"maxY\":" << object.maxY
+            << "}";
+}
+
+void AppendSyntheticObject(std::ostringstream& builder, const SimulatorSyntheticObject& object, int pageIndex)
+{
+    builder << "{"
+            << "\"id\":\"" << EscapeJsonString(object.id) << "\","
+            << "\"nodeType\":\"" << EscapeJsonString(object.nodeType) << "\","
+            << "\"shapeType\":\"" << EscapeJsonString(object.shapeType) << "\","
+            << "\"tool\":\"" << EscapeJsonString(object.tool) << "\","
+            << "\"colorHex\":\"" << EscapeJsonString(object.colorHex) << "\","
+            << "\"selected\":false,"
+            << "\"pointCount\":" << object.pointCount << ","
+            << "\"pageIndex\":" << pageIndex << ","
+            << "\"pageId\":\"" << EscapeJsonString(object.pageId) << "\","
+            << "\"closed\":" << (object.closed ? "true" : "false") << ",";
+    AppendSyntheticObjectBounds(builder, object);
+    builder << ",\"layer\":\"ink\""
             << "}";
 }
 
@@ -900,6 +1148,7 @@ public:
         }
         engine->documents[documentId] = session;
         engine->activeDocumentId = documentId;
+        engine->lastCommittedStrokeType = "none";
         return true;
     }
 
@@ -940,6 +1189,7 @@ public:
             return false;
         }
         iterator->second.checkpointCount += 1;
+        CommitSyntheticCheckpoint(*engine, iterator->second);
         return true;
     }
 
@@ -965,15 +1215,17 @@ public:
             targetPageIndex = pageIndex;
         }
         const SimulatorPageDescriptor* targetDescriptor = FindPageDescriptor(iterator->second, targetPageId);
+        const size_t syntheticObjectCount = CountCommittedObjectsForPage(iterator->second, targetPageId);
         const bool includePdfLayer = targetDescriptor != nullptr && IsPdfPageKind(targetDescriptor->pageKind);
-        const bool includeInkLayer = includePdfLayer;
-        const size_t objectCount = includePdfLayer ? 1 : 0;
+        const bool includeInkLayer = includePdfLayer || syntheticObjectCount > 0;
+        const size_t objectCount = syntheticObjectCount + (includePdfLayer ? 1 : 0);
 
         std::ostringstream builder;
         builder << "{"
                 ;
         AppendCanonicalPreviewFields(builder, engineId, documentId, targetPageId, targetPageIndex, width, height,
-            iterator->second.checkpointCount, 0, 0, objectCount, engine->activeMode, iterator->second, reportedPageIds,
+            iterator->second.checkpointCount, syntheticObjectCount, 0, objectCount,
+            engine->activeMode, iterator->second, reportedPageIds,
             includePdfLayer, includeInkLayer);
         builder
                 << "}";
@@ -997,7 +1249,8 @@ public:
         const int activePageIndex = std::max(0, FindPageIndex(reportedPageIds, activePageId));
         const SimulatorPageDescriptor* activeDescriptor = FindPageDescriptor(iterator->second, activePageId);
         const bool includePdfPlaceholder = activeDescriptor != nullptr && IsPdfPageKind(activeDescriptor->pageKind);
-        const size_t objectCount = includePdfPlaceholder ? 1 : 0;
+        const size_t objectCount =
+            CountCommittedObjectsForPages(iterator->second, reportedPageIds) + (includePdfPlaceholder ? 1 : 0);
         std::ostringstream builder;
         builder << "{"
                 ;
@@ -1007,6 +1260,7 @@ public:
             engine->activeMode, engine->activeBackend, iterator->second.checkpointCount, objectCount,
             iterator->second, reportedPageIds);
         builder << ",\"objects\":[";
+        bool wroteObject = false;
         if (includePdfPlaceholder) {
             const std::string placeholderId = IsFullPagePdfKind(activeDescriptor->pageKind)
                 ? std::string(kPdfPageNodeIdPrefix) + std::to_string(activePageIndex)
@@ -1025,6 +1279,22 @@ public:
             AppendPageBounds(builder, activeDescriptor);
             builder << ",\"layer\":\"pdf\"";
             builder << "}";
+            wroteObject = true;
+        }
+        for (const std::string& pageId : reportedPageIds) {
+            const std::vector<SimulatorSyntheticObject>* objects =
+                FindCommittedObjectsForPage(iterator->second, pageId);
+            if (objects == nullptr) {
+                continue;
+            }
+            const int pageIndex = std::max(0, FindPageIndex(reportedPageIds, pageId));
+            for (const SimulatorSyntheticObject& object : *objects) {
+                if (wroteObject) {
+                    builder << ",";
+                }
+                AppendSyntheticObject(builder, object, pageIndex);
+                wroteObject = true;
+            }
         }
         builder << "]}";
         return builder.str();
@@ -1128,8 +1398,12 @@ public:
             iterator->second.pageDescriptors.end(), [&](const SimulatorPageDescriptor& descriptor) {
                 return descriptor.pageId == pageId;
             }), iterator->second.pageDescriptors.end());
+        iterator->second.committedObjectsByPage.erase(pageId);
+        RemoveHistoryEntriesForPage(iterator->second.undoStack, pageId);
+        RemoveHistoryEntriesForPage(iterator->second.redoStack, pageId);
         ReindexPageDescriptors(iterator->second);
         iterator->second.activePageId = nextActivePageId;
+        RefreshLastCommittedStrokeType(*engine, iterator->second);
         return true;
     }
 
@@ -1183,19 +1457,29 @@ public:
     bool Undo(const std::string& engineId) override
     {
         std::lock_guard<std::mutex> lock(mutex_);
-        if (FindEngineLocked(engineId) == nullptr) {
+        SimulatorEngineState* engine = FindEngineLocked(engineId);
+        if (engine == nullptr || engine->activeDocumentId.empty()) {
             return false;
         }
-        return false;
+        auto iterator = engine->documents.find(engine->activeDocumentId);
+        if (iterator == engine->documents.end()) {
+            return false;
+        }
+        return UndoSyntheticCheckpoint(*engine, iterator->second);
     }
 
     bool Redo(const std::string& engineId) override
     {
         std::lock_guard<std::mutex> lock(mutex_);
-        if (FindEngineLocked(engineId) == nullptr) {
+        SimulatorEngineState* engine = FindEngineLocked(engineId);
+        if (engine == nullptr || engine->activeDocumentId.empty()) {
             return false;
         }
-        return false;
+        auto iterator = engine->documents.find(engine->activeDocumentId);
+        if (iterator == engine->documents.end()) {
+            return false;
+        }
+        return RedoSyntheticCheckpoint(*engine, iterator->second);
     }
 
     bool StartInputTraceRecording(const std::string& engineId, const std::string& tracePath) override
@@ -1268,6 +1552,9 @@ public:
         std::string activePageId = kPrimaryPageId;
         int activePageIndex = 0;
         size_t pageCount = 1;
+        size_t committedStrokeCount = 0;
+        size_t undoDepth = 0;
+        size_t redoDepth = 0;
         if (!engine->activeDocumentId.empty()) {
             auto iterator = engine->documents.find(engine->activeDocumentId);
             if (iterator != engine->documents.end()) {
@@ -1276,6 +1563,9 @@ public:
                 const std::vector<std::string> reportedPageIds = BuildReportedPageIds(*engine, iterator->second);
                 activePageIndex = std::max(0, FindPageIndex(reportedPageIds, activePageId));
                 pageCount = std::max<size_t>(1, reportedPageIds.size());
+                committedStrokeCount = CountCommittedObjects(iterator->second);
+                undoDepth = iterator->second.undoStack.size();
+                redoDepth = iterator->second.redoStack.size();
             }
         }
 
@@ -1293,9 +1583,9 @@ public:
                 << "\"xComponentId\":\"" << EscapeJsonString(engine->xComponentId) << "\","
                 << "\"surfaceId\":\"" << EscapeJsonString(engine->surfaceId) << "\","
                 << "\"checkpointCount\":" << checkpointCount << ","
-                << "\"committedStrokeCount\":0,"
-                << "\"undoDepth\":0,"
-                << "\"redoDepth\":0,"
+                << "\"committedStrokeCount\":" << committedStrokeCount << ","
+                << "\"undoDepth\":" << undoDepth << ","
+                << "\"redoDepth\":" << redoDepth << ","
                 << "\"lastCommittedStrokeType\":\"" << EscapeJsonString(engine->lastCommittedStrokeType) << "\","
                 << "\"predictionEnabled\":" << (engine->predictionEnabled ? "true" : "false") << ","
                 << "\"pressureEnabled\":" << (engine->pressureEnabled ? "true" : "false") << ","

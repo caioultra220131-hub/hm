@@ -89,10 +89,17 @@ const NATIVE_PAGE_METHOD_SET_ACTIVE: string = 'setActivePage';
 const NATIVE_PAGE_METHOD_INSERT: string = 'insertPage';
 const NATIVE_PAGE_METHOD_DELETE: string = 'deletePage';
 const EDITOR_INSPECTOR_WIDTH: number = 336;
-const EDITOR_PAGE_RAIL_WIDTH: number = 256;
-const PAGE_RAIL_THUMBNAIL_WIDTH: number = 168;
-const PAGE_RAIL_THUMBNAIL_HEIGHT: number = 224;
-const PAGE_RAIL_MENU_WIDTH: number = 208;
+const EDITOR_PAGE_RAIL_WIDTH: number = 214;
+const PAGE_RAIL_THUMBNAIL_WIDTH: number = 132;
+const PAGE_RAIL_THUMBNAIL_HEIGHT: number = 176;
+const PAGE_RAIL_MENU_WIDTH: number = 184;
+const PAGE_RAIL_ACTION_BUTTON_SIZE: number = 34;
+const PAGE_RAIL_CARD_RADIUS: number = 18;
+const PAGE_RAIL_PAGE_MENU_BUTTON_SIZE: number = 28;
+const FLOATING_TOOLBAR_WIDTH: number = 612;
+const FLOATING_TOOL_BUTTON_SIZE: number = 44;
+const FLOATING_TOOLBAR_MORE_BUTTON_SIZE: number = 34;
+const FLOATING_TOOLBAR_COLOR_CHIP_SIZE: number = 18;
 const PAGE_SWIPE_DRAG_LIMIT: number = 132;
 const PAGE_SWIPE_TRIGGER_DISTANCE: number = 84;
 const EDITOR_WORKSPACE_COPY: EditorWorkspaceCopy = {
@@ -758,6 +765,27 @@ struct EditorWorkspace {
     }
   }
 
+  private toolGlyph(tool: ToolType): string {
+    switch (tool) {
+      case ToolType.PEN:
+        return '✎';
+      case ToolType.PENCIL:
+        return '✐';
+      case ToolType.HIGHLIGHTER:
+        return '▇';
+      case ToolType.ERASER:
+        return '⌫';
+      case ToolType.LASSO:
+        return '▢';
+      case ToolType.TEXT:
+        return 'Tt';
+      case ToolType.HAND:
+        return '☞';
+      default:
+        return tool;
+    }
+  }
+
   private selectedPageLabel(): string {
     const currentPageNumber: number = this.activePageIndex + 1;
     return `${currentPageNumber}/${this.pageCount()}`;
@@ -799,7 +827,10 @@ struct EditorWorkspace {
       const pageNumber: string = `${pageIndex + 1}`;
       const title: string = this.pagePlaceholderTitle(pageIndex).toLowerCase();
       const detail: string = this.pagePlaceholderDetail(pageIndex).toLowerCase();
-      return pageNumber.includes(query) || title.includes(query) || detail.includes(query);
+      const previewText: string = this.pagePreviewFallbackBlocks(pageIndex)
+        .map((block: MarkdownPreviewBlock) => block.text.toLowerCase())
+        .join(' ');
+      return pageNumber.includes(query) || title.includes(query) || detail.includes(query) || previewText.includes(query);
     });
   }
 
@@ -1390,6 +1421,119 @@ struct EditorWorkspace {
     return this.document?.coverPage === index ? snapshot : undefined;
   }
 
+  private pageMarkdownTextAt(index: number): string {
+    const pageId: string = this.pageEntryAt(index)?.id ?? '';
+    if (pageId.length === 0) {
+      return this.isSelectedPageIndex(index) ? this.markdownText : '';
+    }
+    if (pageId === this.activePageId) {
+      return this.markdownText;
+    }
+    return this.pageMarkdownDrafts.get(pageId) ?? '';
+  }
+
+  private pagePreviewFallbackBlocks(index: number): MarkdownPreviewBlock[] {
+    if (this.pageEntryAt(index)?.pageKind === 'pdf' || this.pageEntryAt(index)?.pageKind === 'pdf-fragment') {
+      return [];
+    }
+    const markdownText: string = this.pageMarkdownTextAt(index).trim();
+    if (markdownText.length === 0) {
+      return [];
+    }
+    const normalizedBlocks: MarkdownPreviewBlock[] = [];
+    MarkdownUtils.buildPreviewBlocks(markdownText).forEach((block: MarkdownPreviewBlock) => {
+      const normalizedText: string = block.text.replace(/\s+/g, ' ').trim();
+      if (normalizedText.length === 0 || normalizedText === 'No text content yet.') {
+        return;
+      }
+      normalizedBlocks.push({
+        type: block.type,
+        level: block.level,
+        text: normalizedText
+      });
+    });
+    return normalizedBlocks.slice(0, 4);
+  }
+
+  private pageSceneAt(index: number): NativePreviewPage | undefined {
+    const scene: NativeSceneSnapshot | null = this.simulatorSceneSnapshot;
+    if (!scene) {
+      return undefined;
+    }
+    const pageEntry: DocumentPageEntry | undefined = this.pageEntryAt(index);
+    if (pageEntry) {
+      return scene.pages.find((page: NativePreviewPage) => page.pageId === pageEntry.id) ??
+        scene.pages.find((page: NativePreviewPage) => page.pageIndex === index);
+    }
+    return scene.pages.find((page: NativePreviewPage) => page.pageIndex === index);
+  }
+
+  private pageSceneWidthAt(index: number): number {
+    const page: NativePreviewPage | undefined = this.pageSceneAt(index);
+    const bounds: NativePreviewBounds | undefined = page?.bounds;
+    const boundedWidth: number = bounds ? Math.max(0, bounds.maxX - bounds.minX) : 0;
+    const width: number = Number(page?.width ?? boundedWidth);
+    if (width > 0) {
+      return width;
+    }
+    if (this.document) {
+      return buildNativePageContractForEntry(this.document, this.pageEntryAt(index)).widthPt;
+    }
+    return 612;
+  }
+
+  private pageSceneHeightAt(index: number): number {
+    const page: NativePreviewPage | undefined = this.pageSceneAt(index);
+    const bounds: NativePreviewBounds | undefined = page?.bounds;
+    const boundedHeight: number = bounds ? Math.max(0, bounds.maxY - bounds.minY) : 0;
+    const height: number = Number(page?.height ?? boundedHeight);
+    if (height > 0) {
+      return height;
+    }
+    if (this.document) {
+      return buildNativePageContractForEntry(this.document, this.pageEntryAt(index)).heightPt;
+    }
+    return 792;
+  }
+
+  private pageSceneObjectsAt(index: number): NativeSceneObject[] {
+    const scene: NativeSceneSnapshot | null = this.simulatorSceneSnapshot;
+    if (!scene) {
+      return [];
+    }
+    const pageId: string = this.pageEntryAt(index)?.id ?? this.pageSceneAt(index)?.pageId ?? '';
+    return scene.objects.filter((object: NativeSceneObject) => object.layer === 'ink' &&
+      (((object.pageId ?? '') === pageId && pageId.length > 0) || (object.pageIndex ?? -1) === index));
+  }
+
+  private pageRailObjectX(index: number, object: NativeSceneObject): number {
+    const innerWidth: number = PAGE_RAIL_THUMBNAIL_WIDTH - 20;
+    return 10 + clampToRange(
+      (object.bounds.minX / this.pageSceneWidthAt(index)) * innerWidth,
+      0,
+      innerWidth - 18
+    );
+  }
+
+  private pageRailObjectY(index: number, object: NativeSceneObject): number {
+    const innerHeight: number = PAGE_RAIL_THUMBNAIL_HEIGHT - 22;
+    return 11 + clampToRange(
+      (object.bounds.minY / this.pageSceneHeightAt(index)) * innerHeight,
+      0,
+      innerHeight - 14
+    );
+  }
+
+  private pageRailObjectWidth(index: number, object: NativeSceneObject): number {
+    const widthRatio: number = Math.max(0, object.bounds.maxX - object.bounds.minX) / this.pageSceneWidthAt(index);
+    return clampToRange(widthRatio * (PAGE_RAIL_THUMBNAIL_WIDTH - 20), 12, PAGE_RAIL_THUMBNAIL_WIDTH - 22);
+  }
+
+  private pageRailObjectHeight(index: number, object: NativeSceneObject): number {
+    const heightRatio: number = Math.max(0, object.bounds.maxY - object.bounds.minY) / this.pageSceneHeightAt(index);
+    return clampToRange(heightRatio * (PAGE_RAIL_THUMBNAIL_HEIGHT - 22), 8, 44);
+  }
+
   private pagePlaceholderTitle(index: number): string {
     if (!this.supportsPagedDocumentRuntime()) {
       return 'Document page';
@@ -1408,18 +1552,21 @@ struct EditorWorkspace {
     if (!this.supportsPagedDocumentRuntime()) {
       return 'Document summary only';
     }
-    return this.isSelectedPageIndex(index) ? 'Active page without preview' : 'No preview yet';
+    if (this.pageSceneObjectsAt(index).length > 0) {
+      return 'Runtime preview available';
+    }
+    return this.pagePreviewFallbackBlocks(index).length > 0 ? 'Markdown preview available' : 'No preview cached';
   }
 
   @Builder
   private buildInspectorShortcut(mode: 'preview' | 'source', label: string): void {
     Button(label)
-      .height(44)
-      .padding({ left: 16, right: 16 })
+      .height(40)
+      .padding({ left: 14, right: 14 })
       .backgroundColor(this.isInspectorModeActive(mode) ? '#162033' : '#F3F6FB')
       .fontColor(this.isInspectorModeActive(mode) ? '#FFFFFF' : '#162033')
-      .fontSize(13)
-      .borderRadius(14)
+      .fontSize(12)
+      .borderRadius(12)
       .onClick(() => {
         this.toggleInspector(mode);
       })
@@ -1427,24 +1574,25 @@ struct EditorWorkspace {
 
   @Builder
   private buildHeaderBar(): void {
-    Row({ space: 8 }) {
+    Row({ space: 6 }) {
       this.buildInspectorShortcut('preview', this.inspectorTabLabel('preview'))
       this.buildInspectorShortcut('source', this.inspectorTabLabel('source'))
       Button(this.saveButtonLabel())
-        .height(44)
-        .padding({ left: 16, right: 16 })
+        .height(40)
+        .padding({ left: 14, right: 14 })
         .enabled(this.saveState !== 'saving')
         .backgroundColor(this.saveState === 'saving' ? '#98A2B3' : '#162033')
         .fontColor('#FFFFFF')
-        .fontSize(13)
+        .fontSize(12)
+        .borderRadius(12)
         .onClick(async () => {
           await this.saveDocument();
         })
     }
-    .padding(8)
+    .padding(6)
     .backgroundColor('#F8F9FA')
     .border({ width: 1, color: '#E4E7EC' })
-    .borderRadius(18)
+    .borderRadius(16)
     .hitTestBehavior(HitTestMode.Transparent)
   }
 
@@ -1452,12 +1600,12 @@ struct EditorWorkspace {
   private buildHeaderArea(): void {
     Row() {
       Button('←')
-        .width(52)
-        .height(52)
+        .width(44)
+        .height(44)
         .backgroundColor('#F7F7F8')
         .fontColor('#364152')
-        .fontSize(22)
-        .borderRadius(16)
+        .fontSize(20)
+        .borderRadius(14)
         .onClick(() => {
           this.goBack();
         })
@@ -1484,79 +1632,81 @@ struct EditorWorkspace {
   @Builder
   private buildFloatingToolbar(): void {
     Column() {
-      Row({ space: 4 }) {
-        Button(EDITOR_WORKSPACE_COPY.undo)
-          .width(28)
-          .height(28)
-          .backgroundColor('#F3F6FB')
-          .fontColor('#162033')
-          .fontSize(11)
-          .onClick(() => {
-            this.undoStroke();
-          })
-        Button(EDITOR_WORKSPACE_COPY.redo)
-          .width(28)
-          .height(28)
-          .backgroundColor('#F3F6FB')
-          .fontColor('#162033')
-          .fontSize(11)
-          .onClick(() => {
-            this.redoStroke();
-          })
+      Row({ space: 8 }) {
         ForEach([
           ToolType.PEN,
           ToolType.PENCIL,
-          ToolType.HIGHLIGHTER,
           ToolType.ERASER,
-          ToolType.LASSO,
           ToolType.TEXT,
+          ToolType.LASSO,
+          ToolType.HIGHLIGHTER,
           ToolType.HAND
         ], (tool: ToolType) => {
-          Button(this.toolLabel(tool))
-            .width(28)
-            .height(28)
-            .backgroundColor(this.currentTool === tool ? '#162033' : '#FFFFFF')
-            .fontColor(this.currentTool === tool ? '#FFFFFF' : '#162033')
-            .fontSize(11)
+          Button(this.toolGlyph(tool))
+            .width(FLOATING_TOOL_BUTTON_SIZE)
+            .height(FLOATING_TOOL_BUTTON_SIZE)
+            .backgroundColor(this.currentTool === tool ? '#0B57D0' : '#FFFFFF')
+            .fontColor(this.currentTool === tool ? '#FFFFFF' : '#344054')
+            .fontSize(tool === ToolType.TEXT ? 15 : 18)
+            .fontWeight(FontWeight.Medium)
+            .border({
+              width: this.currentTool === tool ? 2 : 1,
+              color: this.currentTool === tool ? '#0B57D0' : '#D8E0EA'
+            })
+            .borderRadius(14)
             .onClick(() => {
               this.setTool(tool);
             })
         }, (tool: ToolType): string => tool)
-        Button(this.showToolExtras ? EDITOR_WORKSPACE_COPY.collapseOptions : EDITOR_WORKSPACE_COPY.more)
-          .height(28)
-          .padding({ left: 10, right: 10 })
-          .backgroundColor(this.showToolExtras ? '#DCE6FF' : '#FFFFFF')
-          .fontColor('#162033')
-          .fontSize(11)
+        Blank()
+          .width(1)
+          .height(24)
+          .backgroundColor('#D8E0EA')
+          .margin({ left: 2, right: 2 })
+        Row({ space: 10 }) {
+          ForEach(PALETTE_COLORS, (color: string) => {
+            Blank()
+              .width(FLOATING_TOOLBAR_COLOR_CHIP_SIZE)
+              .height(FLOATING_TOOLBAR_COLOR_CHIP_SIZE)
+              .backgroundColor(color)
+              .border({
+                width: this.currentColor === color ? 3 : 1,
+                color: this.currentColor === color ? '#0B57D0' : '#D0D5DD'
+              })
+              .borderRadius(999)
+              .onClick(() => {
+                this.currentColor = color;
+                if (this.engineId.length > 0) {
+                  this.nativeEngine.setBrushColor(this.engineId, color);
+                  this.refreshDebugState();
+                }
+              })
+          }, (color: string): string => color)
+        }
+        Blank()
+          .width(1)
+          .height(24)
+          .backgroundColor('#D8E0EA')
+          .margin({ left: 2, right: 2 })
+        Button(this.showToolExtras ? '⌄' : '›')
+          .width(FLOATING_TOOLBAR_MORE_BUTTON_SIZE)
+          .height(FLOATING_TOOLBAR_MORE_BUTTON_SIZE)
+          .backgroundColor('#FFFFFF')
+          .fontColor('#344054')
+          .fontSize(18)
+          .border({ width: 1, color: '#D8E0EA' })
+          .borderRadius(12)
           .onClick(() => {
             this.toggleToolExtras();
           })
       }
-      Row({ space: 8 }) {
-        ForEach(PALETTE_COLORS, (color: string) => {
-          Blank()
-            .width(16)
-            .height(16)
-            .backgroundColor(color)
-            .border({
-              width: this.currentColor === color ? 3 : 1,
-              color: this.currentColor === color ? '#162033' : '#D0D5DD'
-            })
-            .borderRadius(8)
-            .onClick(() => {
-              this.currentColor = color;
-              if (this.engineId.length > 0) {
-                this.nativeEngine.setBrushColor(this.engineId, color);
-                this.refreshDebugState();
-              }
-            })
-        }, (color: string): string => color)
-      }
-      .margin({ top: 8 })
+      .justifyContent(FlexAlign.Center)
+      .width('100%')
+      .padding({ left: 16, right: 16, top: 12, bottom: 12 })
       if (this.showToolExtras) {
         Row({ space: 10 }) {
           Button(this.showInspectorDrawer ? EDITOR_WORKSPACE_COPY.collapsePanel : EDITOR_WORKSPACE_COPY.openPanel)
-            .height(30)
+            .height(28)
             .backgroundColor(this.showInspectorDrawer ? '#DCE6FF' : '#FFFFFF')
             .fontColor('#162033')
             .fontSize(11)
@@ -1571,7 +1721,7 @@ struct EditorWorkspace {
             .fontSize(12)
             .fontColor('#667085')
           Button(RENDER_BACKEND_LABELS[RenderBackend.OPEN_GLES])
-            .height(30)
+            .height(28)
             .backgroundColor(this.currentBackend === RenderBackend.OPEN_GLES ? '#162033' : '#FFFFFF')
             .fontColor(this.currentBackend === RenderBackend.OPEN_GLES ? '#FFFFFF' : '#162033')
             .fontSize(11)
@@ -1579,7 +1729,7 @@ struct EditorWorkspace {
               this.setBackend(RenderBackend.OPEN_GLES);
             })
           Button(RENDER_BACKEND_LABELS[RenderBackend.SKIA])
-            .height(30)
+            .height(28)
             .backgroundColor(this.currentBackend === RenderBackend.SKIA ? '#162033' : '#FFFFFF')
             .fontColor(this.currentBackend === RenderBackend.SKIA ? '#FFFFFF' : '#162033')
             .fontSize(11)
@@ -1594,7 +1744,7 @@ struct EditorWorkspace {
             .fontSize(12)
             .fontColor('#667085')
           Button(DOCUMENT_MODE_LABELS[DocumentMode.PAGED])
-            .height(30)
+            .height(28)
             .enabled(this.canChangeDocumentMode())
             .backgroundColor(this.currentMode === DocumentMode.PAGED ? '#162033' : '#FFFFFF')
             .fontColor(this.currentMode === DocumentMode.PAGED ? '#FFFFFF' : '#162033')
@@ -1603,7 +1753,7 @@ struct EditorWorkspace {
               this.setMode(DocumentMode.PAGED);
             })
           Button(DOCUMENT_MODE_LABELS[DocumentMode.INFINITE])
-            .height(30)
+            .height(28)
             .enabled(this.canChangeDocumentMode())
             .backgroundColor(this.currentMode === DocumentMode.INFINITE ? '#162033' : '#FFFFFF')
             .fontColor(this.currentMode === DocumentMode.INFINITE ? '#FFFFFF' : '#162033')
@@ -1612,16 +1762,16 @@ struct EditorWorkspace {
               this.setMode(DocumentMode.INFINITE);
             })
         }
-        .margin({ top: 8 })
-        .padding(10)
+        .margin({ left: 14, right: 14, bottom: 14 })
+        .padding({ left: 10, right: 10, top: 8, bottom: 8 })
         .backgroundColor('#F7F9FC')
-        .borderRadius(16)
+        .borderRadius(14)
       }
     }
-    .padding({ left: 8, right: 8, top: 7, bottom: 7 })
-    .backgroundColor('#FFFFFF')
+    .width(FLOATING_TOOLBAR_WIDTH)
+    .backgroundColor('#F7F7F8')
     .border({ width: 1, color: '#D8E0EA' })
-    .borderRadius(16)
+    .borderRadius(18)
     .hitTestBehavior(HitTestMode.Transparent)
   }
 
@@ -1963,7 +2113,7 @@ struct EditorWorkspace {
         Blank()
           .layoutWeight(1)
         Button(EDITOR_WORKSPACE_COPY.close)
-          .height(34)
+          .height(32)
           .backgroundColor('#F3F6FB')
           .fontColor('#162033')
           .onClick(() => {
@@ -2089,28 +2239,61 @@ struct EditorWorkspace {
           Row()
             .width(PAGE_RAIL_THUMBNAIL_WIDTH)
             .height(PAGE_RAIL_THUMBNAIL_HEIGHT)
-            .backgroundColor('#FFFFFF')
-            .borderRadius(22)
+            .backgroundColor('#FFFEFB')
+            .borderRadius(PAGE_RAIL_CARD_RADIUS)
             .border({ width: 1, color: '#D8E0EA' })
           if (this.pageEntryAt(pageIndex)?.pageKind === 'pdf' || this.pageEntryAt(pageIndex)?.pageKind === 'pdf-fragment') {
-            Row()
-              .width(PAGE_RAIL_THUMBNAIL_WIDTH - 20)
-              .height(PAGE_RAIL_THUMBNAIL_HEIGHT - 20)
-              .backgroundColor('#F2F4F7')
-              .borderRadius(18)
-              .position({ x: 10, y: 10 })
-          } else {
-            ForEach([0, 1, 2, 3, 4], (rowIndex: number) => {
+            Column({ space: 8 }) {
               Row()
-                .width(PAGE_RAIL_THUMBNAIL_WIDTH - 28)
-                .height(1)
-                .backgroundColor('#E3E8EF')
-                .opacity(0.75)
-                .position({
-                  x: 14,
-                  y: 26 + rowIndex * Math.round((PAGE_RAIL_THUMBNAIL_HEIGHT - 58) / 5)
-                })
-            }, (rowIndex: number): string => `page-line-${pageIndex}-${rowIndex}`)
+                .width(PAGE_RAIL_THUMBNAIL_WIDTH - 18)
+                .height(78)
+                .backgroundColor('#EEF2F6')
+                .borderRadius(14)
+              Row()
+                .width(PAGE_RAIL_THUMBNAIL_WIDTH - 34)
+                .height(10)
+                .backgroundColor('#DCE4EE')
+                .borderRadius(8)
+              Row()
+                .width(PAGE_RAIL_THUMBNAIL_WIDTH - 46)
+                .height(10)
+                .backgroundColor('#E2E8F0')
+                .borderRadius(8)
+            }
+            .position({ x: 9, y: 10 })
+            .alignItems(HorizontalAlign.Start)
+          } else if (this.pageSceneObjectsAt(pageIndex).length > 0) {
+            Stack({ alignContent: Alignment.TopStart }) {
+              ForEach(this.pageSceneObjectsAt(pageIndex), (object: NativeSceneObject) => {
+                Row()
+                  .width(this.pageRailObjectWidth(pageIndex, object))
+                  .height(this.pageRailObjectHeight(pageIndex, object))
+                  .backgroundColor(object.colorHex)
+                  .opacity(object.tool === 'highlighter' ? 0.42 : 0.82)
+                  .borderRadius(object.tool === 'text' ? 8 : 999)
+                  .position({
+                    x: this.pageRailObjectX(pageIndex, object),
+                    y: this.pageRailObjectY(pageIndex, object)
+                  })
+              }, (object: NativeSceneObject): string => object.id)
+            }
+            .width(PAGE_RAIL_THUMBNAIL_WIDTH)
+            .height(PAGE_RAIL_THUMBNAIL_HEIGHT)
+          } else if (this.pagePreviewFallbackBlocks(pageIndex).length > 0) {
+            Column({ space: 6 }) {
+              ForEach(this.pagePreviewFallbackBlocks(pageIndex), (block: MarkdownPreviewBlock, blockIndex: number) => {
+                Text(block.text)
+                  .width(PAGE_RAIL_THUMBNAIL_WIDTH - 24)
+                  .maxLines(blockIndex === 0 ? 2 : 1)
+                  .textOverflow({ overflow: TextOverflow.Ellipsis })
+                  .fontSize(block.type === 'heading' ? 10 : 8)
+                  .fontWeight(block.type === 'heading' ? FontWeight.Medium : FontWeight.Normal)
+                  .fontColor(blockIndex === 0 ? '#344054' : '#667085')
+                  .lineHeight(block.type === 'heading' ? 14 : 12)
+              }, (block: MarkdownPreviewBlock, blockIndex: number): string => `${pageIndex}-fallback-${block.type}-${blockIndex}`)
+            }
+            .position({ x: 12, y: 14 })
+            .alignItems(HorizontalAlign.Start)
           }
         }
       }
@@ -2119,36 +2302,91 @@ struct EditorWorkspace {
           .width(PAGE_RAIL_THUMBNAIL_WIDTH)
           .height(PAGE_RAIL_THUMBNAIL_HEIGHT)
           .border({ width: 2, color: '#2A9D8F' })
-          .borderRadius(22)
+          .borderRadius(PAGE_RAIL_CARD_RADIUS)
       }
     }
   }
 
   @Builder
-  private buildPageRailHeader(): void {
-    Column({ space: 12 }) {
-      Row({ space: 8 }) {
-        TextInput({ text: this.pageSearchText, placeholder: '搜索' })
-          .layoutWeight(1)
-          .height(40)
+  private buildPageRailTopActions(): void {
+    Row() {
+      Blank()
+        .layoutWeight(1)
+      Row({ space: 6 }) {
+        Button('↶')
+          .width(PAGE_RAIL_ACTION_BUTTON_SIZE)
+          .height(PAGE_RAIL_ACTION_BUTTON_SIZE)
           .backgroundColor('#FFFFFF')
-          .borderRadius(14)
-          .padding({ left: 12, right: 12 })
-          .fontSize(13)
-          .onChange((value: string) => {
-            this.pageSearchText = value;
-          })
-        Button('···')
-          .width(40)
-          .height(40)
-          .backgroundColor('#F8FAFC')
-          .fontColor('#475467')
+          .fontColor('#667085')
           .fontSize(16)
+          .borderRadius(14)
+          .onClick(() => {
+            this.undoStroke();
+          })
+        Button('↷')
+          .width(PAGE_RAIL_ACTION_BUTTON_SIZE)
+          .height(PAGE_RAIL_ACTION_BUTTON_SIZE)
+          .backgroundColor('#FFFFFF')
+          .fontColor('#667085')
+          .fontSize(16)
+          .borderRadius(14)
+          .onClick(() => {
+            this.redoStroke();
+          })
+        Button('⋯')
+          .width(PAGE_RAIL_ACTION_BUTTON_SIZE)
+          .height(PAGE_RAIL_ACTION_BUTTON_SIZE)
+          .backgroundColor('#FFFFFF')
+          .fontColor('#344054')
+          .fontSize(18)
           .borderRadius(14)
           .onClick(() => {
             this.toggleRailMenu();
           })
+        if (this.canAddRealPages()) {
+          Button('+')
+            .width(PAGE_RAIL_ACTION_BUTTON_SIZE)
+            .height(PAGE_RAIL_ACTION_BUTTON_SIZE)
+            .backgroundColor('#0F766E')
+            .fontColor('#FFFFFF')
+            .fontSize(16)
+            .fontWeight(FontWeight.Medium)
+            .borderRadius(14)
+            .onClick(async () => {
+              await this.addPage();
+            })
+        }
       }
+      .padding(5)
+      .backgroundColor('#F7F7F8')
+      .border({ width: 1, color: '#E4E7EC' })
+      .borderRadius(16)
+    }
+    .width('100%')
+  }
+
+  @Builder
+  private buildPageRailHeader(): void {
+    Column({ space: 10 }) {
+      this.buildPageRailTopActions()
+      Row({ space: 8 }) {
+        Text('⌕')
+          .fontSize(16)
+          .fontColor('#667085')
+        TextInput({ text: this.pageSearchText, placeholder: '搜索' })
+          .layoutWeight(1)
+          .height(32)
+          .backgroundColor('#00FFFFFF')
+          .fontSize(13)
+          .onChange((value: string) => {
+            this.pageSearchText = value;
+          })
+      }
+      .width('100%')
+      .height(48)
+      .padding({ left: 14, right: 14 })
+      .backgroundColor('#FFFFFF')
+      .borderRadius(14)
       Row({ space: 8 }) {
         Text('所有页面')
           .fontSize(15)
@@ -2162,7 +2400,7 @@ struct EditorWorkspace {
         if (this.showPageJumpInput) {
           Row({ space: 6 }) {
             TextInput({ text: this.pageJumpDraft, placeholder: `${this.activePageIndex + 1}` })
-              .width(52)
+              .width(54)
               .height(34)
               .backgroundColor('#FFFFFF')
               .textAlign(TextAlign.Center)
@@ -2205,18 +2443,6 @@ struct EditorWorkspace {
             .borderRadius(12)
             .onClick(() => {
               this.openPageJumpInput();
-            })
-        }
-        if (this.canAddRealPages()) {
-          Button('+')
-            .width(32)
-            .height(32)
-            .fontSize(16)
-            .backgroundColor('#FFFFFF')
-            .fontColor('#162033')
-            .borderRadius(12)
-            .onClick(() => {
-              this.addPage();
             })
         }
       }
@@ -2417,17 +2643,17 @@ struct EditorWorkspace {
 
   @Builder
   private buildPageRailItem(pageIndex: number): void {
-    Column({ space: 10 }) {
+    Column({ space: 6 }) {
       Stack({ alignContent: Alignment.BottomStart }) {
         this.buildPageRailPreviewCard(pageIndex)
-        Button('···')
-          .width(32)
-          .height(32)
-          .fontSize(14)
+        Button('⋯')
+          .width(PAGE_RAIL_PAGE_MENU_BUTTON_SIZE)
+          .height(PAGE_RAIL_PAGE_MENU_BUTTON_SIZE)
+          .fontSize(12)
           .backgroundColor('#FFFFFF')
           .fontColor('#475467')
-          .borderRadius(16)
-          .margin({ left: 10, bottom: 10 })
+          .borderRadius(14)
+          .margin({ left: 8, bottom: 8 })
           .onClick(async () => {
             await this.togglePageMenu(pageIndex);
           })
@@ -2435,16 +2661,16 @@ struct EditorWorkspace {
           Column() {
             this.buildPageMenu(pageIndex)
           }
-          .position({ x: 18, y: PAGE_RAIL_THUMBNAIL_HEIGHT - 12 })
+          .position({ x: 12, y: PAGE_RAIL_THUMBNAIL_HEIGHT - 8 })
         }
       }
       Text(`${pageIndex + 1}`)
-        .fontSize(12)
+        .fontSize(10)
         .fontWeight(this.isSelectedPageIndex(pageIndex) ? FontWeight.Medium : FontWeight.Normal)
         .fontColor(this.isSelectedPageIndex(pageIndex) ? '#0F766E' : '#475467')
     }
     .width('100%')
-    .padding({ top: 2, bottom: 18 })
+    .padding({ top: 2, bottom: 12 })
     .alignItems(HorizontalAlign.Center)
     .onClick(() => {
       this.selectPage(pageIndex);
@@ -2454,7 +2680,7 @@ struct EditorWorkspace {
   @Builder
   private buildPageRail(): void {
     Stack({ alignContent: Alignment.TopStart }) {
-      Column({ space: 14 }) {
+      Column({ space: 10 }) {
         this.buildPageRailHeader()
         Scroll() {
           Column({ space: 2 }) {
@@ -2485,15 +2711,15 @@ struct EditorWorkspace {
         Column() {
           this.buildRailMenu()
         }
-        .position({ x: 18, y: 58 })
+        .position({ x: 12, y: 56 })
       }
     }
     .width(EDITOR_PAGE_RAIL_WIDTH)
     .height('100%')
-    .padding(16)
+    .padding(12)
     .backgroundColor('#F3F4F6')
     .border({ width: 1, color: '#D8E0EA' })
-    .borderRadius(28)
+    .borderRadius(22)
   }
 
   build() {
@@ -2535,12 +2761,12 @@ struct EditorWorkspace {
         .justifyContent(FlexAlign.Center)
         .backgroundColor('#EEF2F8')
       } else {
-        Row({ space: 12 }) {
-          Column({ space: 12 }) {
+        Row({ space: 10 }) {
+          Column({ space: 8 }) {
             this.buildHeaderArea()
-            Row({ space: 12 }) {
-              Column({ space: 12 }) {
-                Row({ space: 12 }) {
+            Row({ space: 10 }) {
+              Column({ space: 8 }) {
+                Row({ space: 10 }) {
                   Blank()
                     .layoutWeight(1)
                     .hitTestBehavior(HitTestMode.None)
@@ -2598,7 +2824,7 @@ struct EditorWorkspace {
         }
         .width('100%')
         .height('100%')
-        .padding(12)
+        .padding(10)
         .backgroundColor('#E9EEF5')
       }
     }
