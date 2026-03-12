@@ -57,7 +57,7 @@ They should instead:
 - `Message`: text to send after opening the thread.
 - `ThreadTargets`: optional per-thread coordinate map. Each entry can define absolute `X` / `Y` pixels, normalized full-screen `XRatio` / `YRatio`, or a window rectangle via `LeftRatio` / `TopRatio` / `WidthRatio` / `HeightRatio`.
 - `ComposerClickXRatio`: click position inside the target window rectangle on the X axis. Default `0.470`.
-- `ComposerClickYRatio`: click position inside the target window rectangle on the Y axis. Default `0.905`.
+- `ComposerClickYRatio`: click position inside the target window rectangle on the Y axis. Default `0.840`.
 - `WindowTitleRegex`: kept only for backward-compatible callers and ignored in fixed-coordinate mode.
 - `SelectionAttempts`: kept only for backward-compatible callers and ignored in fixed-coordinate mode.
 - `SelectionTimeoutMs`: kept only for backward-compatible callers and ignored in fixed-coordinate mode.
