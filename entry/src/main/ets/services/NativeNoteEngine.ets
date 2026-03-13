@@ -28,6 +28,13 @@ interface NativeEntryModule {
   deletePage(engineId: string, pageId: string): boolean;
   setTool(engineId: string, tool: string): boolean;
   setFingerWritingEnabled(engineId: string, enabled: boolean): boolean;
+  injectSimulatorFingerEvent(
+    engineId: string,
+    action: string,
+    pageXRatio: number,
+    pageYRatio: number,
+    pointerCount: number
+  ): boolean;
   setBackend(engineId: string, backend: string): boolean;
   setDocumentMode(engineId: string, mode: string): boolean;
   setBrushColor(engineId: string, colorHex: string): boolean;
@@ -626,6 +633,16 @@ export class NativeNoteEngine {
 
   setFingerWritingEnabled(engineId: string, enabled: boolean): boolean {
     return nativeBridge.setFingerWritingEnabled(engineId, enabled);
+  }
+
+  injectSimulatorFingerEvent(
+    engineId: string,
+    action: string,
+    pageXRatio: number,
+    pageYRatio: number,
+    pointerCount: number
+  ): boolean {
+    return nativeBridge.injectSimulatorFingerEvent(engineId, action, pageXRatio, pageYRatio, pointerCount);
   }
 
   setBackend(engineId: string, backend: RenderBackend): boolean {

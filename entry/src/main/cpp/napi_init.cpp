@@ -3676,6 +3676,17 @@ public:
         return true;
     }
 
+    bool InjectSimulatorFingerEvent(const std::string& engineId, const std::string& action,
+        double pageXRatio, double pageYRatio, int pointerCount) override
+    {
+        (void)engineId;
+        (void)action;
+        (void)pageXRatio;
+        (void)pageYRatio;
+        (void)pointerCount;
+        return false;
+    }
+
     bool SetBackend(const std::string& engineId, const std::string& backend)
     {
         std::lock_guard<std::mutex> lock(mutex_);

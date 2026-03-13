@@ -76,6 +76,10 @@ interface EditorWorkspaceCopy {
   traceStatus: string;
   tracePath: string;
   traceSampleCount: string;
+  simulatorZoom: string;
+  zoomOut: string;
+  zoomIn: string;
+  resetZoom: string;
   traceUnsupported: string;
   recentAction: string;
   openingEditor: string;
@@ -83,6 +87,11 @@ interface EditorWorkspaceCopy {
   documentNotFound: string;
   returnLibrary: string;
   sourcePlaceholder: string;
+}
+
+interface GestureRatioPoint {
+  xRatio: number;
+  yRatio: number;
 }
 
 type EmbeddedOverlayDraft = DocumentEmbeddedBlock;
@@ -173,6 +182,10 @@ const EDITOR_WORKSPACE_COPY: EditorWorkspaceCopy = {
   traceStatus: '状态',
   tracePath: '路径',
   traceSampleCount: '采样数',
+  simulatorZoom: '模拟器缩放',
+  zoomOut: '缩小',
+  zoomIn: '放大',
+  resetZoom: '重置',
   traceUnsupported: '当前模拟器模式不支持轨迹录制与回放，因此相关控件保持禁用。',
   recentAction: '最近操作',
   openingEditor: '正在打开编辑器...',
@@ -213,6 +226,9 @@ struct EditorWorkspace {
   private viewportInertiaTimerId: number = -1;
   private viewportInertiaResolve: (() => void) | null = null;
   private viewportPinchOriginScale: number = 1;
+  private simulatorFingerGestureActive: boolean = false;
+  private simulatorFingerGestureLastXRatio: number = 0.5;
+  private simulatorFingerGestureLastYRatio: number = 0.5;
   private embeddedSelectionOriginX: number = 0;
   private embeddedSelectionOriginY: number = 0;
   private readonly embeddedOverlaysByPage: Map<string, EmbeddedOverlayDraft[]> = new Map<string, EmbeddedOverlayDraft[]>();
@@ -603,12 +619,21 @@ struct EditorWorkspace {
       this.simulatorSceneSnapshot = null;
       return;
     }
-    const state: NativeDebugState | null = this.nativeEngine.getDebugState(this.engineId);
+    let state: NativeDebugState | null = this.nativeEngine.getDebugState(this.engineId);
     if (!state) {
       this.debugState = null;
       this.debugStateText = '原生调试信息不可用';
       this.simulatorSceneSnapshot = null;
       return;
+    }
+    if (
+      state.runtimeProfile === 'simulator-stub' &&
+      this.writingViewportWidth > 0 &&
+      this.writingViewportHeight > 0 &&
+      (!state.surfaceReady || state.surfaceWidth <= 0 || state.surfaceHeight <= 0)
+    ) {
+      this.nativeEngine.resize(this.engineId, this.writingViewportWidth, this.writingViewportHeight, 2);
+      state = this.nativeEngine.getDebugState(this.engineId) ?? state;
     }
     this.fingerWritingEnabled = state.fingerWritingEnabled;
     this.debugState = state;
@@ -837,6 +862,7 @@ struct EditorWorkspace {
   }
 
   private applyFingerWritingState(): void {
+    this.resetSimulatorFingerGesture(true);
     if (this.engineId.length === 0) {
       return;
     }
@@ -1176,8 +1202,48 @@ struct EditorWorkspace {
     return !this.shouldUseSimulatorStubUi();
   }
 
+  private shouldHandleSimulatorFingerWritingGesture(): boolean {
+    return this.shouldUseSimulatorStubUi() &&
+      this.fingerWritingEnabled &&
+      !this.embedPlacementArmed &&
+      !this.showEmbeddedComposer &&
+      !this.showInspectorDrawer &&
+      !this.toolUsesContextActions();
+  }
+
+  private canHandleSingleFingerSurfaceGesture(): boolean {
+    return this.canSingleFingerPanViewport() || this.shouldHandleSimulatorFingerWritingGesture();
+  }
+
+  private syncSimulatorStubViewportSize(): void {
+    if (
+      this.engineId.length === 0 ||
+      !this.shouldUseSimulatorStubUi() ||
+      this.writingViewportWidth <= 0 ||
+      this.writingViewportHeight <= 0
+    ) {
+      return;
+    }
+    this.nativeEngine.resize(this.engineId, this.writingViewportWidth, this.writingViewportHeight, 2);
+  }
+
   private isTraceSupported(): boolean {
     return this.debugState?.traceSupported ?? false;
+  }
+
+  private nudgeSimulatorZoom(step: number): void {
+    const nextScale: number = clampToRange(this.pageStackScale + step, PAGE_STACK_MIN_ZOOM, PAGE_STACK_MAX_ZOOM);
+    this.pageStackScale = nextScale;
+    this.pageStackPanX = this.clampedPageStackPanX(this.pageStackPanX);
+    this.pageStackPanY = this.clampedPageStackPanY(this.pageStackPanY);
+    this.traceActionMessage = `模拟器缩放 ${nextScale.toFixed(2)}x`;
+  }
+
+  private resetSimulatorZoom(): void {
+    this.pageStackScale = 1;
+    this.pageStackPanX = this.clampedPageStackPanX(0);
+    this.pageStackPanY = this.clampedPageStackPanY(this.pageFocusTargetPanY(this.activePageIndex));
+    this.traceActionMessage = '模拟器缩放已重置';
   }
 
   private simulatorCapabilitySummary(): string {
@@ -1592,6 +1658,7 @@ struct EditorWorkspace {
     }
     this.writingViewportWidth = width;
     this.writingViewportHeight = height;
+    this.syncSimulatorStubViewportSize();
     this.syncViewportToActivePage();
     this.floatingToolbarOffsetX = this.clampedFloatingToolbarX(this.floatingToolbarOffsetX);
     this.floatingToolbarOffsetY = this.clampedFloatingToolbarY(this.floatingToolbarOffsetY);
@@ -1854,6 +1921,89 @@ struct EditorWorkspace {
       }
     }
     return fallback;
+  }
+
+  private readGestureCoordinate(event: Object | undefined, keys: string[], fallback: number): number {
+    for (let index = 0; index < keys.length; index += 1) {
+      const value: number = this.readGestureNumber(event, keys[index], Number.NaN);
+      if (!Number.isNaN(value)) {
+        return value;
+      }
+    }
+    return fallback;
+  }
+
+  private simulatorFingerGesturePoint(event?: Object): GestureRatioPoint | null {
+    if (this.activePageIndex < 0 || this.activePageIndex >= this.pageCount()) {
+      return null;
+    }
+    const pageWidth: number = this.renderedWritingPageWidth(this.activePageIndex);
+    const pageHeight: number = this.renderedWritingPageHeight(this.activePageIndex);
+    if (pageWidth <= 0 || pageHeight <= 0) {
+      return null;
+    }
+    const pageOffsetX: number = this.pageCardOffsetX(this.activePageIndex);
+    const pageOffsetY: number = this.pageCardOffsetY(this.activePageIndex);
+    const localX: number = this.readGestureCoordinate(event, ['localX', 'x'], pageOffsetX + (pageWidth / 2));
+    const localY: number = this.readGestureCoordinate(event, ['localY', 'y'], pageOffsetY + (pageHeight / 2));
+    const pageLocalX: number = clampToRange(localX - pageOffsetX, 0, pageWidth);
+    const pageLocalY: number = clampToRange(localY - pageOffsetY, 0, pageHeight);
+    const point: GestureRatioPoint = {
+      xRatio: pageWidth > 0 ? pageLocalX / pageWidth : 0.5,
+      yRatio: pageHeight > 0 ? pageLocalY / pageHeight : 0.5
+    };
+    return point;
+  }
+
+  private resetSimulatorFingerGesture(cancelNative: boolean = false): void {
+    if (cancelNative && this.engineId.length > 0 && this.simulatorFingerGestureActive) {
+      this.nativeEngine.injectSimulatorFingerEvent(
+        this.engineId,
+        'cancel',
+        this.simulatorFingerGestureLastXRatio,
+        this.simulatorFingerGestureLastYRatio,
+        0
+      );
+    }
+    this.simulatorFingerGestureActive = false;
+    this.simulatorFingerGestureLastXRatio = 0.5;
+    this.simulatorFingerGestureLastYRatio = 0.5;
+  }
+
+  private updateSimulatorFingerGesture(event: Object): void {
+    if (!this.shouldHandleSimulatorFingerWritingGesture()) {
+      return;
+    }
+    const point = this.simulatorFingerGesturePoint(event);
+    if (!point) {
+      return;
+    }
+    this.simulatorFingerGestureLastXRatio = point.xRatio;
+    this.simulatorFingerGestureLastYRatio = point.yRatio;
+    if (!this.simulatorFingerGestureActive) {
+      this.nativeEngine.injectSimulatorFingerEvent(this.engineId, 'down', point.xRatio, point.yRatio, 1);
+      this.simulatorFingerGestureActive = true;
+    }
+    this.nativeEngine.injectSimulatorFingerEvent(this.engineId, 'move', point.xRatio, point.yRatio, 1);
+  }
+
+  private finishSimulatorFingerGesture(event?: Object): void {
+    if (this.engineId.length === 0) {
+      this.resetSimulatorFingerGesture(false);
+      return;
+    }
+    const point = this.simulatorFingerGesturePoint(event);
+    const xRatio: number = point?.xRatio ?? this.simulatorFingerGestureLastXRatio;
+    const yRatio: number = point?.yRatio ?? this.simulatorFingerGestureLastYRatio;
+    if (this.shouldHandleSimulatorFingerWritingGesture() && !this.simulatorFingerGestureActive) {
+      this.nativeEngine.injectSimulatorFingerEvent(this.engineId, 'down', xRatio, yRatio, 1);
+    }
+    if (this.simulatorFingerGestureActive || this.shouldHandleSimulatorFingerWritingGesture()) {
+      this.nativeEngine.injectSimulatorFingerEvent(this.engineId, 'up', xRatio, yRatio, 0);
+      this.traceActionMessage = this.fingerWritingEnabled ? '模拟器手指写入已注入' : '模拟器触摸事件已记录';
+      this.refreshDebugState();
+    }
+    this.resetSimulatorFingerGesture(false);
   }
 
   private async reloadDocumentEmbeddedBlocks(): Promise<void> {
@@ -2835,6 +2985,35 @@ struct EditorWorkspace {
           })
       }
       .margin({ top: 12 })
+      if (this.shouldUseSimulatorStubUi()) {
+        Row({ space: 8 }) {
+          Text(`${EDITOR_WORKSPACE_COPY.simulatorZoom}：${this.pageStackScale.toFixed(2)}x`)
+            .fontSize(11)
+            .fontColor('#CBD5E1')
+          Button(EDITOR_WORKSPACE_COPY.zoomOut)
+            .height(30)
+            .backgroundColor('#334155')
+            .fontColor('#FFFFFF')
+            .onClick(() => {
+              this.nudgeSimulatorZoom(-0.18);
+            })
+          Button(EDITOR_WORKSPACE_COPY.zoomIn)
+            .height(30)
+            .backgroundColor('#2563EB')
+            .fontColor('#FFFFFF')
+            .onClick(() => {
+              this.nudgeSimulatorZoom(0.18);
+            })
+          Button(EDITOR_WORKSPACE_COPY.resetZoom)
+            .height(30)
+            .backgroundColor('#475467')
+            .fontColor('#FFFFFF')
+            .onClick(() => {
+              this.resetSimulatorZoom();
+            })
+        }
+        .margin({ top: 10 })
+      }
       Text(`${EDITOR_WORKSPACE_COPY.traceStatus}：${this.traceStatusText()}`)
         .fontSize(12)
         .fontColor('#E2E8F0')
@@ -3785,14 +3964,22 @@ struct EditorWorkspace {
               this.toggleTracePanel();
             }
           }),
-        PanGesture({ fingers: 1, distance: this.canSingleFingerPanViewport() ? 0 : 100000 })
+        PanGesture({ fingers: 1, distance: this.canHandleSingleFingerSurfaceGesture() ? 0 : 100000 })
           .onActionStart(() => {
             this.handleViewportPanStart();
           })
           .onActionUpdate((event) => {
+            if (this.shouldHandleSimulatorFingerWritingGesture()) {
+              this.updateSimulatorFingerGesture(event as Object);
+              return;
+            }
             this.updateViewportPan(event as Object, 1);
           })
-          .onActionEnd(async () => {
+          .onActionEnd(async (event) => {
+            if (this.simulatorFingerGestureActive || this.shouldHandleSimulatorFingerWritingGesture()) {
+              this.finishSimulatorFingerGesture(event as Object);
+              return;
+            }
             await this.finishViewportPan(1);
           }),
         PanGesture({ fingers: 2, distance: this.canTwoFingerPanViewport() ? 0 : 100000 })

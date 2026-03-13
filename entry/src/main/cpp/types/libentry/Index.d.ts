@@ -8,6 +8,13 @@ declare const entry: {
   exportSceneSnapshot: (engineId: string, documentId: string) => string;
   setTool: (engineId: string, tool: string) => boolean;
   setFingerWritingEnabled: (engineId: string, enabled: boolean) => boolean;
+  injectSimulatorFingerEvent: (
+    engineId: string,
+    action: string,
+    pageXRatio: number,
+    pageYRatio: number,
+    pointerCount: number
+  ) => boolean;
   setBackend: (engineId: string, backend: string) => boolean;
   setDocumentMode: (engineId: string, mode: string) => boolean;
   setBrushColor: (engineId: string, colorHex: string) => boolean;

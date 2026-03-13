@@ -26,6 +26,8 @@ public:
     virtual bool DeletePage(const std::string& engineId, const std::string& pageId) = 0;
     virtual bool SetTool(const std::string& engineId, const std::string& tool) = 0;
     virtual bool SetFingerWritingEnabled(const std::string& engineId, bool enabled) = 0;
+    virtual bool InjectSimulatorFingerEvent(const std::string& engineId, const std::string& action,
+        double pageXRatio, double pageYRatio, int pointerCount) = 0;
     virtual bool SetBackend(const std::string& engineId, const std::string& backend) = 0;
     virtual bool SetDocumentMode(const std::string& engineId, const std::string& mode) = 0;
     virtual bool SetBrushColor(const std::string& engineId, const std::string& colorHex) = 0;

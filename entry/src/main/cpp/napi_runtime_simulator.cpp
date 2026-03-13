@@ -3,6 +3,7 @@
 #include "hilog/log.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cctype>
 #include <cstdint>
 #include <fstream>
@@ -18,6 +19,7 @@ constexpr unsigned int kLogDomain = 0x3201;
 constexpr const char* kLogTag = "NoteEngine";
 constexpr const char* kUnsupportedSimulatorStatus = "unsupported-simulator";
 constexpr const char* kWeakNativeShellStubReason = "x86_64-simulator-uses-weak-native-shell";
+constexpr const char* kSimulatorPlaceholderSurfaceId = "simulator-placeholder-surface";
 constexpr const char* kPrimaryPageId = "page-0";
 constexpr const char* kLegacyCoordinateSpace = "legacy-surface";
 constexpr const char* kStatsFallbackTargetMode = "stats-fallback";
@@ -103,8 +105,54 @@ struct SimulatorEngineState {
     std::string lastInputTracePath;
     std::string lastInputTraceStatus = "idle";
     size_t lastInputTraceSampleCount = 0;
+    int touchEventCount = 0;
+    int uiTouchEventCount = 0;
+    int keyEventCount = 0;
+    int stylusEventCount = 0;
+    int fingerEventCount = 0;
+    int palmRejectedCount = 0;
+    int activePointerCount = 0;
+    bool stylusActive = false;
+    bool multitouchGestureActive = false;
+    size_t lastHistoricalCount = 0;
+    size_t lastUiHistoryCount = 0;
+    size_t predictedPointCount = 0;
+    int64_t lastEventTime = 0;
+    int64_t lastKeyEventTime = 0;
+    int32_t lastKeyCode = -1;
+    int32_t lastKeyAction = -1;
+    int32_t lastKeySourceType = -1;
+    double lastPressure = 0.0;
+    double lastTiltX = 0.0;
+    double lastTiltY = 0.0;
+    double lastRollAngle = 0.0;
+    std::string lastTouchAction = "unknown";
+    std::string lastToolType = "unknown";
+    std::string lastSourceType = "unknown";
+    bool simulatorFingerStrokeActive = false;
+    double simulatorFingerStrokeStartXRatio = 0.5;
+    double simulatorFingerStrokeStartYRatio = 0.5;
+    double simulatorFingerStrokeLastXRatio = 0.5;
+    double simulatorFingerStrokeLastYRatio = 0.5;
     std::unordered_map<std::string, SimulatorDocumentSession> documents;
 };
+
+int64_t CurrentTimeMillis()
+{
+    const auto now = std::chrono::time_point_cast<std::chrono::milliseconds>(std::chrono::system_clock::now());
+    return now.time_since_epoch().count();
+}
+
+double ClampUnitRatio(double value)
+{
+    if (value < 0.0) {
+        return 0.0;
+    }
+    if (value > 1.0) {
+        return 1.0;
+    }
+    return value == value ? value : 0.5;
+}
 
 std::string EscapeJsonString(const std::string& input)
 {
@@ -711,6 +759,48 @@ SimulatorSyntheticObject BuildSyntheticObject(
     return object;
 }
 
+SimulatorSyntheticObject BuildSyntheticObjectFromGesture(const SimulatorEngineState& engine,
+    SimulatorDocumentSession& session, const std::string& pageId,
+    double startXRatio, double startYRatio, double endXRatio, double endYRatio)
+{
+    const SimulatorPageDescriptor* descriptor = FindPageDescriptor(session, pageId);
+    const double pageWidth = ResolvePageWidth(descriptor);
+    const double pageHeight = ResolvePageHeight(descriptor);
+    const std::string tool = ResolveSyntheticTool(engine);
+    const int ordinal = session.nextSyntheticObjectId;
+    const double normalizedStartX = ClampUnitRatio(startXRatio);
+    const double normalizedStartY = ClampUnitRatio(startYRatio);
+    const double normalizedEndX = ClampUnitRatio(endXRatio);
+    const double normalizedEndY = ClampUnitRatio(endYRatio);
+    const double anchorMinX = std::min(normalizedStartX, normalizedEndX) * pageWidth;
+    const double anchorMaxX = std::max(normalizedStartX, normalizedEndX) * pageWidth;
+    const double anchorMinY = std::min(normalizedStartY, normalizedEndY) * pageHeight;
+    const double anchorMaxY = std::max(normalizedStartY, normalizedEndY) * pageHeight;
+    const double widthBase = std::max(kMinSyntheticStrokeWidthPt,
+        tool == "highlighter" ? pageWidth * 0.20 : pageWidth * 0.16);
+    const double heightBase = std::max(kMinSyntheticStrokeHeightPt,
+        tool == "highlighter" ? pageHeight * 0.045 : pageHeight * 0.09);
+    const double width = std::min(pageWidth * 0.58, std::max(widthBase, anchorMaxX - anchorMinX));
+    const double height = std::min(pageHeight * 0.22, std::max(heightBase, anchorMaxY - anchorMinY));
+    const double originX = std::clamp(anchorMinX, 18.0, std::max(18.0, pageWidth - width - 18.0));
+    const double originY = std::clamp(anchorMinY, 24.0, std::max(24.0, pageHeight - height - 24.0));
+
+    SimulatorSyntheticObject object;
+    object.id = "synthetic-" + pageId + "-" + std::to_string(session.nextSyntheticObjectId++);
+    object.pageId = pageId;
+    object.nodeType = ResolveSyntheticNodeType(tool);
+    object.shapeType = ResolveSyntheticShapeType(tool);
+    object.tool = tool;
+    object.colorHex = engine.activeColor;
+    object.closed = tool == "text";
+    object.pointCount = ResolveSyntheticPointCount(tool, ordinal);
+    object.minX = originX;
+    object.minY = originY;
+    object.maxX = std::min(pageWidth, originX + width);
+    object.maxY = std::min(pageHeight, originY + height);
+    return object;
+}
+
 bool CommitSyntheticCheckpoint(SimulatorEngineState& engine, SimulatorDocumentSession& session)
 {
     const std::string pageId = ResolveSessionActivePageId(session);
@@ -718,6 +808,22 @@ bool CommitSyntheticCheckpoint(SimulatorEngineState& engine, SimulatorDocumentSe
         return false;
     }
     SimulatorSyntheticObject object = BuildSyntheticObject(engine, session, pageId);
+    AccessCommittedObjectsForPage(session, pageId).push_back(object);
+    session.undoStack.push_back({ pageId, object });
+    session.redoStack.clear();
+    engine.lastCommittedStrokeType = object.shapeType;
+    return true;
+}
+
+bool CommitSyntheticGestureStroke(SimulatorEngineState& engine, SimulatorDocumentSession& session,
+    double startXRatio, double startYRatio, double endXRatio, double endYRatio)
+{
+    const std::string pageId = ResolveSessionActivePageId(session);
+    if (pageId.empty()) {
+        return false;
+    }
+    SimulatorSyntheticObject object = BuildSyntheticObjectFromGesture(
+        engine, session, pageId, startXRatio, startYRatio, endXRatio, endYRatio);
     AccessCommittedObjectsForPage(session, pageId).push_back(object);
     session.undoStack.push_back({ pageId, object });
     session.redoStack.clear();
@@ -749,6 +855,32 @@ bool RedoSyntheticCheckpoint(SimulatorEngineState& engine, SimulatorDocumentSess
     session.undoStack.push_back(edit);
     engine.lastCommittedStrokeType = edit.object.shapeType;
     return true;
+}
+
+void ResetSimulatorFingerStroke(SimulatorEngineState& engine)
+{
+    engine.simulatorFingerStrokeActive = false;
+    engine.simulatorFingerStrokeStartXRatio = engine.simulatorFingerStrokeLastXRatio;
+    engine.simulatorFingerStrokeStartYRatio = engine.simulatorFingerStrokeLastYRatio;
+    engine.activePointerCount = 0;
+    engine.multitouchGestureActive = false;
+}
+
+void RecordSimulatorFingerTelemetry(SimulatorEngineState& engine, const std::string& action, int pointerCount)
+{
+    engine.touchEventCount += 1;
+    engine.uiTouchEventCount += 1;
+    engine.fingerEventCount += 1;
+    engine.activePointerCount = action == "up" || action == "cancel" ? 0 : std::max(1, pointerCount);
+    engine.multitouchGestureActive = engine.activePointerCount > 1;
+    engine.lastEventTime = CurrentTimeMillis();
+    engine.lastTouchAction = action;
+    engine.lastToolType = "finger";
+    engine.lastSourceType = "finger";
+    engine.lastPressure = action == "move" ? 0.42 : (action == "down" ? 0.36 : 0.0);
+    engine.lastTiltX = 0.0;
+    engine.lastTiltY = 0.0;
+    engine.lastRollAngle = 0.0;
 }
 
 void AppendPageBounds(std::ostringstream& builder, const SimulatorPageDescriptor* descriptor)
@@ -1430,6 +1562,72 @@ public:
             return false;
         }
         engine->fingerWritingEnabled = enabled;
+        ResetSimulatorFingerStroke(*engine);
+        return true;
+    }
+
+    bool InjectSimulatorFingerEvent(const std::string& engineId, const std::string& action,
+        double pageXRatio, double pageYRatio, int pointerCount) override
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        SimulatorEngineState* engine = FindEngineLocked(engineId);
+        if (engine == nullptr || engine->activeDocumentId.empty()) {
+            return false;
+        }
+        auto iterator = engine->documents.find(engine->activeDocumentId);
+        if (iterator == engine->documents.end()) {
+            return false;
+        }
+
+        const std::string normalizedAction = action == "down" || action == "move" || action == "up" || action == "cancel"
+            ? action
+            : "";
+        if (normalizedAction.empty()) {
+            return false;
+        }
+
+        const double normalizedX = ClampUnitRatio(pageXRatio);
+        const double normalizedY = ClampUnitRatio(pageYRatio);
+        RecordSimulatorFingerTelemetry(*engine, normalizedAction, pointerCount);
+
+        if (normalizedAction == "down") {
+            engine->simulatorFingerStrokeActive = true;
+            engine->simulatorFingerStrokeStartXRatio = normalizedX;
+            engine->simulatorFingerStrokeStartYRatio = normalizedY;
+            engine->simulatorFingerStrokeLastXRatio = normalizedX;
+            engine->simulatorFingerStrokeLastYRatio = normalizedY;
+            return true;
+        }
+
+        if (normalizedAction == "move") {
+            if (!engine->simulatorFingerStrokeActive) {
+                engine->simulatorFingerStrokeActive = true;
+                engine->simulatorFingerStrokeStartXRatio = normalizedX;
+                engine->simulatorFingerStrokeStartYRatio = normalizedY;
+            }
+            engine->simulatorFingerStrokeLastXRatio = normalizedX;
+            engine->simulatorFingerStrokeLastYRatio = normalizedY;
+            return true;
+        }
+
+        if (normalizedAction == "up") {
+            if (!engine->simulatorFingerStrokeActive) {
+                engine->simulatorFingerStrokeStartXRatio = normalizedX;
+                engine->simulatorFingerStrokeStartYRatio = normalizedY;
+            }
+            engine->simulatorFingerStrokeLastXRatio = normalizedX;
+            engine->simulatorFingerStrokeLastYRatio = normalizedY;
+            const bool committed = engine->fingerWritingEnabled &&
+                CommitSyntheticGestureStroke(*engine, iterator->second,
+                    engine->simulatorFingerStrokeStartXRatio,
+                    engine->simulatorFingerStrokeStartYRatio,
+                    engine->simulatorFingerStrokeLastXRatio,
+                    engine->simulatorFingerStrokeLastYRatio);
+            ResetSimulatorFingerStroke(*engine);
+            return committed || !engine->fingerWritingEnabled;
+        }
+
+        ResetSimulatorFingerStroke(*engine);
         return true;
     }
 
@@ -1581,6 +1779,11 @@ public:
             }
         }
 
+        const bool surfaceReady = !engine->activeDocumentId.empty() && engine->width > 0 && engine->height > 0;
+        const std::string surfaceId = !engine->surfaceId.empty()
+            ? engine->surfaceId
+            : (surfaceReady ? kSimulatorPlaceholderSurfaceId : "");
+
         std::ostringstream builder;
         builder << "{"
                 << "\"engineId\":\"" << EscapeJsonString(engine->engineId) << "\","
@@ -1594,7 +1797,7 @@ public:
                 << "\"activeColor\":\"" << EscapeJsonString(engine->activeColor) << "\","
                 << "\"fingerWritingEnabled\":" << (engine->fingerWritingEnabled ? "true" : "false") << ","
                 << "\"xComponentId\":\"" << EscapeJsonString(engine->xComponentId) << "\","
-                << "\"surfaceId\":\"" << EscapeJsonString(engine->surfaceId) << "\","
+                << "\"surfaceId\":\"" << EscapeJsonString(surfaceId) << "\","
                 << "\"checkpointCount\":" << checkpointCount << ","
                 << "\"committedStrokeCount\":" << committedStrokeCount << ","
                 << "\"undoDepth\":" << undoDepth << ","
@@ -1610,35 +1813,35 @@ public:
                 << "\"inputTraceSampleCount\":" << engine->lastInputTraceSampleCount << ",";
         AppendCapabilityFields(builder, "simulator-stub", false, false, false, true, true, kWeakNativeShellStubReason);
         builder << ","
-                << "\"surfaceReady\":false,"
+                << "\"surfaceReady\":" << (surfaceReady ? "true" : "false") << ","
                 << "\"surfaceWidth\":" << engine->width << ","
                 << "\"surfaceHeight\":" << engine->height << ","
                 << "\"surfaceOffsetX\":0,"
                 << "\"surfaceOffsetY\":0,"
-                << "\"touchEventCount\":0,"
-                << "\"uiTouchEventCount\":0,"
-                << "\"keyEventCount\":0,"
-                << "\"stylusEventCount\":0,"
-                << "\"fingerEventCount\":0,"
-                << "\"palmRejectedCount\":0,"
-                << "\"activePointerCount\":0,"
-                << "\"stylusActive\":false,"
-                << "\"multitouchGestureActive\":false,"
-                << "\"lastHistoricalCount\":0,"
-                << "\"lastUiHistoryCount\":0,"
-                << "\"predictedPointCount\":0,"
-                << "\"lastEventTime\":0,"
-                << "\"lastPressure\":0,"
-                << "\"lastTiltX\":0,"
-                << "\"lastTiltY\":0,"
-                << "\"lastRollAngle\":0,"
-                << "\"lastTouchAction\":\"unknown\","
-                << "\"lastToolType\":\"unknown\","
-                << "\"lastSourceType\":\"unknown\","
-                << "\"lastKeyCode\":-1,"
-                << "\"lastKeyAction\":-1,"
-                << "\"lastKeySourceType\":-1,"
-                << "\"lastKeyEventTime\":0"
+                << "\"touchEventCount\":" << engine->touchEventCount << ","
+                << "\"uiTouchEventCount\":" << engine->uiTouchEventCount << ","
+                << "\"keyEventCount\":" << engine->keyEventCount << ","
+                << "\"stylusEventCount\":" << engine->stylusEventCount << ","
+                << "\"fingerEventCount\":" << engine->fingerEventCount << ","
+                << "\"palmRejectedCount\":" << engine->palmRejectedCount << ","
+                << "\"activePointerCount\":" << engine->activePointerCount << ","
+                << "\"stylusActive\":" << (engine->stylusActive ? "true" : "false") << ","
+                << "\"multitouchGestureActive\":" << (engine->multitouchGestureActive ? "true" : "false") << ","
+                << "\"lastHistoricalCount\":" << engine->lastHistoricalCount << ","
+                << "\"lastUiHistoryCount\":" << engine->lastUiHistoryCount << ","
+                << "\"predictedPointCount\":" << engine->predictedPointCount << ","
+                << "\"lastEventTime\":" << engine->lastEventTime << ","
+                << "\"lastPressure\":" << engine->lastPressure << ","
+                << "\"lastTiltX\":" << engine->lastTiltX << ","
+                << "\"lastTiltY\":" << engine->lastTiltY << ","
+                << "\"lastRollAngle\":" << engine->lastRollAngle << ","
+                << "\"lastTouchAction\":\"" << EscapeJsonString(engine->lastTouchAction) << "\","
+                << "\"lastToolType\":\"" << EscapeJsonString(engine->lastToolType) << "\","
+                << "\"lastSourceType\":\"" << EscapeJsonString(engine->lastSourceType) << "\","
+                << "\"lastKeyCode\":" << engine->lastKeyCode << ","
+                << "\"lastKeyAction\":" << engine->lastKeyAction << ","
+                << "\"lastKeySourceType\":" << engine->lastKeySourceType << ","
+                << "\"lastKeyEventTime\":" << engine->lastKeyEventTime
                 << "}";
         return builder.str();
     }
