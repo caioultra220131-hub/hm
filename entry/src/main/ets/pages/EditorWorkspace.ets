@@ -149,9 +149,11 @@ const PAGE_RAIL_ACTION_BUTTON_SIZE: number = 30;
 const PAGE_RAIL_CARD_RADIUS: number = 16;
 const PAGE_RAIL_PAGE_MENU_BUTTON_SIZE: number = 26;
 const FLOATING_TOOLBAR_WIDTH: number = 428;
+const FLOATING_TOOLBAR_VERTICAL_WIDTH: number = 116;
 const FLOATING_TOOL_BUTTON_SIZE: number = 36;
 const FLOATING_TOOLBAR_MORE_BUTTON_SIZE: number = 34;
 const FLOATING_TOOLBAR_COLOR_CHIP_SIZE: number = 16;
+const AUTOSAVE_DEBOUNCE_MS: number = 900;
 const PAGE_SWIPE_DRAG_LIMIT: number = 132;
 const PAGE_SWIPE_TRIGGER_DISTANCE: number = 84;
 const PAGE_STACK_GAP: number = 28;
@@ -231,6 +233,9 @@ struct EditorWorkspace {
   private leavingEditor: boolean = false;
   private debugRefreshTimerId: number = -1;
   private persistTask: Promise<boolean> | null = null;
+  private autosaveTimerId: number = -1;
+  private autosaveIndicatorToken: number = 0;
+  private lastNativeMutationSignature: string = '';
   private pageSelectionInFlight: boolean = false;
   private pageViewportInitialized: boolean = false;
   private toolbarDragOriginX: number = 0;
@@ -318,6 +323,7 @@ struct EditorWorkspace {
   }
 
   aboutToDisappear(): void {
+    this.cancelPendingAutosave();
     if (this.leavingEditor || this.shuttingDown) {
       if (!this.shuttingDown && !this.shutdownScheduled) {
         this.shutdownScheduled = true;
@@ -644,6 +650,7 @@ struct EditorWorkspace {
       this.debugStateText = '';
       this.debugState = null;
       this.simulatorSceneSnapshot = null;
+      this.lastNativeMutationSignature = '';
       return;
     }
     let state: NativeDebugState | null = this.nativeEngine.getDebugState(this.engineId);
@@ -651,6 +658,7 @@ struct EditorWorkspace {
       this.debugState = null;
       this.debugStateText = '原生调试信息不可用';
       this.simulatorSceneSnapshot = null;
+      this.lastNativeMutationSignature = '';
       return;
     }
     if (
@@ -685,6 +693,7 @@ struct EditorWorkspace {
       `trace=${state.inputTraceStatus || 'idle'} recording=${state.inputTraceRecording} replay=${state.inputReplayActive} samples=${state.inputTraceSampleCount}\n` +
       `prediction=${state.predictionEnabled} pressureOn=${state.pressureEnabled} shape=${state.shapeRecognitionEnabled}`;
     this.updateSimulatorSceneSnapshot();
+    this.noteNativeStateMutationForAutosave(state);
   }
 
   private updateSimulatorSceneSnapshot(): void {
@@ -720,17 +729,105 @@ struct EditorWorkspace {
     return MarkdownUtils.buildPreviewBlocks(this.markdownText);
   }
 
-  private saveButtonLabel(): string {
+  private autosaveStatusLabel(): string {
     if (this.saveState === 'saving') {
-      return '保存中';
+      return '自动保存中';
     }
     if (this.saveState === 'saved') {
-      return '已保存';
+      return '已自动保存';
     }
     if (this.saveState === 'failed') {
-      return '保存失败';
+      return '自动保存失败';
     }
-    return EDITOR_WORKSPACE_COPY.save;
+    return '自动保存';
+  }
+
+  private autosaveIndicatorBackgroundColor(): string {
+    if (this.saveState === 'failed') {
+      return '#FEE4E2';
+    }
+    if (this.saveState === 'saved') {
+      return '#ECFDF3';
+    }
+    return '#EEF2F6';
+  }
+
+  private autosaveIndicatorFontColor(): string {
+    if (this.saveState === 'failed') {
+      return '#B42318';
+    }
+    if (this.saveState === 'saved') {
+      return '#027A48';
+    }
+    return '#667085';
+  }
+
+  private cancelPendingAutosave(): void {
+    if (this.autosaveTimerId >= 0) {
+      clearTimeout(this.autosaveTimerId);
+      this.autosaveTimerId = -1;
+    }
+  }
+
+  private scheduleSaveStateReset(delayMs: number = 1400): void {
+    const token: number = this.autosaveIndicatorToken + 1;
+    this.autosaveIndicatorToken = token;
+    setTimeout(() => {
+      if (token !== this.autosaveIndicatorToken || this.saveState !== 'saved') {
+        return;
+      }
+      this.saveState = 'idle';
+    }, delayMs);
+  }
+
+  private scheduleAutosave(delayMs: number = AUTOSAVE_DEBOUNCE_MS): void {
+    if (this.shuttingDown || this.leavingEditor || !this.document || !this.libraryService) {
+      return;
+    }
+    this.cancelPendingAutosave();
+    this.autosaveTimerId = setTimeout(() => {
+      this.autosaveTimerId = -1;
+      void this.runAutosave();
+    }, delayMs);
+  }
+
+  private noteDocumentMutationForAutosave(delayMs: number = AUTOSAVE_DEBOUNCE_MS): void {
+    if (this.shuttingDown || this.leavingEditor || !this.document || !this.libraryService) {
+      return;
+    }
+    if (this.saveState !== 'saving') {
+      this.saveState = 'idle';
+    }
+    this.scheduleAutosave(delayMs);
+  }
+
+  private noteNativeStateMutationForAutosave(state: NativeDebugState): void {
+    const nextSignature: string = `${state.committedStrokeCount}:${state.undoDepth}:${state.redoDepth}`;
+    if (this.lastNativeMutationSignature.length === 0) {
+      this.lastNativeMutationSignature = nextSignature;
+      return;
+    }
+    if (this.lastNativeMutationSignature === nextSignature) {
+      return;
+    }
+    this.lastNativeMutationSignature = nextSignature;
+    this.noteDocumentMutationForAutosave();
+  }
+
+  private async runAutosave(): Promise<void> {
+    if (this.shuttingDown || this.leavingEditor || !this.document || !this.libraryService) {
+      return;
+    }
+    if (this.persistTask) {
+      this.scheduleAutosave(320);
+      return;
+    }
+    this.saveState = 'saving';
+    const didPersist: boolean = await this.persistDocumentState();
+    this.saveState = didPersist ? 'saved' : 'failed';
+    if (didPersist) {
+      this.scheduleSaveStateReset();
+    }
   }
 
   private async persistDocumentState(): Promise<boolean> {
@@ -740,6 +837,7 @@ struct EditorWorkspace {
     if (!this.document || !this.libraryService) {
       return false;
     }
+    this.cancelPendingAutosave();
     const runPersist = async (): Promise<boolean> => {
       try {
         let nextDocument: DocumentRecord;
@@ -826,6 +924,7 @@ struct EditorWorkspace {
     }
     this.shutdownScheduled = false;
     this.shuttingDown = true;
+    this.cancelPendingAutosave();
     this.stopViewportInertia();
     this.stopDebugPolling();
     await this.persistDocumentState();
@@ -1179,6 +1278,7 @@ struct EditorWorkspace {
     if (!this.document || !this.libraryService || this.activePageId.length === 0) {
       return;
     }
+    this.cancelPendingAutosave();
     this.markdownText = '';
     this.pageMarkdownDrafts.set(this.activePageId, '');
     this.dirtyPageIds.add(this.activePageId);
@@ -1223,6 +1323,7 @@ struct EditorWorkspace {
     if (!this.canChangeDocumentMode() && mode !== this.currentMode) {
       return;
     }
+    this.cancelPendingAutosave();
     if (this.document && this.libraryService && this.isBlankPagedEditable() && mode !== DocumentMode.PAGED) {
       this.stageCurrentPageDraft();
       await this.persistBlankPagedRuntimePage();
@@ -2041,16 +2142,37 @@ struct EditorWorkspace {
   }
 
   private floatingToolbarChromeHeight(): number {
-    return this.shouldShowSecondaryToolbar() ? 118 : 74;
+    if (!this.toolbarUsesVerticalLayout()) {
+      return this.shouldShowSecondaryToolbar() ? 118 : 74;
+    }
+    let height: number = 342;
+    if (this.shouldShowSecondaryToolbar()) {
+      height += this.toolUsesColorPalette() ? 80 : 116;
+    }
+    if (this.saveState !== 'idle') {
+      height += 28;
+    }
+    return height;
+  }
+
+  private toolbarUsesVerticalLayout(): boolean {
+    return this.toolbarSnapSlot === 'left-middle' || this.toolbarSnapSlot === 'right-middle';
+  }
+
+  private floatingToolbarChromeWidth(): number {
+    return this.toolbarUsesVerticalLayout() ? FLOATING_TOOLBAR_VERTICAL_WIDTH : FLOATING_TOOLBAR_WIDTH;
   }
 
   private toolbarAnchorPosition(slot: ToolbarSnapSlot = this.toolbarSnapSlot): GestureRatioPoint {
+    const toolbarWidth: number = slot === 'left-middle' || slot === 'right-middle'
+      ? FLOATING_TOOLBAR_VERTICAL_WIDTH
+      : FLOATING_TOOLBAR_WIDTH;
     const topY: number = 18;
     const middleY: number = Math.max(topY, (this.writingViewportHeight - this.floatingToolbarChromeHeight()) / 2);
     const bottomY: number = Math.max(topY, this.writingViewportHeight - this.floatingToolbarChromeHeight() - 24);
     const leftX: number = 16;
-    const rightX: number = Math.max(leftX, this.writingViewportWidth - FLOATING_TOOLBAR_WIDTH - 16);
-    const centerX: number = Math.max(leftX, (this.writingViewportWidth - FLOATING_TOOLBAR_WIDTH) / 2);
+    const rightX: number = Math.max(leftX, this.writingViewportWidth - toolbarWidth - 16);
+    const centerX: number = Math.max(leftX, (this.writingViewportWidth - toolbarWidth) / 2);
     switch (slot) {
       case 'left-middle':
         return { xRatio: leftX, yRatio: middleY };
@@ -2069,7 +2191,7 @@ struct EditorWorkspace {
       return value;
     }
     const minX: number = 16;
-    const maxX: number = Math.max(minX, this.writingViewportWidth - FLOATING_TOOLBAR_WIDTH - 16);
+    const maxX: number = Math.max(minX, this.writingViewportWidth - this.floatingToolbarChromeWidth() - 16);
     return clampToRange(value, minX, maxX);
   }
 
@@ -2511,6 +2633,7 @@ struct EditorWorkspace {
           return;
         }
         const currentPageId: string = this.activePageId;
+        this.cancelPendingAutosave();
         this.stageCurrentPageDraft();
         await this.persistBlankPagedRuntimePage();
         if (currentPageId.length > 0) {
@@ -2548,6 +2671,7 @@ struct EditorWorkspace {
     if (!this.canAddRealPages()) {
       return;
     }
+    this.cancelPendingAutosave();
     this.stageCurrentPageDraft();
     await this.persistBlankPagedRuntimePage();
     const nextDocument: DocumentRecord = await this.libraryService!.addBlankPage((this.document as DocumentRecord).id);
@@ -2570,6 +2694,7 @@ struct EditorWorkspace {
       return;
     }
     const deletedPageId: string = this.activePageId;
+    this.cancelPendingAutosave();
     this.stageCurrentPageDraft();
     await this.persistBlankPagedRuntimePage();
     const nextDocument: DocumentRecord = await this.libraryService!.deleteBlankPage((this.document as DocumentRecord).id, deletedPageId);
@@ -2814,17 +2939,15 @@ struct EditorWorkspace {
     Row({ space: 6 }) {
       this.buildInspectorShortcut('preview', this.inspectorTabLabel('preview'))
       this.buildInspectorShortcut('source', this.inspectorTabLabel('source'))
-      Button(this.saveButtonLabel())
-        .height(40)
-        .padding({ left: 14, right: 14 })
-        .enabled(this.saveState !== 'saving')
-        .backgroundColor(this.saveState === 'saving' ? '#98A2B3' : '#162033')
-        .fontColor('#FFFFFF')
-        .fontSize(12)
-        .borderRadius(12)
-        .onClick(async () => {
-          await this.saveDocument();
-        })
+      if (this.saveState !== 'idle') {
+        Text(this.autosaveStatusLabel())
+          .fontSize(11)
+          .fontWeight(FontWeight.Medium)
+          .fontColor(this.autosaveIndicatorFontColor())
+          .padding({ left: 12, right: 12, top: 10, bottom: 10 })
+          .backgroundColor(this.autosaveIndicatorBackgroundColor())
+          .borderRadius(12)
+      }
     }
     .padding(6)
     .backgroundColor('#F8F9FA')
@@ -3117,11 +3240,11 @@ struct EditorWorkspace {
       .padding(16)
       .onChange((value: string) => {
         this.markdownText = value;
-        this.saveState = 'idle';
         if (this.supportsPagedDocumentRuntime() && this.activePageId.length > 0) {
           this.pageMarkdownDrafts.set(this.activePageId, value);
           this.dirtyPageIds.add(this.activePageId);
         }
+        this.noteDocumentMutationForAutosave();
       })
   }
 
@@ -3827,57 +3950,139 @@ struct EditorWorkspace {
 
   @Builder
   private buildToolbarPrimaryRow(): void {
-    Row({ space: 4 }) {
-      Stack({ alignContent: Alignment.Center }) {
-        this.buildEditorIcon('drag', '#667085', 16)
-      }
-      .height(FLOATING_TOOL_BUTTON_SIZE - 2)
-      .padding({ left: 8, right: 8 })
-      .backgroundColor('#EEF2F6')
-      .borderRadius(12)
-      .gesture(
-        PanGesture({ fingers: 1, distance: 0 })
-          .onActionStart(() => {
-            this.handleToolbarDragStart();
-          })
-          .onActionUpdate((event) => {
-            this.updateToolbarDrag(event as Object);
-          })
-          .onActionEnd(() => {
-            this.snapFloatingToolbarToNearestAnchor();
-          })
-      )
-      ForEach([
-        ToolType.PEN,
-        ToolType.PENCIL,
-        ToolType.ERASER,
-        ToolType.TEXT,
-        ToolType.LASSO,
-        ToolType.HIGHLIGHTER
-      ], (tool: ToolType) => {
-        this.buildToolbarToolButton(tool)
-      }, (tool: ToolType): string => `toolbar-${tool}`)
-      this.buildFingerWritingToggleButton()
-      Blank()
-        .layoutWeight(1)
-      Button(this.saveButtonLabel())
+    if (this.toolbarUsesVerticalLayout()) {
+      Column({ space: 6 }) {
+        Stack({ alignContent: Alignment.Center }) {
+          this.buildEditorIcon('drag', '#667085', 16)
+        }
+        .width('100%')
         .height(FLOATING_TOOL_BUTTON_SIZE - 2)
-        .padding({ left: 10, right: 10 })
-        .enabled(this.saveState !== 'saving')
-        .backgroundColor(this.saveState === 'saving' ? '#98A2B3' : '#0F766E')
-        .fontColor('#FFFFFF')
-        .fontSize(11)
+        .backgroundColor('#EEF2F6')
         .borderRadius(12)
-        .onClick(async () => {
-          await this.saveDocument();
-        })
+        .gesture(
+          PanGesture({ fingers: 1, distance: 0 })
+            .onActionStart(() => {
+              this.handleToolbarDragStart();
+            })
+            .onActionUpdate((event) => {
+              this.updateToolbarDrag(event as Object);
+            })
+            .onActionEnd(() => {
+              this.snapFloatingToolbarToNearestAnchor();
+            })
+        )
+        ForEach([
+          ToolType.PEN,
+          ToolType.PENCIL,
+          ToolType.ERASER,
+          ToolType.TEXT,
+          ToolType.LASSO,
+          ToolType.HIGHLIGHTER
+        ], (tool: ToolType) => {
+          this.buildToolbarToolButton(tool)
+        }, (tool: ToolType): string => `toolbar-${tool}`)
+        this.buildFingerWritingToggleButton()
+        if (this.saveState !== 'idle') {
+          Text(this.autosaveStatusLabel())
+            .width('100%')
+            .textAlign(TextAlign.Center)
+            .fontSize(10)
+            .fontWeight(FontWeight.Medium)
+            .fontColor(this.autosaveIndicatorFontColor())
+            .padding({ left: 8, right: 8, top: 6, bottom: 6 })
+            .backgroundColor(this.autosaveIndicatorBackgroundColor())
+            .borderRadius(10)
+        }
+      }
+      .width('100%')
+    } else {
+      Row({ space: 4 }) {
+        Stack({ alignContent: Alignment.Center }) {
+          this.buildEditorIcon('drag', '#667085', 16)
+        }
+        .height(FLOATING_TOOL_BUTTON_SIZE - 2)
+        .padding({ left: 8, right: 8 })
+        .backgroundColor('#EEF2F6')
+        .borderRadius(12)
+        .gesture(
+          PanGesture({ fingers: 1, distance: 0 })
+            .onActionStart(() => {
+              this.handleToolbarDragStart();
+            })
+            .onActionUpdate((event) => {
+              this.updateToolbarDrag(event as Object);
+            })
+            .onActionEnd(() => {
+              this.snapFloatingToolbarToNearestAnchor();
+            })
+        )
+        ForEach([
+          ToolType.PEN,
+          ToolType.PENCIL,
+          ToolType.ERASER,
+          ToolType.TEXT,
+          ToolType.LASSO,
+          ToolType.HIGHLIGHTER
+        ], (tool: ToolType) => {
+          this.buildToolbarToolButton(tool)
+        }, (tool: ToolType): string => `toolbar-${tool}`)
+        this.buildFingerWritingToggleButton()
+        Blank()
+          .layoutWeight(1)
+        if (this.saveState !== 'idle') {
+          Text(this.autosaveStatusLabel())
+            .fontSize(10)
+            .fontWeight(FontWeight.Medium)
+            .fontColor(this.autosaveIndicatorFontColor())
+            .padding({ left: 8, right: 8, top: 6, bottom: 6 })
+            .backgroundColor(this.autosaveIndicatorBackgroundColor())
+            .borderRadius(10)
+        }
+      }
+      .width('100%')
     }
-    .width('100%')
   }
 
   @Builder
   private buildToolbarSecondaryRow(): void {
-    if (this.toolUsesColorPalette()) {
+    if (this.toolUsesColorPalette() && this.toolbarUsesVerticalLayout()) {
+      Column({ space: 8 }) {
+        Text(this.secondaryToolbarAssistText())
+          .width('100%')
+          .fontSize(11)
+          .fontWeight(FontWeight.Medium)
+          .fontColor('#344054')
+          .textAlign(TextAlign.Center)
+        Column({ space: 6 }) {
+          ForEach(PALETTE_COLORS, (color: string) => {
+            Blank()
+              .width(FLOATING_TOOLBAR_COLOR_CHIP_SIZE + 10)
+              .height(FLOATING_TOOLBAR_COLOR_CHIP_SIZE + 10)
+              .backgroundColor(color)
+              .border({
+                width: this.currentColor === color ? 3 : 1,
+                color: this.currentColor === color ? '#16324F' : '#D0D5DD'
+              })
+              .borderRadius(999)
+              .onClick(() => {
+                this.currentColor = color;
+                if (this.engineId.length > 0) {
+                  this.nativeEngine.setBrushColor(this.engineId, color);
+                  this.refreshDebugState();
+                }
+              })
+          }, (color: string): string => `toolbar-color-${color}`)
+        }
+        .width('100%')
+        .alignItems(HorizontalAlign.Center)
+        Text(this.secondaryToolbarHintText())
+          .width('100%')
+          .fontSize(10)
+          .fontColor('#667085')
+          .textAlign(TextAlign.Center)
+      }
+      .width('100%')
+    } else if (this.toolUsesColorPalette()) {
       Row({ space: 8 }) {
         Text(this.secondaryToolbarAssistText())
           .fontSize(11)
@@ -3906,6 +4111,60 @@ struct EditorWorkspace {
         Text(this.secondaryToolbarHintText())
           .fontSize(11)
           .fontColor('#667085')
+      }
+      .width('100%')
+    } else if (this.toolUsesContextActions() && this.toolbarUsesVerticalLayout()) {
+      Column({ space: 8 }) {
+        Text(this.secondaryToolbarAssistText())
+          .width('100%')
+          .fontSize(11)
+          .fontWeight(FontWeight.Medium)
+          .fontColor('#344054')
+          .textAlign(TextAlign.Center)
+        Button(this.embedPlacementArmed ? '取消放置' : '插入图文')
+          .width('100%')
+          .height(34)
+          .padding({ left: 10, right: 10 })
+          .backgroundColor(this.embedPlacementArmed ? '#FEE4E2' : '#162033')
+          .fontColor(this.embedPlacementArmed ? '#B42318' : '#FFFFFF')
+          .fontSize(11)
+          .borderRadius(12)
+          .onClick(() => {
+            if (this.embedPlacementArmed) {
+              this.clearEmbeddedPlacement();
+            } else {
+              this.armEmbeddedPlacement();
+            }
+          })
+        Button('预览')
+          .width('100%')
+          .height(32)
+          .backgroundColor('#FFFFFF')
+          .fontColor('#162033')
+          .fontSize(11)
+          .border({ width: 1, color: '#D8E0EA' })
+          .borderRadius(12)
+          .onClick(() => {
+            this.previewMode = 'preview';
+            this.showInspectorDrawer = true;
+          })
+        Button('源码')
+          .width('100%')
+          .height(32)
+          .backgroundColor('#FFFFFF')
+          .fontColor('#162033')
+          .fontSize(11)
+          .border({ width: 1, color: '#D8E0EA' })
+          .borderRadius(12)
+          .onClick(() => {
+            this.previewMode = 'source';
+            this.showInspectorDrawer = true;
+          })
+        Text(this.secondaryToolbarHintText())
+          .width('100%')
+          .fontSize(10)
+          .fontColor('#667085')
+          .textAlign(TextAlign.Center)
       }
       .width('100%')
     } else if (this.toolUsesContextActions()) {
@@ -3971,7 +4230,7 @@ struct EditorWorkspace {
         this.buildToolbarSecondaryRow()
       }
     }
-    .width(FLOATING_TOOLBAR_WIDTH)
+    .width(this.floatingToolbarChromeWidth())
     .padding(10)
     .backgroundColor('#FFFFFFF2')
     .border({ width: 1, color: '#DCE5EE' })
@@ -3983,63 +4242,74 @@ struct EditorWorkspace {
   }
 
   @Builder
-  private buildCanvasActionGroup(): void {
-    Column({ space: 10 }) {
-      Row({ space: 6 }) {
-        Stack({ alignContent: Alignment.Center }) {
-          this.buildEditorIcon('undo', '#344054', 15)
-        }
-          .width(38)
-          .height(38)
-          .backgroundColor('#FFFFFFF2')
-          .border({ width: 1, color: '#D8E0EA' })
-          .borderRadius(14)
-          .onClick(() => {
-            this.undoStroke();
-          })
-        Stack({ alignContent: Alignment.Center }) {
-          this.buildEditorIcon('redo', '#344054', 15)
-        }
-          .width(38)
-          .height(38)
-          .backgroundColor('#FFFFFFF2')
-          .border({ width: 1, color: '#D8E0EA' })
-          .borderRadius(14)
-          .onClick(() => {
-            this.redoStroke();
-          })
-        Stack({ alignContent: Alignment.Center }) {
-          this.buildEditorIcon('more', '#344054', 15)
-        }
-          .width(38)
-          .height(38)
-          .backgroundColor('#FFFFFFF2')
-          .border({ width: 1, color: '#D8E0EA' })
-          .borderRadius(14)
-          .onClick(() => {
-            this.toggleRailMenu();
-          })
-        Stack({ alignContent: Alignment.Center }) {
-          this.buildEditorIcon(this.railToggleIconKind(), '#162033', 15)
-        }
-          .width(38)
-          .height(38)
-          .backgroundColor('#FFFFFFF2')
-          .border({ width: 1, color: '#D8E0EA' })
-          .borderRadius(14)
-          .onClick(() => {
-            this.setRailCollapsed(!this.railCollapsed);
-          })
+  private buildRailActionStrip(): void {
+    Row({ space: 6 }) {
+      Stack({ alignContent: Alignment.Center }) {
+        this.buildEditorIcon('undo', '#344054', 15)
       }
-      .padding(6)
-      .backgroundColor('#FFFFFFD8')
-      .border({ width: 1, color: '#DCE5EE' })
-      .borderRadius(18)
-      if (this.showRailMenu) {
-        this.buildRailMenu()
+      .width(38)
+      .height(38)
+      .backgroundColor('#FFFFFF')
+      .border({ width: 1, color: '#D8E0EA' })
+      .borderRadius(14)
+      .onClick(() => {
+        this.undoStroke();
+      })
+      Stack({ alignContent: Alignment.Center }) {
+        this.buildEditorIcon('redo', '#344054', 15)
       }
+      .width(38)
+      .height(38)
+      .backgroundColor('#FFFFFF')
+      .border({ width: 1, color: '#D8E0EA' })
+      .borderRadius(14)
+      .onClick(() => {
+        this.redoStroke();
+      })
+      Blank()
+        .layoutWeight(1)
+      Stack({ alignContent: Alignment.Center }) {
+        this.buildEditorIcon('more', '#344054', 15)
+      }
+      .width(38)
+      .height(38)
+      .backgroundColor('#FFFFFF')
+      .border({ width: 1, color: '#D8E0EA' })
+      .borderRadius(14)
+      .onClick(() => {
+        this.toggleRailMenu();
+      })
+      Stack({ alignContent: Alignment.Center }) {
+        this.buildEditorIcon(this.railToggleIconKind(), '#162033', 15)
+      }
+      .width(38)
+      .height(38)
+      .backgroundColor('#FFFFFF')
+      .border({ width: 1, color: '#D8E0EA' })
+      .borderRadius(14)
+      .onClick(() => {
+        this.setRailCollapsed(!this.railCollapsed);
+      })
     }
-    .position({ x: Math.max(18, this.writingViewportWidth - 196), y: 18 })
+    .width('100%')
+    .padding(6)
+    .backgroundColor('#FFFFFF')
+    .border({ width: 1, color: '#DCE5EE' })
+    .borderRadius(18)
+  }
+
+  @Builder
+  private buildCanvasActionGroup(): void {
+    if (this.railCollapsed) {
+      Column({ space: 10 }) {
+        this.buildRailActionStrip()
+        if (this.showRailMenu) {
+          this.buildRailMenu()
+        }
+      }
+      .width(172)
+      .position({ x: Math.max(18, this.writingViewportWidth - 188), y: 18 })
+    }
   }
 
   @Builder
@@ -4587,6 +4857,10 @@ struct EditorWorkspace {
     if (!this.railCollapsed) {
       Stack({ alignContent: Alignment.TopEnd }) {
         Column({ space: 10 }) {
+          this.buildRailActionStrip()
+          if (this.showRailMenu) {
+            this.buildRailMenu()
+          }
           TextInput({ text: this.pageSearchText, placeholder: '搜索页面' })
             .width('100%')
             .height(34)
@@ -4645,7 +4919,7 @@ struct EditorWorkspace {
         .width(EDITOR_PAGE_RAIL_WIDTH)
         .height('100%')
         .padding({ top: 12, right: 10, bottom: 10, left: 10 })
-        .backgroundColor('#FFFFFFD6')
+        .backgroundColor('#FFFFFF')
         .border({ width: 1, color: '#D8E0EA' })
         .borderRadius(18)
         if (this.canAddRealPages()) {
