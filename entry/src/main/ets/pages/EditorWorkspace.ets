@@ -424,9 +424,11 @@ struct EditorWorkspace {
       activePageId: activePage.id,
       pageCount: pages.length,
       pages,
-      pageTemplateId: activePage.pageTemplateId,
-      pageSizeId: activePage.pageSizeId,
-      paperBackgroundId: activePage.paperBackgroundId,
+      // Preserve document-level defaults; switching the active page must not rewrite
+      // the fallback metadata that page-stack layout uses to derive page dimensions.
+      pageTemplateId: document.pageTemplateId,
+      pageSizeId: document.pageSizeId,
+      paperBackgroundId: document.paperBackgroundId,
       folderId: document.folderId,
       packagePath: document.packagePath,
       manifestPath: document.manifestPath,
