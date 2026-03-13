@@ -57,7 +57,7 @@ They should instead:
 - `Message`: text to send after opening the thread.
 - `ThreadTargets`: optional per-thread coordinate map. Each entry can define absolute `X` / `Y` pixels, normalized full-screen `XRatio` / `YRatio`, or a window rectangle via `LeftRatio` / `TopRatio` / `WidthRatio` / `HeightRatio`. Rectangle entries can also override `ComposerXRatio` / `ComposerYRatio` per thread.
 - `ComposerClickXRatio`: click position inside the target window rectangle on the X axis. Default `0.470`.
-- `ComposerClickYRatio`: click position inside the target window rectangle on the Y axis. Default `0.800`.
+- `ComposerClickYRatio`: click position inside the target window rectangle on the Y axis. Default `0.840`.
 - `WindowTitleRegex`: kept only for backward-compatible callers and ignored in fixed-coordinate mode.
 - `SelectionAttempts`: kept only for backward-compatible callers and ignored in fixed-coordinate mode.
 - `SelectionTimeoutMs`: kept only for backward-compatible callers and ignored in fixed-coordinate mode.
@@ -67,11 +67,11 @@ Example `thread-work.config.json` override:
 ```json
 {
   "ThreadTargets": {
-    "H": { "LeftRatio": 0.0, "TopRatio": 0.0, "WidthRatio": 0.5, "HeightRatio": 0.5, "ComposerYRatio": 0.8 },
-    "A": { "LeftRatio": 0.5, "TopRatio": 0.0, "WidthRatio": 0.5, "HeightRatio": 0.5, "ComposerYRatio": 0.8 },
-    "B": { "LeftRatio": 0.0, "TopRatio": 0.5, "WidthRatio": 0.5, "HeightRatio": 0.5, "ComposerYRatio": 0.84 },
-    "T": { "LeftRatio": 0.5, "TopRatio": 0.5, "WidthRatio": 0.5, "HeightRatio": 0.5, "ComposerYRatio": 0.84 },
-    "Test": { "LeftRatio": 0.5, "TopRatio": 0.5, "WidthRatio": 0.5, "HeightRatio": 0.5, "ComposerYRatio": 0.84 }
+    "H": { "LeftRatio": 0.0, "TopRatio": 0.0, "WidthRatio": 0.5, "HeightRatio": 0.5 },
+    "A": { "LeftRatio": 0.5, "TopRatio": 0.0, "WidthRatio": 0.5, "HeightRatio": 0.5 },
+    "B": { "LeftRatio": 0.0, "TopRatio": 0.5, "WidthRatio": 0.5, "HeightRatio": 0.5 },
+    "T": { "LeftRatio": 0.5, "TopRatio": 0.5, "WidthRatio": 0.5, "HeightRatio": 0.5 },
+    "Test": { "LeftRatio": 0.5, "TopRatio": 0.5, "WidthRatio": 0.5, "HeightRatio": 0.5 }
   }
 }
 ```

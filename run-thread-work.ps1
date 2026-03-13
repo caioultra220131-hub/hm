@@ -5,7 +5,7 @@ param(
     [string]$Message,
     [string]$WindowTitleRegex,
     [double]$ComposerClickXRatio = 0.470,
-    [double]$ComposerClickYRatio = 0.800,
+    [double]$ComposerClickYRatio = 0.840,
     [ValidateRange(1, 10)]
     [int]$SelectionAttempts = 1,
     [ValidateRange(200, 10000)]
@@ -153,11 +153,11 @@ function Get-DefaultThreadTargets {
     # composer ratios, so the click lands in the thread input box instead of
     # the window center.
     return @{
-        H    = [pscustomobject]@{ LeftRatio = 0.000; TopRatio = 0.000; WidthRatio = 0.500; HeightRatio = 0.500; ComposerYRatio = 0.800 }
-        A    = [pscustomobject]@{ LeftRatio = 0.500; TopRatio = 0.000; WidthRatio = 0.500; HeightRatio = 0.500; ComposerYRatio = 0.800 }
-        B    = [pscustomobject]@{ LeftRatio = 0.000; TopRatio = 0.500; WidthRatio = 0.500; HeightRatio = 0.500; ComposerYRatio = 0.840 }
-        T    = [pscustomobject]@{ LeftRatio = 0.500; TopRatio = 0.500; WidthRatio = 0.500; HeightRatio = 0.500; ComposerYRatio = 0.840 }
-        Test = [pscustomobject]@{ LeftRatio = 0.500; TopRatio = 0.500; WidthRatio = 0.500; HeightRatio = 0.500; ComposerYRatio = 0.840 }
+        H    = [pscustomobject]@{ LeftRatio = 0.000; TopRatio = 0.000; WidthRatio = 0.500; HeightRatio = 0.500 }
+        A    = [pscustomobject]@{ LeftRatio = 0.500; TopRatio = 0.000; WidthRatio = 0.500; HeightRatio = 0.500 }
+        B    = [pscustomobject]@{ LeftRatio = 0.000; TopRatio = 0.500; WidthRatio = 0.500; HeightRatio = 0.500 }
+        T    = [pscustomobject]@{ LeftRatio = 0.500; TopRatio = 0.500; WidthRatio = 0.500; HeightRatio = 0.500 }
+        Test = [pscustomobject]@{ LeftRatio = 0.500; TopRatio = 0.500; WidthRatio = 0.500; HeightRatio = 0.500 }
     }
 }
 
