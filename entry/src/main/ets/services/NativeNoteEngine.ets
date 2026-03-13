@@ -27,6 +27,7 @@ interface NativeEntryModule {
   insertPage(engineId: string, afterPageId: string, pageConfigJson: string): boolean;
   deletePage(engineId: string, pageId: string): boolean;
   setTool(engineId: string, tool: string): boolean;
+  setFingerWritingEnabled(engineId: string, enabled: boolean): boolean;
   setBackend(engineId: string, backend: string): boolean;
   setDocumentMode(engineId: string, mode: string): boolean;
   setBrushColor(engineId: string, colorHex: string): boolean;
@@ -63,6 +64,7 @@ export interface NativeDebugState {
   xComponentId: string;
   surfaceId: string;
   checkpointCount: number;
+  fingerWritingEnabled: boolean;
   predictionEnabled: boolean;
   pressureEnabled: boolean;
   shapeRecognitionEnabled: boolean;
@@ -454,6 +456,7 @@ export function parseNativeDebugStateJson(rawText: string): NativeDebugState | n
     xComponentId: readStringValue(parsed, 'xComponentId', ''),
     surfaceId: readStringValue(parsed, 'surfaceId', ''),
     checkpointCount: Math.trunc(readNumberValue(parsed, 'checkpointCount', 0)),
+    fingerWritingEnabled: readBooleanValue(parsed, 'fingerWritingEnabled', false),
     predictionEnabled: readBooleanValue(parsed, 'predictionEnabled', false),
     pressureEnabled: readBooleanValue(parsed, 'pressureEnabled', false),
     shapeRecognitionEnabled: readBooleanValue(parsed, 'shapeRecognitionEnabled', false),
@@ -619,6 +622,10 @@ export class NativeNoteEngine {
 
   setTool(engineId: string, tool: ToolType): boolean {
     return nativeBridge.setTool(engineId, tool);
+  }
+
+  setFingerWritingEnabled(engineId: string, enabled: boolean): boolean {
+    return nativeBridge.setFingerWritingEnabled(engineId, enabled);
   }
 
   setBackend(engineId: string, backend: RenderBackend): boolean {

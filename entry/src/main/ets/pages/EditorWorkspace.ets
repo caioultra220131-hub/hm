@@ -86,6 +86,24 @@ interface EditorWorkspaceCopy {
 }
 
 type EmbeddedOverlayDraft = DocumentEmbeddedBlock;
+type SingleFingerPanMode = 'disabled' | 'vertical' | 'free';
+type EditorUiIcon =
+  'back' |
+  'drag' |
+  'pen' |
+  'pencil' |
+  'highlighter' |
+  'eraser' |
+  'text' |
+  'lasso' |
+  'fingerWriting' |
+  'undo' |
+  'redo' |
+  'more' |
+  'railCollapse' |
+  'railExpand' |
+  'addPage' |
+  'bookmark';
 
 const EDITOR_HOME_ROUTE: string = 'pages/Index';
 const BACK_HIT_TARGET_WIDTH: number = 156;
@@ -116,6 +134,10 @@ const PAGE_STACK_MAX_ZOOM: number = 1.95;
 const PAGE_STACK_BOUNDARY_PADDING: number = 52;
 const TOOLBAR_DRAG_BOUNDARY: number = 36;
 const EMBED_SELECTION_MIN_SIZE: number = 32;
+const VIEWPORT_INERTIA_FRAME_MS: number = 16;
+const VIEWPORT_INERTIA_FRICTION: number = 0.88;
+const VIEWPORT_INERTIA_MIN_SPEED: number = 0.02;
+const VIEWPORT_HORIZONTAL_OVERFLOW_THRESHOLD: number = 12;
 const EDITOR_WORKSPACE_COPY: EditorWorkspaceCopy = {
   back: '返回',
   save: '保存',
@@ -127,7 +149,7 @@ const EDITOR_WORKSPACE_COPY: EditorWorkspaceCopy = {
   toolEraser: '橡皮',
   toolLasso: '套索',
   toolText: '文字',
-  toolHand: '拖手',
+  toolHand: '手指写',
   collapseOptions: '收起选项',
   more: '更多',
   collapsePanel: '收起面板',
@@ -183,6 +205,13 @@ struct EditorWorkspace {
   private toolbarDragOriginY: number = 0;
   private viewportPanOriginX: number = 0;
   private viewportPanOriginY: number = 0;
+  private viewportPanLastOffsetX: number = 0;
+  private viewportPanLastOffsetY: number = 0;
+  private viewportPanLastTimestamp: number = 0;
+  private viewportPanVelocityX: number = 0;
+  private viewportPanVelocityY: number = 0;
+  private viewportInertiaTimerId: number = -1;
+  private viewportInertiaResolve: (() => void) | null = null;
   private viewportPinchOriginScale: number = 1;
   private embeddedSelectionOriginX: number = 0;
   private embeddedSelectionOriginY: number = 0;
@@ -222,6 +251,7 @@ struct EditorWorkspace {
   @State private pageStackPanX: number = 0;
   @State private pageStackPanY: number = 0;
   @State private pageStackScale: number = 1;
+  @State private fingerWritingEnabled: boolean = false;
   @State private floatingToolbarOffsetX: number = 0;
   @State private floatingToolbarOffsetY: number = 0;
   @State private overlaysVersion: number = 0;
@@ -490,6 +520,7 @@ struct EditorWorkspace {
       buildNativeOpenDocumentConfig(this.document, this.currentTool)
     );
     this.nativeEngine.setBrushColor(this.engineId, this.currentColor);
+    this.applyFingerWritingState();
     this.refreshDebugState();
   }
 
@@ -541,6 +572,7 @@ struct EditorWorkspace {
         buildNativeOpenDocumentConfig(this.document, this.currentTool)
       );
       this.nativeEngine.setBrushColor(this.engineId, this.currentColor);
+      this.applyFingerWritingState();
       this.startDebugPolling();
       this.attachSurfaceIfReady();
       this.refreshDebugState();
@@ -578,10 +610,12 @@ struct EditorWorkspace {
       this.simulatorSceneSnapshot = null;
       return;
     }
+    this.fingerWritingEnabled = state.fingerWritingEnabled;
     this.debugState = state;
     this.debugStateText = `engine=${state.engineId}\n` +
       `doc=${state.activeDocumentId}\n` +
       `tool=${state.activeTool} native=${state.lastToolType}\n` +
+      `fingerWrite=${state.fingerWritingEnabled}\n` +
       `color=${state.activeColor}\n` +
       `backend=${state.activeBackend}\n` +
       `mode=${state.activeMode}\n` +
@@ -740,6 +774,7 @@ struct EditorWorkspace {
     }
     this.shutdownScheduled = false;
     this.shuttingDown = true;
+    this.stopViewportInertia();
     this.stopDebugPolling();
     await this.persistDocumentState();
     if (this.document && this.engineId.length > 0) {
@@ -784,6 +819,10 @@ struct EditorWorkspace {
   }
 
   private setTool(tool: ToolType): void {
+    if (tool === ToolType.HAND) {
+      this.toggleFingerWritingMode();
+      return;
+    }
     const previousTool: ToolType = this.currentTool;
     const isSameTool: boolean = previousTool === tool;
     this.currentTool = tool;
@@ -795,6 +834,20 @@ struct EditorWorkspace {
       this.nativeEngine.setTool(this.engineId, tool);
       this.refreshDebugState();
     }
+  }
+
+  private applyFingerWritingState(): void {
+    if (this.engineId.length === 0) {
+      return;
+    }
+    this.nativeEngine.setFingerWritingEnabled(this.engineId, this.fingerWritingEnabled);
+  }
+
+  private toggleFingerWritingMode(): void {
+    this.fingerWritingEnabled = !this.fingerWritingEnabled;
+    this.stopViewportInertia();
+    this.applyFingerWritingState();
+    this.refreshDebugState();
   }
 
   private toolLabel(tool: ToolType): string {
@@ -813,27 +866,6 @@ struct EditorWorkspace {
         return EDITOR_WORKSPACE_COPY.toolText;
       case ToolType.HAND:
         return EDITOR_WORKSPACE_COPY.toolHand;
-      default:
-        return tool;
-    }
-  }
-
-  private toolGlyph(tool: ToolType): string {
-    switch (tool) {
-      case ToolType.PEN:
-        return '✒';
-      case ToolType.PENCIL:
-        return '✎';
-      case ToolType.HIGHLIGHTER:
-        return '⎍';
-      case ToolType.ERASER:
-        return '⌫';
-      case ToolType.LASSO:
-        return '◌';
-      case ToolType.TEXT:
-        return '⊡';
-      case ToolType.HAND:
-        return '☞';
       default:
         return tool;
     }
@@ -1541,6 +1573,7 @@ struct EditorWorkspace {
     if (this.writingViewportWidth <= 0 || this.writingViewportHeight <= 0) {
       return;
     }
+    this.stopViewportInertia();
     if (!this.pageViewportInitialized || forceFocus) {
       this.pageStackPanX = this.clampedPageStackPanX(0);
       this.pageStackPanY = this.clampedPageStackPanY(this.pageFocusTargetPanY(this.activePageIndex));
@@ -1586,27 +1619,6 @@ struct EditorWorkspace {
     return this.showToolExtras && this.toolHasSecondaryControls(this.currentTool);
   }
 
-  private compactToolGlyph(tool: ToolType): string {
-    switch (tool) {
-      case ToolType.PEN:
-        return '✒';
-      case ToolType.PENCIL:
-        return '✎';
-      case ToolType.HIGHLIGHTER:
-        return '⎍';
-      case ToolType.ERASER:
-        return '⌫';
-      case ToolType.LASSO:
-        return '◌';
-      case ToolType.TEXT:
-        return '⊡';
-      case ToolType.HAND:
-        return '☞';
-      default:
-        return tool;
-    }
-  }
-
   private secondaryToolbarAssistText(): string {
     return this.toolLabel(this.currentTool);
   }
@@ -1621,19 +1633,49 @@ struct EditorWorkspace {
     return '颜色';
   }
 
-  private railToggleGlyph(): string {
-    return this.railCollapsed ? '⇤' : '⇥';
+  private toolIconKind(tool: ToolType): EditorUiIcon {
+    switch (tool) {
+      case ToolType.PEN:
+        return 'pen';
+      case ToolType.PENCIL:
+        return 'pencil';
+      case ToolType.HIGHLIGHTER:
+        return 'highlighter';
+      case ToolType.ERASER:
+        return 'eraser';
+      case ToolType.LASSO:
+        return 'lasso';
+      case ToolType.TEXT:
+        return 'text';
+      case ToolType.HAND:
+      default:
+        return 'fingerWriting';
+    }
   }
 
-  private bookmarkGlyph(bookmarked: boolean): string {
-    return bookmarked ? '⚑' : '⚐';
+  private railToggleIconKind(): EditorUiIcon {
+    return this.railCollapsed ? 'railExpand' : 'railCollapse';
+  }
+
+  private viewportHasHorizontalOverflow(): boolean {
+    if (this.writingViewportWidth <= 0) {
+      return false;
+    }
+    return (this.widestRenderedPageWidth() - this.writingViewportWidth) > VIEWPORT_HORIZONTAL_OVERFLOW_THRESHOLD;
+  }
+
+  private singleFingerPanMode(): SingleFingerPanMode {
+    if (this.embedPlacementArmed || this.showEmbeddedComposer || this.showInspectorDrawer || this.fingerWritingEnabled) {
+      return 'disabled';
+    }
+    if (this.debugState?.stylusActive ?? false) {
+      return 'disabled';
+    }
+    return this.viewportHasHorizontalOverflow() ? 'free' : 'vertical';
   }
 
   private canSingleFingerPanViewport(): boolean {
-    return this.currentTool === ToolType.HAND &&
-      !this.embedPlacementArmed &&
-      !this.showEmbeddedComposer &&
-      !this.showInspectorDrawer;
+    return this.singleFingerPanMode() !== 'disabled';
   }
 
   private canTwoFingerPanViewport(): boolean {
@@ -1641,30 +1683,106 @@ struct EditorWorkspace {
   }
 
   private handleViewportPanStart(): void {
+    this.stopViewportInertia();
     this.viewportPanOriginX = this.pageStackPanX;
     this.viewportPanOriginY = this.pageStackPanY;
+    this.viewportPanLastOffsetX = 0;
+    this.viewportPanLastOffsetY = 0;
+    this.viewportPanLastTimestamp = Date.now();
+    this.viewportPanVelocityX = 0;
+    this.viewportPanVelocityY = 0;
+  }
+
+  private recordViewportPanVelocity(offsetX: number, offsetY: number, mode: SingleFingerPanMode | 'free'): void {
+    const now: number = Date.now();
+    const deltaMs: number = Math.max(1, now - this.viewportPanLastTimestamp);
+    const deltaOffsetX: number = offsetX - this.viewportPanLastOffsetX;
+    const deltaOffsetY: number = offsetY - this.viewportPanLastOffsetY;
+    const instantVelocityX: number = mode === 'vertical' ? 0 : deltaOffsetX / deltaMs;
+    const instantVelocityY: number = deltaOffsetY / deltaMs;
+    this.viewportPanVelocityX = (this.viewportPanVelocityX * 0.42) + (instantVelocityX * 0.58);
+    this.viewportPanVelocityY = (this.viewportPanVelocityY * 0.42) + (instantVelocityY * 0.58);
+    this.viewportPanLastOffsetX = offsetX;
+    this.viewportPanLastOffsetY = offsetY;
+    this.viewportPanLastTimestamp = now;
+  }
+
+  private stopViewportInertia(): void {
+    if (this.viewportInertiaTimerId >= 0) {
+      clearInterval(this.viewportInertiaTimerId);
+      this.viewportInertiaTimerId = -1;
+    }
+    if (this.viewportInertiaResolve) {
+      const resolve: () => void = this.viewportInertiaResolve;
+      this.viewportInertiaResolve = null;
+      resolve();
+    }
+  }
+
+  private startViewportInertia(mode: SingleFingerPanMode | 'free'): Promise<void> {
+    this.stopViewportInertia();
+    let velocityX: number = mode === 'vertical' ? 0 : this.viewportPanVelocityX;
+    let velocityY: number = this.viewportPanVelocityY;
+    if (Math.abs(velocityX) < VIEWPORT_INERTIA_MIN_SPEED && Math.abs(velocityY) < VIEWPORT_INERTIA_MIN_SPEED) {
+      return Promise.resolve();
+    }
+    return new Promise((resolve) => {
+      this.viewportInertiaResolve = resolve;
+      this.viewportInertiaTimerId = setInterval(() => {
+        velocityX *= VIEWPORT_INERTIA_FRICTION;
+        velocityY *= VIEWPORT_INERTIA_FRICTION;
+        const nextX: number = mode === 'vertical'
+          ? this.pageStackPanX
+          : this.pageStackPanX + (velocityX * VIEWPORT_INERTIA_FRAME_MS);
+        const nextY: number = this.pageStackPanY + (velocityY * VIEWPORT_INERTIA_FRAME_MS);
+        const clampedX: number = this.clampedPageStackPanX(nextX);
+        const clampedY: number = this.clampedPageStackPanY(nextY);
+        const hitBoundaryX: boolean = mode !== 'vertical' && Math.abs(clampedX - nextX) > 0.5;
+        const hitBoundaryY: boolean = Math.abs(clampedY - nextY) > 0.5;
+        this.pageStackPanX = clampedX;
+        this.pageStackPanY = clampedY;
+        if (hitBoundaryX) {
+          velocityX = 0;
+        }
+        if (hitBoundaryY) {
+          velocityY = 0;
+        }
+        if (Math.abs(velocityX) < VIEWPORT_INERTIA_MIN_SPEED && Math.abs(velocityY) < VIEWPORT_INERTIA_MIN_SPEED) {
+          this.stopViewportInertia();
+        }
+      }, VIEWPORT_INERTIA_FRAME_MS);
+    });
   }
 
   private updateViewportPan(event: Object, fingers: number): void {
-    const canPan: boolean = fingers === 1 ? this.canSingleFingerPanViewport() : this.canTwoFingerPanViewport();
+    const panMode: SingleFingerPanMode | 'free' = fingers === 1 ? this.singleFingerPanMode() : 'free';
+    const canPan: boolean = fingers === 1 ? panMode !== 'disabled' : this.canTwoFingerPanViewport();
     if (!canPan) {
       return;
     }
-    const nextX: number = this.viewportPanOriginX + this.readGestureNumber(event, 'offsetX', 0);
-    const nextY: number = this.viewportPanOriginY + this.readGestureNumber(event, 'offsetY', 0);
+    const offsetX: number = this.readGestureNumber(event, 'offsetX', 0);
+    const offsetY: number = this.readGestureNumber(event, 'offsetY', 0);
+    this.recordViewportPanVelocity(offsetX, offsetY, panMode);
+    const nextX: number = panMode === 'vertical'
+      ? this.pageStackPanX
+      : this.viewportPanOriginX + offsetX;
+    const nextY: number = this.viewportPanOriginY + offsetY;
     this.pageStackPanX = this.clampedPageStackPanX(nextX);
     this.pageStackPanY = this.clampedPageStackPanY(nextY);
   }
 
   private async finishViewportPan(fingers: number): Promise<void> {
-    const canPan: boolean = fingers === 1 ? this.canSingleFingerPanViewport() : this.canTwoFingerPanViewport();
+    const panMode: SingleFingerPanMode | 'free' = fingers === 1 ? this.singleFingerPanMode() : 'free';
+    const canPan: boolean = fingers === 1 ? panMode !== 'disabled' : this.canTwoFingerPanViewport();
     if (!canPan) {
       return;
     }
+    await this.startViewportInertia(panMode);
     await this.syncViewportAfterGesture();
   }
 
   private handleViewportPinchStart(): void {
+    this.stopViewportInertia();
     this.viewportPinchOriginScale = this.pageStackScale;
   }
 
@@ -2314,185 +2432,6 @@ struct EditorWorkspace {
   }
 
   @Builder
-  private buildHeaderArea(): void {
-    Row() {
-      Button('←')
-        .width(44)
-        .height(44)
-        .backgroundColor('#F7F7F8')
-        .fontColor('#364152')
-        .fontSize(20)
-        .borderRadius(14)
-        .onClick(() => {
-          this.goBack();
-        })
-      Blank()
-        .layoutWeight(1)
-      this.buildHeaderBar()
-    }
-    .width('100%')
-    .alignItems(VerticalAlign.Center)
-  }
-
-  @Builder
-  private buildBackHitTarget(): void {
-    Blank()
-      .width(BACK_HIT_TARGET_WIDTH)
-      .height(BACK_HIT_TARGET_HEIGHT)
-      .backgroundColor('#01000000')
-      .borderRadius(999)
-      .onClick(() => {
-        this.goBack();
-      })
-  }
-
-  @Builder
-  private buildFloatingToolbar(): void {
-    Column() {
-      Row({ space: 8 }) {
-        ForEach([
-          ToolType.PEN,
-          ToolType.PENCIL,
-          ToolType.ERASER,
-          ToolType.TEXT,
-          ToolType.LASSO,
-          ToolType.HIGHLIGHTER,
-          ToolType.HAND
-        ], (tool: ToolType) => {
-          Button(this.toolGlyph(tool))
-            .width(FLOATING_TOOL_BUTTON_SIZE)
-            .height(FLOATING_TOOL_BUTTON_SIZE)
-            .backgroundColor(this.currentTool === tool ? '#0B57D0' : '#FFFFFF')
-            .fontColor(this.currentTool === tool ? '#FFFFFF' : '#344054')
-            .fontSize(tool === ToolType.TEXT ? 15 : 18)
-            .fontWeight(FontWeight.Medium)
-            .border({
-              width: this.currentTool === tool ? 2 : 1,
-              color: this.currentTool === tool ? '#0B57D0' : '#D8E0EA'
-            })
-            .borderRadius(14)
-            .onClick(() => {
-              this.setTool(tool);
-            })
-        }, (tool: ToolType): string => tool)
-        Blank()
-          .width(1)
-          .height(24)
-          .backgroundColor('#D8E0EA')
-          .margin({ left: 2, right: 2 })
-        Row({ space: 10 }) {
-          ForEach(PALETTE_COLORS, (color: string) => {
-            Blank()
-              .width(FLOATING_TOOLBAR_COLOR_CHIP_SIZE)
-              .height(FLOATING_TOOLBAR_COLOR_CHIP_SIZE)
-              .backgroundColor(color)
-              .border({
-                width: this.currentColor === color ? 3 : 1,
-                color: this.currentColor === color ? '#0B57D0' : '#D0D5DD'
-              })
-              .borderRadius(999)
-              .onClick(() => {
-                this.currentColor = color;
-                if (this.engineId.length > 0) {
-                  this.nativeEngine.setBrushColor(this.engineId, color);
-                  this.refreshDebugState();
-                }
-              })
-          }, (color: string): string => color)
-        }
-        Blank()
-          .width(1)
-          .height(24)
-          .backgroundColor('#D8E0EA')
-          .margin({ left: 2, right: 2 })
-        Button(this.showToolExtras ? '⌄' : '›')
-          .width(FLOATING_TOOLBAR_MORE_BUTTON_SIZE)
-          .height(FLOATING_TOOLBAR_MORE_BUTTON_SIZE)
-          .backgroundColor('#FFFFFF')
-          .fontColor('#344054')
-          .fontSize(18)
-          .border({ width: 1, color: '#D8E0EA' })
-          .borderRadius(12)
-          .onClick(() => {
-            this.toggleToolExtras();
-          })
-      }
-      .justifyContent(FlexAlign.Center)
-      .width('100%')
-      .padding({ left: 16, right: 16, top: 12, bottom: 12 })
-      if (this.showToolExtras) {
-        Row({ space: 10 }) {
-          Button(this.showInspectorDrawer ? EDITOR_WORKSPACE_COPY.collapsePanel : EDITOR_WORKSPACE_COPY.openPanel)
-            .height(28)
-            .backgroundColor(this.showInspectorDrawer ? '#DCE6FF' : '#FFFFFF')
-            .fontColor('#162033')
-            .fontSize(11)
-            .onClick(() => {
-              this.toggleInspector('preview');
-            })
-          Blank()
-            .width(1)
-            .height(18)
-            .backgroundColor('#D8E0EA')
-          Text(EDITOR_WORKSPACE_COPY.render)
-            .fontSize(12)
-            .fontColor('#667085')
-          Button(RENDER_BACKEND_LABELS[RenderBackend.OPEN_GLES])
-            .height(28)
-            .backgroundColor(this.currentBackend === RenderBackend.OPEN_GLES ? '#162033' : '#FFFFFF')
-            .fontColor(this.currentBackend === RenderBackend.OPEN_GLES ? '#FFFFFF' : '#162033')
-            .fontSize(11)
-            .onClick(() => {
-              this.setBackend(RenderBackend.OPEN_GLES);
-            })
-          Button(RENDER_BACKEND_LABELS[RenderBackend.SKIA])
-            .height(28)
-            .backgroundColor(this.currentBackend === RenderBackend.SKIA ? '#162033' : '#FFFFFF')
-            .fontColor(this.currentBackend === RenderBackend.SKIA ? '#FFFFFF' : '#162033')
-            .fontSize(11)
-            .onClick(() => {
-              this.setBackend(RenderBackend.SKIA);
-            })
-          Blank()
-            .width(1)
-            .height(18)
-            .backgroundColor('#D8E0EA')
-          Text(EDITOR_WORKSPACE_COPY.mode)
-            .fontSize(12)
-            .fontColor('#667085')
-          Button(DOCUMENT_MODE_LABELS[DocumentMode.PAGED])
-            .height(28)
-            .enabled(this.canChangeDocumentMode())
-            .backgroundColor(this.currentMode === DocumentMode.PAGED ? '#162033' : '#FFFFFF')
-            .fontColor(this.currentMode === DocumentMode.PAGED ? '#FFFFFF' : '#162033')
-            .fontSize(11)
-            .onClick(() => {
-              this.setMode(DocumentMode.PAGED);
-            })
-          Button(DOCUMENT_MODE_LABELS[DocumentMode.INFINITE])
-            .height(28)
-            .enabled(this.canChangeDocumentMode())
-            .backgroundColor(this.currentMode === DocumentMode.INFINITE ? '#162033' : '#FFFFFF')
-            .fontColor(this.currentMode === DocumentMode.INFINITE ? '#FFFFFF' : '#162033')
-            .fontSize(11)
-            .onClick(() => {
-              this.setMode(DocumentMode.INFINITE);
-            })
-        }
-        .margin({ left: 14, right: 14, bottom: 14 })
-        .padding({ left: 10, right: 10, top: 8, bottom: 8 })
-        .backgroundColor('#F7F9FC')
-        .borderRadius(14)
-      }
-    }
-    .width(FLOATING_TOOLBAR_WIDTH)
-    .backgroundColor('#F7F7F8')
-    .border({ width: 1, color: '#D8E0EA' })
-    .borderRadius(18)
-    .hitTestBehavior(HitTestMode.Transparent)
-  }
-
-  @Builder
   private buildStubBadge(): void {
     Row({ space: 8 }) {
       Text(EDITOR_WORKSPACE_COPY.placeholder)
@@ -3025,148 +2964,6 @@ struct EditorWorkspace {
   }
 
   @Builder
-  private buildPageRailTopActions(): void {
-    Row() {
-      Blank()
-        .layoutWeight(1)
-      Row({ space: 6 }) {
-        Button('↶')
-          .width(PAGE_RAIL_ACTION_BUTTON_SIZE)
-          .height(PAGE_RAIL_ACTION_BUTTON_SIZE)
-          .backgroundColor('#FFFFFF')
-          .fontColor('#667085')
-          .fontSize(16)
-          .borderRadius(14)
-          .onClick(() => {
-            this.undoStroke();
-          })
-        Button('↷')
-          .width(PAGE_RAIL_ACTION_BUTTON_SIZE)
-          .height(PAGE_RAIL_ACTION_BUTTON_SIZE)
-          .backgroundColor('#FFFFFF')
-          .fontColor('#667085')
-          .fontSize(16)
-          .borderRadius(14)
-          .onClick(() => {
-            this.redoStroke();
-          })
-        Button('⋯')
-          .width(PAGE_RAIL_ACTION_BUTTON_SIZE)
-          .height(PAGE_RAIL_ACTION_BUTTON_SIZE)
-          .backgroundColor('#FFFFFF')
-          .fontColor('#344054')
-          .fontSize(18)
-          .borderRadius(14)
-          .onClick(() => {
-            this.toggleRailMenu();
-          })
-        if (this.canAddRealPages()) {
-          Button('+')
-            .width(PAGE_RAIL_ACTION_BUTTON_SIZE)
-            .height(PAGE_RAIL_ACTION_BUTTON_SIZE)
-            .backgroundColor('#0F766E')
-            .fontColor('#FFFFFF')
-            .fontSize(16)
-            .fontWeight(FontWeight.Medium)
-            .borderRadius(14)
-            .onClick(async () => {
-              await this.addPage();
-            })
-        }
-      }
-      .padding(5)
-      .backgroundColor('#F7F7F8')
-      .border({ width: 1, color: '#E4E7EC' })
-      .borderRadius(16)
-    }
-    .width('100%')
-  }
-
-  @Builder
-  private buildPageRailHeader(): void {
-    Column({ space: 10 }) {
-      this.buildPageRailTopActions()
-      Row({ space: 8 }) {
-        Text('⌕')
-          .fontSize(16)
-          .fontColor('#667085')
-        TextInput({ text: this.pageSearchText, placeholder: '搜索' })
-          .layoutWeight(1)
-          .height(32)
-          .backgroundColor('#00FFFFFF')
-          .fontSize(13)
-          .onChange((value: string) => {
-            this.pageSearchText = value;
-          })
-      }
-      .width('100%')
-      .height(48)
-      .padding({ left: 14, right: 14 })
-      .backgroundColor('#FFFFFF')
-      .borderRadius(14)
-      Row({ space: 8 }) {
-        Text('所有页面')
-          .fontSize(15)
-          .fontWeight(FontWeight.Bold)
-          .fontColor('#101828')
-        Text('⌄')
-          .fontSize(14)
-          .fontColor('#101828')
-        Blank()
-          .layoutWeight(1)
-        if (this.showPageJumpInput) {
-          Row({ space: 6 }) {
-            TextInput({ text: this.pageJumpDraft, placeholder: `${this.activePageIndex + 1}` })
-              .width(54)
-              .height(34)
-              .backgroundColor('#FFFFFF')
-              .textAlign(TextAlign.Center)
-              .borderRadius(12)
-              .onChange((value: string) => {
-                this.pageJumpDraft = value.replace(/[^0-9]/g, '');
-              })
-            Text(`/ ${this.pageCount()}`)
-              .fontSize(12)
-              .fontColor('#667085')
-            Button('跳转')
-              .height(34)
-              .enabled(this.pageJumpTargetIndex() >= 0)
-              .backgroundColor('#162033')
-              .fontColor('#FFFFFF')
-              .fontSize(11)
-              .padding({ left: 12, right: 12 })
-              .borderRadius(12)
-              .onClick(async () => {
-                await this.jumpToDraftPage();
-              })
-            Button('×')
-              .width(32)
-              .height(32)
-              .backgroundColor('#E7ECF3')
-              .fontColor('#475467')
-              .fontSize(14)
-              .borderRadius(12)
-              .onClick(() => {
-                this.closePageJumpInput();
-              })
-          }
-        } else {
-          Button(this.selectedPageLabel())
-            .height(34)
-            .padding({ left: 12, right: 12 })
-            .backgroundColor('#FFFFFF')
-            .fontColor('#344054')
-            .fontSize(12)
-            .borderRadius(12)
-            .onClick(() => {
-              this.openPageJumpInput();
-            })
-        }
-      }
-    }
-  }
-
-  @Builder
   private buildRailMenu(): void {
     Column() {
       Button('快速导出')
@@ -3359,87 +3156,6 @@ struct EditorWorkspace {
   }
 
   @Builder
-  private buildPageRailItem(pageIndex: number): void {
-    Column({ space: 6 }) {
-      Stack({ alignContent: Alignment.BottomStart }) {
-        this.buildPageRailPreviewCard(pageIndex)
-        Button('⋯')
-          .width(PAGE_RAIL_PAGE_MENU_BUTTON_SIZE)
-          .height(PAGE_RAIL_PAGE_MENU_BUTTON_SIZE)
-          .fontSize(12)
-          .backgroundColor('#FFFFFF')
-          .fontColor('#475467')
-          .borderRadius(14)
-          .margin({ left: 8, bottom: 8 })
-          .onClick(async () => {
-            await this.togglePageMenu(pageIndex);
-          })
-        if (this.isPageMenuOpen(pageIndex)) {
-          Column() {
-            this.buildPageMenu(pageIndex)
-          }
-          .position({ x: 12, y: PAGE_RAIL_THUMBNAIL_HEIGHT - 8 })
-        }
-      }
-      Text(`${pageIndex + 1}`)
-        .fontSize(10)
-        .fontWeight(this.isSelectedPageIndex(pageIndex) ? FontWeight.Medium : FontWeight.Normal)
-        .fontColor(this.isSelectedPageIndex(pageIndex) ? '#0F766E' : '#475467')
-    }
-    .width('100%')
-    .padding({ top: 2, bottom: 12 })
-    .alignItems(HorizontalAlign.Center)
-    .onClick(() => {
-      this.selectPage(pageIndex);
-    })
-  }
-
-  @Builder
-  private buildPageRail(): void {
-    Stack({ alignContent: Alignment.TopStart }) {
-      Column({ space: 10 }) {
-        this.buildPageRailHeader()
-        Scroll() {
-          Column({ space: 2 }) {
-            if (this.filteredPageIndexes().length === 0) {
-              Column({ space: 8 }) {
-                Text('没有匹配页面')
-                  .fontSize(13)
-                  .fontWeight(FontWeight.Medium)
-                  .fontColor('#344054')
-                Text('试试输入页码进行跳转')
-                  .fontSize(11)
-                  .fontColor('#667085')
-              }
-              .width('100%')
-              .padding({ top: 24, bottom: 24 })
-              .alignItems(HorizontalAlign.Center)
-            } else {
-              ForEach(this.filteredPageIndexes(), (pageIndex: number) => {
-                this.buildPageRailItem(pageIndex)
-              }, (pageIndex: number): string => this.pageKeyAt(pageIndex))
-            }
-          }
-          .padding({ top: 4, bottom: 18 })
-        }
-        .layoutWeight(1)
-      }
-      if (this.showRailMenu) {
-        Column() {
-          this.buildRailMenu()
-        }
-        .position({ x: 12, y: 56 })
-      }
-    }
-    .width(EDITOR_PAGE_RAIL_WIDTH)
-    .height('100%')
-    .padding(12)
-    .backgroundColor('#F3F4F6')
-    .border({ width: 1, color: '#D8E0EA' })
-    .borderRadius(22)
-  }
-
-  @Builder
   private buildPreviewBlockList(blocks: MarkdownPreviewBlock[]): void {
     Scroll() {
       Column({ space: 10 }) {
@@ -3486,6 +3202,162 @@ struct EditorWorkspace {
       .padding({ top: 4, bottom: 8 })
     }
     .width('100%')
+  }
+
+  @Builder
+  private buildIconBar(x: number, y: number, width: number, height: number, color: string, opacity: number): void {
+    Blank()
+      .width(width)
+      .height(height)
+      .backgroundColor(color)
+      .borderRadius(999)
+      .opacity(opacity)
+      .position({ x, y })
+  }
+
+  @Builder
+  private buildIconDot(x: number, y: number, size: number, color: string, opacity: number): void {
+    Blank()
+      .width(size)
+      .height(size)
+      .backgroundColor(color)
+      .borderRadius(999)
+      .opacity(opacity)
+      .position({ x, y })
+  }
+
+  @Builder
+  private buildIconOutline(x: number, y: number, width: number, height: number, color: string, radius: number): void {
+    Blank()
+      .width(width)
+      .height(height)
+      .backgroundColor('#00000000')
+      .border({ width: 1.6, color })
+      .borderRadius(radius)
+      .position({ x, y })
+  }
+
+  @Builder
+  private buildEditorIcon(icon: EditorUiIcon, color: string, size: number): void {
+    Stack({ alignContent: Alignment.TopStart }) {
+      if (icon === 'drag') {
+        this.buildIconDot(4, 4, 2.4, color, 0.92)
+        this.buildIconDot(4, 8, 2.4, color, 0.92)
+        this.buildIconDot(4, 12, 2.4, color, 0.92)
+        this.buildIconDot(9.5, 4, 2.4, color, 0.92)
+        this.buildIconDot(9.5, 8, 2.4, color, 0.92)
+        this.buildIconDot(9.5, 12, 2.4, color, 0.92)
+      } else if (icon === 'back') {
+        this.buildIconBar(4, 8, 10, 2, color, 1)
+        this.buildIconBar(4, 5, 5, 2, color, 1)
+        this.buildIconBar(2, 7, 4, 2, color, 1)
+        this.buildIconBar(4, 11, 5, 2, color, 1)
+        this.buildIconBar(2, 9, 4, 2, color, 1)
+      } else if (icon === 'pen') {
+        this.buildIconBar(8, 2, 2, 7, color, 1)
+        this.buildIconBar(6, 9, 6, 2, color, 1)
+        this.buildIconBar(7, 11, 4, 2, color, 1)
+        this.buildIconBar(8, 13, 2, 3, color, 1)
+      } else if (icon === 'pencil') {
+        this.buildIconBar(3, 6, 9, 2, color, 1)
+        this.buildIconBar(4, 8, 8, 2, color, 1)
+        this.buildIconBar(11, 5, 3, 2, color, 1)
+        this.buildIconBar(11, 9, 3, 2, color, 1)
+        this.buildIconBar(2, 8, 2, 2, color, 0.55)
+      } else if (icon === 'highlighter') {
+        this.buildIconBar(5, 2, 8, 3, color, 1)
+        this.buildIconBar(6, 5, 6, 7, color, 1)
+        this.buildIconBar(3, 13, 12, 3, color, 0.4)
+      } else if (icon === 'eraser') {
+        this.buildIconBar(4, 5, 10, 7, color, 0.96)
+        this.buildIconBar(4, 5, 10, 2, color, 0.45)
+        this.buildIconBar(6, 12, 6, 2, color, 1)
+      } else if (icon === 'text') {
+        this.buildIconBar(4, 3, 10, 2, color, 1)
+        this.buildIconBar(8, 5, 2, 8, color, 1)
+        this.buildIconBar(4, 13, 10, 2, color, 1)
+      } else if (icon === 'lasso') {
+        this.buildIconDot(4, 6, 2.4, color, 0.92)
+        this.buildIconDot(6.5, 3.5, 2.4, color, 0.92)
+        this.buildIconDot(10, 3.5, 2.4, color, 0.92)
+        this.buildIconDot(12.5, 6, 2.4, color, 0.92)
+        this.buildIconDot(10, 9.5, 2.4, color, 0.92)
+        this.buildIconDot(6.5, 9.5, 2.4, color, 0.92)
+        this.buildIconBar(11.5, 11.5, 4, 2, color, 1)
+      } else if (icon === 'fingerWriting') {
+        this.buildIconBar(8, 2, 2, 8, color, 1)
+        this.buildIconBar(5, 10, 8, 5, color, 1)
+        this.buildIconBar(3, 9, 4, 2, color, 1)
+        this.buildIconBar(10, 7, 3, 2, color, 1)
+      } else if (icon === 'undo') {
+        this.buildIconBar(6, 4, 6, 2, color, 1)
+        this.buildIconBar(5, 4, 2, 6, color, 1)
+        this.buildIconBar(2, 5, 4, 2, color, 1)
+        this.buildIconBar(3, 7, 3, 2, color, 1)
+      } else if (icon === 'redo') {
+        this.buildIconBar(6, 4, 6, 2, color, 1)
+        this.buildIconBar(11, 4, 2, 6, color, 1)
+        this.buildIconBar(12, 5, 4, 2, color, 1)
+        this.buildIconBar(12, 7, 3, 2, color, 1)
+      } else if (icon === 'more') {
+        this.buildIconDot(3, 7.2, 3, color, 1)
+        this.buildIconDot(7.5, 7.2, 3, color, 1)
+        this.buildIconDot(12, 7.2, 3, color, 1)
+      } else if (icon === 'railCollapse') {
+        this.buildIconBar(12, 2, 2, 14, color, 1)
+        this.buildIconBar(4, 8, 6, 2, color, 1)
+        this.buildIconBar(7, 5, 4, 2, color, 1)
+        this.buildIconBar(7, 11, 4, 2, color, 1)
+      } else if (icon === 'railExpand') {
+        this.buildIconBar(2, 2, 2, 14, color, 1)
+        this.buildIconBar(8, 8, 6, 2, color, 1)
+        this.buildIconBar(7, 5, 4, 2, color, 1)
+        this.buildIconBar(7, 11, 4, 2, color, 1)
+      } else if (icon === 'addPage') {
+        this.buildIconOutline(3, 2, 10, 13, color, 3)
+        this.buildIconBar(7.8, 6, 1.8, 6, color, 1)
+        this.buildIconBar(5.7, 8.1, 6, 1.8, color, 1)
+      } else if (icon === 'bookmark') {
+        this.buildIconBar(5, 2, 8, 2, color, 1)
+        this.buildIconBar(5, 4, 2, 10, color, 1)
+        this.buildIconBar(11, 4, 2, 10, color, 1)
+        this.buildIconBar(7, 11, 4, 2, color, 1)
+        this.buildIconBar(6, 13, 2, 2, color, 1)
+        this.buildIconBar(10, 13, 2, 2, color, 1)
+      }
+    }
+    .width(size)
+    .height(size)
+  }
+
+  @Builder
+  private buildToolbarToolButton(tool: ToolType): void {
+    Stack({ alignContent: Alignment.Center }) {
+      this.buildEditorIcon(this.toolIconKind(tool), this.currentTool === tool ? '#FFFFFF' : '#344054', 18)
+    }
+    .width(FLOATING_TOOL_BUTTON_SIZE)
+    .height(FLOATING_TOOL_BUTTON_SIZE)
+    .backgroundColor(this.currentTool === tool ? '#16324F' : '#FFFFFF')
+    .border({ width: 1, color: this.currentTool === tool ? '#16324F' : '#D8E0EA' })
+    .borderRadius(14)
+    .onClick(() => {
+      this.setTool(tool);
+    })
+  }
+
+  @Builder
+  private buildFingerWritingToggleButton(): void {
+    Stack({ alignContent: Alignment.Center }) {
+      this.buildEditorIcon('fingerWriting', this.fingerWritingEnabled ? '#FFFFFF' : '#344054', 18)
+    }
+    .width(FLOATING_TOOL_BUTTON_SIZE)
+    .height(FLOATING_TOOL_BUTTON_SIZE)
+    .backgroundColor(this.fingerWritingEnabled ? '#0F766E' : '#FFFFFF')
+    .border({ width: 1, color: this.fingerWritingEnabled ? '#0F766E' : '#D8E0EA' })
+    .borderRadius(14)
+    .onClick(() => {
+      this.toggleFingerWritingMode();
+    })
   }
 
   @Builder
@@ -3542,12 +3414,12 @@ struct EditorWorkspace {
   @Builder
   private buildFloatingBackButton(): void {
     Row() {
-      Button('←')
+      Stack({ alignContent: Alignment.Center }) {
+        this.buildEditorIcon('back', '#162033', 18)
+      }
         .width(42)
         .height(42)
         .backgroundColor('#FFFFFF')
-        .fontColor('#162033')
-        .fontSize(18)
         .border({ width: 1, color: '#D8E0EA' })
         .borderRadius(16)
         .onClick(() => {
@@ -3560,10 +3432,8 @@ struct EditorWorkspace {
   @Builder
   private buildToolbarPrimaryRow(): void {
     Row({ space: 4 }) {
-      Row() {
-        Text('⋮⋮')
-          .fontSize(12)
-          .fontColor('#667085')
+      Stack({ alignContent: Alignment.Center }) {
+        this.buildEditorIcon('drag', '#667085', 16)
       }
       .height(FLOATING_TOOL_BUTTON_SIZE - 2)
       .padding({ left: 8, right: 8 })
@@ -3584,22 +3454,11 @@ struct EditorWorkspace {
         ToolType.ERASER,
         ToolType.TEXT,
         ToolType.LASSO,
-        ToolType.HIGHLIGHTER,
-        ToolType.HAND
+        ToolType.HIGHLIGHTER
       ], (tool: ToolType) => {
-        Button(this.compactToolGlyph(tool))
-          .width(FLOATING_TOOL_BUTTON_SIZE)
-          .height(FLOATING_TOOL_BUTTON_SIZE)
-          .backgroundColor(this.currentTool === tool ? '#16324F' : '#FFFFFF')
-          .fontColor(this.currentTool === tool ? '#FFFFFF' : '#344054')
-          .fontSize(tool === ToolType.TEXT ? 14 : 16)
-          .fontWeight(FontWeight.Medium)
-          .border({ width: 1, color: this.currentTool === tool ? '#16324F' : '#D8E0EA' })
-          .borderRadius(14)
-          .onClick(() => {
-            this.setTool(tool);
-          })
+        this.buildToolbarToolButton(tool)
       }, (tool: ToolType): string => `toolbar-${tool}`)
+      this.buildFingerWritingToggleButton()
       Blank()
         .layoutWeight(1)
       Button(this.saveButtonLabel())
@@ -4170,24 +4029,24 @@ struct EditorWorkspace {
     Column({ space: 6 }) {
       this.buildPageRailPreviewCard(pageIndex)
       Row({ space: 4 }) {
-        Button(this.bookmarkGlyph(this.isPageBookmarked(pageIndex)))
+        Stack({ alignContent: Alignment.Center }) {
+          this.buildEditorIcon('bookmark', this.isPageBookmarked(pageIndex) ? '#FFFFFF' : '#344054', 16)
+        }
           .height(26)
           .width(34)
           .backgroundColor(this.isPageBookmarked(pageIndex) ? '#16324F' : '#FFFFFF')
-          .fontColor(this.isPageBookmarked(pageIndex) ? '#FFFFFF' : '#344054')
-          .fontSize(14)
           .borderRadius(12)
           .onClick(async () => {
             await this.toggleBookmarkForPage(pageIndex);
           })
         Blank()
           .layoutWeight(1)
-        Button('⋯')
+        Stack({ alignContent: Alignment.Center }) {
+          this.buildEditorIcon('more', '#475467', 15)
+        }
           .width(PAGE_RAIL_PAGE_MENU_BUTTON_SIZE)
           .height(PAGE_RAIL_PAGE_MENU_BUTTON_SIZE)
-          .fontSize(16)
           .backgroundColor('#FFFFFF')
-          .fontColor('#475467')
           .borderRadius(14)
           .onClick(async () => {
             await this.togglePageMenu(pageIndex);
@@ -4217,12 +4076,12 @@ struct EditorWorkspace {
   private buildModernPageRail(): void {
     if (this.railCollapsed) {
       Column({ space: 12 }) {
-        Button(this.railToggleGlyph())
+        Stack({ alignContent: Alignment.Center }) {
+          this.buildEditorIcon(this.railToggleIconKind(), '#344054', 16)
+        }
           .width(40)
           .height(40)
           .backgroundColor('#FFFFFF')
-          .fontColor('#344054')
-          .fontSize(16)
           .borderRadius(14)
           .onClick(() => {
             this.setRailCollapsed(false);
@@ -4247,54 +4106,53 @@ struct EditorWorkspace {
     } else {
       Column({ space: 10 }) {
       Row({ space: 4 }) {
-        Button(this.railToggleGlyph())
+        Stack({ alignContent: Alignment.Center }) {
+          this.buildEditorIcon(this.railToggleIconKind(), '#344054', 15)
+        }
           .width(PAGE_RAIL_ACTION_BUTTON_SIZE)
           .height(PAGE_RAIL_ACTION_BUTTON_SIZE)
           .backgroundColor('#FFFFFF')
-          .fontColor('#344054')
-          .fontSize(15)
           .borderRadius(14)
           .onClick(() => {
             this.setRailCollapsed(true);
           })
-        Button('↶')
+        Stack({ alignContent: Alignment.Center }) {
+          this.buildEditorIcon('undo', '#667085', 15)
+        }
           .width(PAGE_RAIL_ACTION_BUTTON_SIZE)
           .height(PAGE_RAIL_ACTION_BUTTON_SIZE)
           .backgroundColor('#FFFFFF')
-          .fontColor('#667085')
-          .fontSize(16)
           .borderRadius(14)
           .onClick(() => {
             this.undoStroke();
           })
-        Button('↷')
+        Stack({ alignContent: Alignment.Center }) {
+          this.buildEditorIcon('redo', '#667085', 15)
+        }
           .width(PAGE_RAIL_ACTION_BUTTON_SIZE)
           .height(PAGE_RAIL_ACTION_BUTTON_SIZE)
           .backgroundColor('#FFFFFF')
-          .fontColor('#667085')
-          .fontSize(16)
           .borderRadius(14)
           .onClick(() => {
             this.redoStroke();
           })
-        Button('⋯')
+        Stack({ alignContent: Alignment.Center }) {
+          this.buildEditorIcon('more', '#344054', 15)
+        }
           .width(PAGE_RAIL_ACTION_BUTTON_SIZE)
           .height(PAGE_RAIL_ACTION_BUTTON_SIZE)
           .backgroundColor('#FFFFFF')
-          .fontColor('#344054')
-          .fontSize(18)
           .borderRadius(14)
           .onClick(() => {
             this.toggleRailMenu();
           })
         if (this.canAddRealPages()) {
-          Button('+')
+          Stack({ alignContent: Alignment.Center }) {
+            this.buildEditorIcon('addPage', '#FFFFFF', 15)
+          }
             .width(PAGE_RAIL_ACTION_BUTTON_SIZE)
             .height(PAGE_RAIL_ACTION_BUTTON_SIZE)
             .backgroundColor('#0F766E')
-            .fontColor('#FFFFFF')
-            .fontSize(16)
-            .fontWeight(FontWeight.Medium)
             .borderRadius(14)
             .onClick(async () => {
               await this.addPage();

@@ -7,6 +7,7 @@ declare const entry: {
   requestPreviewRender: (engineId: string, documentId: string, pageIndex: number, width: number, height: number) => string;
   exportSceneSnapshot: (engineId: string, documentId: string) => string;
   setTool: (engineId: string, tool: string) => boolean;
+  setFingerWritingEnabled: (engineId: string, enabled: boolean) => boolean;
   setBackend: (engineId: string, backend: string) => boolean;
   setDocumentMode: (engineId: string, mode: string) => boolean;
   setBrushColor: (engineId: string, colorHex: string) => boolean;

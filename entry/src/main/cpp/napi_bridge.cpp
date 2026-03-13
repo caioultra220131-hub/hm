@@ -29,6 +29,13 @@ double GetDoubleArg(napi_env env, napi_value value)
     return result;
 }
 
+bool GetBoolArg(napi_env env, napi_value value)
+{
+    bool result = false;
+    napi_get_value_bool(env, value, &result);
+    return result;
+}
+
 napi_value CreateBoolean(napi_env env, bool value)
 {
     napi_value result = nullptr;
@@ -183,6 +190,16 @@ static napi_value SetTool(napi_env env, napi_callback_info info)
     return CreateBoolean(env, ok);
 }
 
+static napi_value SetFingerWritingEnabled(napi_env env, napi_callback_info info)
+{
+    size_t argc = 2;
+    napi_value args[2] = { nullptr };
+    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
+    bool ok = argc == 2 &&
+        GetNoteEngineRuntime().SetFingerWritingEnabled(GetStringArg(env, args[0]), GetBoolArg(env, args[1]));
+    return CreateBoolean(env, ok);
+}
+
 static napi_value SetBackend(napi_env env, napi_callback_info info)
 {
     size_t argc = 2;
@@ -305,6 +322,7 @@ static napi_value Init(napi_env env, napi_value exports)
         { "insertPage", nullptr, InsertPage, nullptr, nullptr, nullptr, napi_default, nullptr },
         { "deletePage", nullptr, DeletePage, nullptr, nullptr, nullptr, napi_default, nullptr },
         { "setTool", nullptr, SetTool, nullptr, nullptr, nullptr, napi_default, nullptr },
+        { "setFingerWritingEnabled", nullptr, SetFingerWritingEnabled, nullptr, nullptr, nullptr, napi_default, nullptr },
         { "setBackend", nullptr, SetBackend, nullptr, nullptr, nullptr, napi_default, nullptr },
         { "setDocumentMode", nullptr, SetDocumentMode, nullptr, nullptr, nullptr, napi_default, nullptr },
         { "setBrushColor", nullptr, SetBrushColor, nullptr, nullptr, nullptr, napi_default, nullptr },

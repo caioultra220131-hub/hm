@@ -241,6 +241,7 @@ struct EngineState {
     std::string activeBackend = "opengles";
     std::string activeMode = "paged";
     std::string activeColor = "#1D2736";
+    bool fingerWritingEnabled = false;
     std::string lastInkTool = "pen";
     std::string xComponentId;
     std::string surfaceId;
@@ -408,6 +409,11 @@ InputSampleType ParseInputSampleType(const std::string& type)
 bool IsStylusTool(const std::string& toolType)
 {
     return toolType == "pen" || toolType == "pencil" || toolType == "rubber";
+}
+
+bool IsFingerWritingInput(const EngineState* engine, const std::string& toolType)
+{
+    return engine != nullptr && engine->fingerWritingEnabled && toolType == "finger";
 }
 
 std::string ReadXComponentId(OH_NativeXComponent* component)
@@ -3647,6 +3653,29 @@ public:
         return true;
     }
 
+    bool SetFingerWritingEnabled(const std::string& engineId, bool enabled)
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        EngineState* engine = FindEngineLocked(engineId);
+        if (engine == nullptr) {
+            return false;
+        }
+        engine->fingerWritingEnabled = enabled;
+        if (SurfaceTelemetry* telemetry = FindSurfaceLocked(engine->xComponentId); telemetry != nullptr) {
+            telemetry->stylusActive = false;
+            telemetry->stylusSessionOwned = false;
+            telemetry->activeStylusPointerId = -1;
+            telemetry->selectionDragActive = false;
+            telemetry->selectionSnapshotCaptured = false;
+            telemetry->predictedSamples.clear();
+            telemetry->previousPredictedSamples.clear();
+            telemetry->predictedPointCount = 0;
+            telemetry->strokeSamples.clear();
+            RenderSurfaceLocked(*telemetry, engine);
+        }
+        return true;
+    }
+
     bool SetBackend(const std::string& engineId, const std::string& backend)
     {
         std::lock_guard<std::mutex> lock(mutex_);
@@ -3795,6 +3824,7 @@ public:
                 << "\"xComponentId\":\"" << engine->xComponentId << "\","
                 << "\"surfaceId\":\"" << engine->surfaceId << "\","
                 << "\"checkpointCount\":" << checkpointCount << ","
+                << "\"fingerWritingEnabled\":" << (engine->fingerWritingEnabled ? "true" : "false") << ","
                 << "\"committedStrokeCount\":" << engine->committedStrokes.size() << ","
                 << "\"undoDepth\":" << engine->undoSnapshots.size() << ","
                 << "\"redoDepth\":" << engine->redoSnapshots.size() << ","
@@ -4394,6 +4424,8 @@ private:
 
         const InkPointSnapshot& currentPoint = sample.point;
         const bool isStylusInput = IsStylusTool(sample.toolType);
+        const bool isFingerWritingInput = IsFingerWritingInput(engine, sample.toolType);
+        const bool isWritingInput = isStylusInput || isFingerWritingInput;
 
         if (!sample.historical) {
             telemetry.lastSourceType = sample.sourceLabel;
@@ -4408,7 +4440,7 @@ private:
             }
         }
 
-        if (sample.action == OH_NATIVEXCOMPONENT_DOWN && isStylusInput && !sample.historical) {
+        if (sample.action == OH_NATIVEXCOMPONENT_DOWN && isWritingInput && !sample.historical) {
             telemetry.stylusActive = true;
             telemetry.stylusSessionOwned = true;
             telemetry.activeStylusPointerId = currentPoint.pointerId;
@@ -4445,14 +4477,14 @@ private:
             return;
         }
 
-        const bool captureStrokeSamples = isStylusInput &&
+        const bool captureStrokeSamples = isWritingInput &&
             engine != nullptr &&
             !telemetry.selectionDragActive &&
             (ToolProducesInk(engine->activeTool) || ToolUsesLassoSelection(engine->activeTool));
 
         if (captureStrokeSamples) {
             PushRealSampleLocked(telemetry, currentPoint);
-        } else if (!sample.historical && isStylusInput && engine != nullptr && ToolErasesObjects(engine->activeTool)) {
+        } else if (!sample.historical && isWritingInput && engine != nullptr && ToolErasesObjects(engine->activeTool)) {
             telemetry.strokeSamples.clear();
             telemetry.predictedSamples.clear();
             telemetry.previousPredictedSamples.clear();
@@ -4465,7 +4497,7 @@ private:
                 engine->committedStrokes = std::move(erasedStrokes);
                 RefreshLastCommittedStrokeType(*engine);
             }
-        } else if (!sample.historical && isStylusInput && engine != nullptr && telemetry.selectionDragActive) {
+        } else if (!sample.historical && isWritingInput && engine != nullptr && telemetry.selectionDragActive) {
             if (sample.action == OH_NATIVEXCOMPONENT_MOVE) {
                 if (!telemetry.selectionSnapshotCaptured) {
                     PushUndoSnapshot(*engine);
@@ -4477,7 +4509,7 @@ private:
                 telemetry.selectionLastX = currentPoint.x;
                 telemetry.selectionLastY = currentPoint.y;
             }
-        } else if (!sample.historical && !isStylusInput && telemetry.stylusSessionOwned) {
+        } else if (!sample.historical && !isWritingInput && telemetry.stylusSessionOwned) {
             telemetry.palmRejectedCount += 1;
         }
 
@@ -4785,6 +4817,8 @@ private:
         telemetry.lastTiltY = currentPoint.tiltY;
 
         bool isStylusInput = IsStylusTool(currentPoint.toolType);
+        const bool isFingerWritingInput = IsFingerWritingInput(engine, currentPoint.toolType);
+        const bool isWritingInput = isStylusInput || isFingerWritingInput;
         if (currentPoint.toolType == "finger") {
             telemetry.fingerEventCount += 1;
         } else if (isStylusInput) {
@@ -4793,7 +4827,7 @@ private:
 
         EngineState* normalizedEngine = FindBoundEngineLocked(telemetry);
 
-        if (touchEvent.type == OH_NATIVEXCOMPONENT_DOWN && isStylusInput) {
+        if (touchEvent.type == OH_NATIVEXCOMPONENT_DOWN && isWritingInput) {
             telemetry.stylusActive = true;
             telemetry.stylusSessionOwned = true;
             telemetry.activeStylusPointerId = currentPoint.pointerId;
@@ -4827,7 +4861,7 @@ private:
             return;
         }
 
-        const bool captureStrokeSamples = isStylusInput &&
+        const bool captureStrokeSamples = isWritingInput &&
             engine != nullptr &&
             !telemetry.selectionDragActive &&
             (ToolProducesInk(engine->activeTool) || ToolUsesLassoSelection(engine->activeTool));
@@ -4869,7 +4903,7 @@ private:
 
         if (captureStrokeSamples) {
             PushRealSampleLocked(telemetry, currentPoint);
-        } else if (isStylusInput && engine != nullptr && ToolErasesObjects(engine->activeTool)) {
+        } else if (isWritingInput && engine != nullptr && ToolErasesObjects(engine->activeTool)) {
             telemetry.strokeSamples.clear();
             telemetry.predictedSamples.clear();
             telemetry.previousPredictedSamples.clear();
@@ -4884,7 +4918,7 @@ private:
                 engine->committedStrokes = std::move(erasedStrokes);
                 RefreshLastCommittedStrokeType(*engine);
             }
-        } else if (isStylusInput && engine != nullptr && telemetry.selectionDragActive) {
+        } else if (isWritingInput && engine != nullptr && telemetry.selectionDragActive) {
             if (touchEvent.type == OH_NATIVEXCOMPONENT_MOVE) {
                 if (!telemetry.selectionSnapshotCaptured) {
                     PushUndoSnapshot(*engine);
@@ -4896,7 +4930,7 @@ private:
                 telemetry.selectionLastX = currentPoint.x;
                 telemetry.selectionLastY = currentPoint.y;
             }
-        } else if (!isStylusInput && telemetry.stylusSessionOwned) {
+        } else if (!isWritingInput && telemetry.stylusSessionOwned) {
             telemetry.palmRejectedCount += 1;
         }
 

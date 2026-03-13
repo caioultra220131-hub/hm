@@ -89,6 +89,7 @@ struct SimulatorEngineState {
     std::string activeBackend = "opengles";
     std::string activeMode = "paged";
     std::string activeColor = "#1D2736";
+    bool fingerWritingEnabled = false;
     std::string lastInkTool = "pen";
     std::string xComponentId;
     std::string surfaceId;
@@ -1421,6 +1422,17 @@ public:
         return true;
     }
 
+    bool SetFingerWritingEnabled(const std::string& engineId, bool enabled) override
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        SimulatorEngineState* engine = FindEngineLocked(engineId);
+        if (engine == nullptr) {
+            return false;
+        }
+        engine->fingerWritingEnabled = enabled;
+        return true;
+    }
+
     bool SetBackend(const std::string& engineId, const std::string& backend) override
     {
         std::lock_guard<std::mutex> lock(mutex_);
@@ -1580,6 +1592,7 @@ public:
                 << "\"activeBackend\":\"" << EscapeJsonString(engine->activeBackend) << "\","
                 << "\"activeMode\":\"" << EscapeJsonString(engine->activeMode) << "\","
                 << "\"activeColor\":\"" << EscapeJsonString(engine->activeColor) << "\","
+                << "\"fingerWritingEnabled\":" << (engine->fingerWritingEnabled ? "true" : "false") << ","
                 << "\"xComponentId\":\"" << EscapeJsonString(engine->xComponentId) << "\","
                 << "\"surfaceId\":\"" << EscapeJsonString(engine->surfaceId) << "\","
                 << "\"checkpointCount\":" << checkpointCount << ","
