@@ -105,6 +105,11 @@ interface SimulatorCanvasFrame {
   contentHeight: number;
 }
 
+interface SimulatorFingerGestureTarget {
+  pageIndex: number;
+  point: GestureRatioPoint;
+}
+
 type EmbeddedOverlayDraft = DocumentEmbeddedBlock;
 type SingleFingerPanMode = 'disabled' | 'vertical' | 'free';
 type EditorUiIcon =
@@ -238,6 +243,7 @@ struct EditorWorkspace {
   private viewportInertiaResolve: (() => void) | null = null;
   private viewportPinchOriginScale: number = 1;
   private simulatorFingerGestureActive: boolean = false;
+  private simulatorFingerGesturePageIndex: number = -1;
   private simulatorFingerGestureLastXRatio: number = 0.5;
   private simulatorFingerGestureLastYRatio: number = 0.5;
   private embeddedSelectionOriginX: number = 0;
@@ -1639,6 +1645,47 @@ struct EditorWorkspace {
     return nearestIndex;
   }
 
+  private nearestPageIndexToViewportPoint(localX: number, localY: number): number {
+    let nearestIndex: number = this.activePageIndex;
+    let nearestDistance: number = Number.MAX_VALUE;
+    const pageIndexes: number[] = this.pageIndexes();
+    for (let offset: number = 0; offset < pageIndexes.length; offset += 1) {
+      const pageIndex: number = pageIndexes[offset];
+      const pageLeft: number = this.pageCardOffsetX(pageIndex);
+      const pageTop: number = this.pageCardOffsetY(pageIndex);
+      const pageRight: number = pageLeft + this.renderedWritingPageWidth(pageIndex);
+      const pageBottom: number = pageTop + this.renderedWritingPageHeight(pageIndex);
+      const clampedX: number = clampToRange(localX, pageLeft, pageRight);
+      const clampedY: number = clampToRange(localY, pageTop, pageBottom);
+      const deltaX: number = localX - clampedX;
+      const deltaY: number = localY - clampedY;
+      const distance: number = (deltaX * deltaX) + (deltaY * deltaY);
+      if (distance < nearestDistance) {
+        nearestDistance = distance;
+        nearestIndex = pageIndex;
+        if (distance === 0) {
+          return nearestIndex;
+        }
+      }
+    }
+    return nearestIndex;
+  }
+
+  private syncSimulatorGestureActivePage(pageIndex: number): void {
+    if (!this.supportsPagedDocumentRuntime() || pageIndex === this.activePageIndex) {
+      return;
+    }
+    const nextPage: DocumentPageEntry | undefined = this.pageEntryAt(pageIndex);
+    if (!nextPage || !this.document) {
+      return;
+    }
+    this.applyDocumentActivePage(this.document, nextPage.id);
+    this.pageJumpDraft = `${pageIndex + 1}`;
+    if (this.notifyNativeActivePage(nextPage.id)) {
+      this.refreshDebugState();
+    }
+  }
+
   private async settleViewportToNearestPage(): Promise<void> {
     const clampedX: number = this.clampedPageStackPanX(this.pageStackPanX);
     const clampedY: number = this.clampedPageStackPanY(this.pageStackPanY);
@@ -1973,33 +2020,45 @@ struct EditorWorkspace {
     return fallback;
   }
 
-  private simulatorFingerGesturePoint(event?: Object): GestureRatioPoint | null {
+  private simulatorFingerGestureTarget(event?: Object): SimulatorFingerGestureTarget | null {
     if (this.activePageIndex < 0 || this.activePageIndex >= this.pageCount()) {
       return null;
     }
-    const frame: SimulatorCanvasFrame = this.simulatorCanvasFrame(this.activePageIndex);
-    if (frame.contentWidth <= 0 || frame.contentHeight <= 0) {
-      return null;
-    }
-    const pageOffsetX: number = this.pageCardOffsetX(this.activePageIndex);
-    const pageOffsetY: number = this.pageCardOffsetY(this.activePageIndex);
+    const fallbackPageIndex: number = this.simulatorFingerGestureActive && this.simulatorFingerGesturePageIndex >= 0
+      ? this.simulatorFingerGesturePageIndex
+      : this.activePageIndex;
+    const fallbackFrame: SimulatorCanvasFrame = this.simulatorCanvasFrame(fallbackPageIndex);
+    const fallbackPageOffsetX: number = this.pageCardOffsetX(fallbackPageIndex);
+    const fallbackPageOffsetY: number = this.pageCardOffsetY(fallbackPageIndex);
     const localX: number = this.readGestureCoordinate(
       event,
       ['localX', 'x'],
-      pageOffsetX + frame.contentX + (frame.contentWidth / 2)
+      fallbackPageOffsetX + fallbackFrame.contentX + (fallbackFrame.contentWidth / 2)
     );
     const localY: number = this.readGestureCoordinate(
       event,
       ['localY', 'y'],
-      pageOffsetY + frame.contentY + (frame.contentHeight / 2)
+      fallbackPageOffsetY + fallbackFrame.contentY + (fallbackFrame.contentHeight / 2)
     );
+    const pageIndex: number = this.simulatorFingerGestureActive && this.simulatorFingerGesturePageIndex >= 0
+      ? this.simulatorFingerGesturePageIndex
+      : this.nearestPageIndexToViewportPoint(localX, localY);
+    const frame: SimulatorCanvasFrame = this.simulatorCanvasFrame(pageIndex);
+    if (frame.contentWidth <= 0 || frame.contentHeight <= 0) {
+      return null;
+    }
+    const pageOffsetX: number = this.pageCardOffsetX(pageIndex);
+    const pageOffsetY: number = this.pageCardOffsetY(pageIndex);
     const pageLocalX: number = clampToRange(localX - pageOffsetX - frame.contentX, 0, frame.contentWidth);
     const pageLocalY: number = clampToRange(localY - pageOffsetY - frame.contentY, 0, frame.contentHeight);
-    const point: GestureRatioPoint = {
-      xRatio: frame.contentWidth > 0 ? pageLocalX / frame.contentWidth : 0.5,
-      yRatio: frame.contentHeight > 0 ? pageLocalY / frame.contentHeight : 0.5
+    const target: SimulatorFingerGestureTarget = {
+      pageIndex,
+      point: {
+        xRatio: frame.contentWidth > 0 ? pageLocalX / frame.contentWidth : 0.5,
+        yRatio: frame.contentHeight > 0 ? pageLocalY / frame.contentHeight : 0.5
+      }
     };
-    return point;
+    return target;
   }
 
   private resetSimulatorFingerGesture(cancelNative: boolean = false): void {
@@ -2013,6 +2072,7 @@ struct EditorWorkspace {
       );
     }
     this.simulatorFingerGestureActive = false;
+    this.simulatorFingerGesturePageIndex = -1;
     this.simulatorFingerGestureLastXRatio = 0.5;
     this.simulatorFingerGestureLastYRatio = 0.5;
   }
@@ -2021,10 +2081,15 @@ struct EditorWorkspace {
     if (!this.shouldHandleSimulatorFingerWritingGesture()) {
       return;
     }
-    const point = this.simulatorFingerGesturePoint(event);
-    if (!point) {
+    const target = this.simulatorFingerGestureTarget(event);
+    if (!target) {
       return;
     }
+    if (!this.simulatorFingerGestureActive) {
+      this.syncSimulatorGestureActivePage(target.pageIndex);
+      this.simulatorFingerGesturePageIndex = target.pageIndex;
+    }
+    const point: GestureRatioPoint = target.point;
     this.simulatorFingerGestureLastXRatio = point.xRatio;
     this.simulatorFingerGestureLastYRatio = point.yRatio;
     if (!this.simulatorFingerGestureActive) {
@@ -2039,9 +2104,13 @@ struct EditorWorkspace {
       this.resetSimulatorFingerGesture(false);
       return;
     }
-    const point = this.simulatorFingerGesturePoint(event);
-    const xRatio: number = point?.xRatio ?? this.simulatorFingerGestureLastXRatio;
-    const yRatio: number = point?.yRatio ?? this.simulatorFingerGestureLastYRatio;
+    const target = this.simulatorFingerGestureTarget(event);
+    if (!this.simulatorFingerGestureActive && target) {
+      this.syncSimulatorGestureActivePage(target.pageIndex);
+      this.simulatorFingerGesturePageIndex = target.pageIndex;
+    }
+    const xRatio: number = target?.point.xRatio ?? this.simulatorFingerGestureLastXRatio;
+    const yRatio: number = target?.point.yRatio ?? this.simulatorFingerGestureLastYRatio;
     if (this.shouldHandleSimulatorFingerWritingGesture() && !this.simulatorFingerGestureActive) {
       this.nativeEngine.injectSimulatorFingerEvent(this.engineId, 'down', xRatio, yRatio, 1);
     }
