@@ -132,6 +132,7 @@ type EditorUiIcon =
   'addPage' |
   'bookmark';
 
+const PAGE_RAIL_FILTER_OPTIONS: PageRailFilter[] = ['all', 'bookmarked', 'notes'];
 const EDITOR_HOME_ROUTE: string = 'pages/Index';
 const BACK_HIT_TARGET_WIDTH: number = 156;
 const BACK_HIT_TARGET_HEIGHT: number = 56;
@@ -4595,9 +4596,10 @@ struct EditorWorkspace {
             .onChange((value: string) => {
               this.pageSearchText = value;
             })
-          Stack({ alignContent: Alignment.TopStart }) {
+          Column({ space: 6 }) {
             Button(this.pageRailFilterLabel())
               .height(32)
+              .width('100%')
               .padding({ left: 12, right: 12 })
               .backgroundColor('#FFFFFF')
               .fontColor('#344054')
@@ -4608,24 +4610,24 @@ struct EditorWorkspace {
               })
             if (this.showRailFilterMenu) {
               Column({ space: 4 }) {
-                ForEach(['all', 'bookmarked', 'notes'], (filter: string) => {
-                  Button(this.pageRailFilterLabel(filter as PageRailFilter))
-                    .width(108)
+                ForEach(PAGE_RAIL_FILTER_OPTIONS, (filter: PageRailFilter) => {
+                  Button(this.pageRailFilterLabel(filter))
+                    .width('100%')
                     .height(30)
                     .backgroundColor(this.pageRailFilter === filter ? '#162033' : '#FFFFFF')
                     .fontColor(this.pageRailFilter === filter ? '#FFFFFF' : '#344054')
                     .fontSize(11)
                     .borderRadius(10)
                     .onClick(() => {
-                      this.applyRailFilter(filter as PageRailFilter);
+                      this.applyRailFilter(filter);
                     })
-                }, (filter: string): string => `rail-filter-${filter}`)
+                }, (filter: PageRailFilter): string => `rail-filter-${filter}`)
               }
+              .width('100%')
               .padding(6)
               .backgroundColor('#FFFFFFF6')
               .border({ width: 1, color: '#D8E0EA' })
               .borderRadius(14)
-              .position({ x: 0, y: 38 })
             }
           }
           .width('100%')
