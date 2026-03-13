@@ -94,6 +94,17 @@ interface GestureRatioPoint {
   yRatio: number;
 }
 
+interface SimulatorCanvasFrame {
+  frameX: number;
+  frameY: number;
+  frameWidth: number;
+  frameHeight: number;
+  contentX: number;
+  contentY: number;
+  contentWidth: number;
+  contentHeight: number;
+}
+
 type EmbeddedOverlayDraft = DocumentEmbeddedBlock;
 type SingleFingerPanMode = 'disabled' | 'vertical' | 'free';
 type EditorUiIcon =
@@ -1279,17 +1290,42 @@ struct EditorWorkspace {
     return height > 0 ? height : 792;
   }
 
-  private simulatorCanvasWidth(): number {
+  private simulatorCanvasFrame(index: number): SimulatorCanvasFrame {
+    const renderedWidth: number = this.renderedWritingPageWidth(index);
+    const renderedHeight: number = this.renderedWritingPageHeight(index);
     const sourceWidth: number = this.simulatorPageWidth();
     const sourceHeight: number = this.simulatorPageHeight();
     const aspectRatio: number = sourceWidth / sourceHeight;
-    return aspectRatio >= 0.82 ? 356 : 304;
+    const horizontalInset: number = clampToRange(renderedWidth * 0.06, 18, 28);
+    const topInset: number = clampToRange(renderedHeight * 0.10, 52, 74);
+    const bottomInset: number = clampToRange(renderedHeight * 0.05, 18, 34);
+    const availableWidth: number = Math.max(220, renderedWidth - (horizontalInset * 2));
+    const availableHeight: number = Math.max(280, renderedHeight - topInset - bottomInset);
+    let frameWidth: number = availableWidth;
+    let frameHeight: number = frameWidth / Math.max(0.1, aspectRatio);
+    if (frameHeight > availableHeight) {
+      frameHeight = availableHeight;
+      frameWidth = frameHeight * Math.max(0.1, aspectRatio);
+    }
+    const frameX: number = (renderedWidth - frameWidth) / 2;
+    const frameY: number = topInset + ((availableHeight - frameHeight) / 2);
+    const contentInsetX: number = clampToRange(frameWidth * 0.06, 18, 26);
+    const contentInsetY: number = clampToRange(frameHeight * 0.05, 20, 26);
+    const frame: SimulatorCanvasFrame = {
+      frameX,
+      frameY,
+      frameWidth,
+      frameHeight,
+      contentX: frameX + contentInsetX,
+      contentY: frameY + contentInsetY,
+      contentWidth: Math.max(120, frameWidth - (contentInsetX * 2)),
+      contentHeight: Math.max(180, frameHeight - (contentInsetY * 2))
+    };
+    return frame;
   }
 
-  private simulatorCanvasHeight(): number {
-    const sourceWidth: number = this.simulatorPageWidth();
-    const sourceHeight: number = this.simulatorPageHeight();
-    return clampToRange(this.simulatorCanvasWidth() * (sourceHeight / sourceWidth), 380, 560);
+  private activeSimulatorCanvasFrame(): SimulatorCanvasFrame {
+    return this.simulatorCanvasFrame(this.activePageIndex);
   }
 
   private simulatorObjectsForActivePage(): NativeSceneObject[] {
@@ -1302,29 +1338,31 @@ struct EditorWorkspace {
   }
 
   private simulatorObjectX(object: NativeSceneObject): number {
-    const canvasWidth: number = this.simulatorCanvasWidth();
+    const frame: SimulatorCanvasFrame = this.simulatorCanvasFrame(this.activePageIndex);
     const pageWidth: number = this.simulatorPageWidth();
-    const innerWidth: number = canvasWidth - 36;
-    return 18 + clampToRange((object.bounds.minX / pageWidth) * innerWidth, 0, innerWidth - 28);
+    return frame.contentX +
+      clampToRange((object.bounds.minX / pageWidth) * frame.contentWidth, 0, frame.contentWidth - 28);
   }
 
   private simulatorObjectY(object: NativeSceneObject): number {
-    const canvasHeight: number = this.simulatorCanvasHeight();
+    const frame: SimulatorCanvasFrame = this.simulatorCanvasFrame(this.activePageIndex);
     const pageHeight: number = this.simulatorPageHeight();
-    const innerHeight: number = canvasHeight - 40;
-    return 20 + clampToRange((object.bounds.minY / pageHeight) * innerHeight, 0, innerHeight - 22);
+    return frame.contentY +
+      clampToRange((object.bounds.minY / pageHeight) * frame.contentHeight, 0, frame.contentHeight - 22);
   }
 
   private simulatorObjectWidth(object: NativeSceneObject): number {
+    const frame: SimulatorCanvasFrame = this.simulatorCanvasFrame(this.activePageIndex);
     const pageWidth: number = this.simulatorPageWidth();
     const widthRatio: number = Math.max(0, object.bounds.maxX - object.bounds.minX) / pageWidth;
-    return clampToRange(widthRatio * (this.simulatorCanvasWidth() - 36), 34, this.simulatorCanvasWidth() - 40);
+    return clampToRange(widthRatio * frame.contentWidth, 34, frame.contentWidth - 4);
   }
 
   private simulatorObjectHeight(object: NativeSceneObject): number {
+    const frame: SimulatorCanvasFrame = this.simulatorCanvasFrame(this.activePageIndex);
     const pageHeight: number = this.simulatorPageHeight();
     const heightRatio: number = Math.max(0, object.bounds.maxY - object.bounds.minY) / pageHeight;
-    return clampToRange(heightRatio * (this.simulatorCanvasHeight() - 40), 20, 88);
+    return clampToRange(heightRatio * frame.contentHeight, 20, Math.max(32, frame.contentHeight * 0.22));
   }
 
   private simulatorPageFillColor(): string {
@@ -1937,20 +1975,27 @@ struct EditorWorkspace {
     if (this.activePageIndex < 0 || this.activePageIndex >= this.pageCount()) {
       return null;
     }
-    const pageWidth: number = this.renderedWritingPageWidth(this.activePageIndex);
-    const pageHeight: number = this.renderedWritingPageHeight(this.activePageIndex);
-    if (pageWidth <= 0 || pageHeight <= 0) {
+    const frame: SimulatorCanvasFrame = this.simulatorCanvasFrame(this.activePageIndex);
+    if (frame.contentWidth <= 0 || frame.contentHeight <= 0) {
       return null;
     }
     const pageOffsetX: number = this.pageCardOffsetX(this.activePageIndex);
     const pageOffsetY: number = this.pageCardOffsetY(this.activePageIndex);
-    const localX: number = this.readGestureCoordinate(event, ['localX', 'x'], pageOffsetX + (pageWidth / 2));
-    const localY: number = this.readGestureCoordinate(event, ['localY', 'y'], pageOffsetY + (pageHeight / 2));
-    const pageLocalX: number = clampToRange(localX - pageOffsetX, 0, pageWidth);
-    const pageLocalY: number = clampToRange(localY - pageOffsetY, 0, pageHeight);
+    const localX: number = this.readGestureCoordinate(
+      event,
+      ['localX', 'x'],
+      pageOffsetX + frame.contentX + (frame.contentWidth / 2)
+    );
+    const localY: number = this.readGestureCoordinate(
+      event,
+      ['localY', 'y'],
+      pageOffsetY + frame.contentY + (frame.contentHeight / 2)
+    );
+    const pageLocalX: number = clampToRange(localX - pageOffsetX - frame.contentX, 0, frame.contentWidth);
+    const pageLocalY: number = clampToRange(localY - pageOffsetY - frame.contentY, 0, frame.contentHeight);
     const point: GestureRatioPoint = {
-      xRatio: pageWidth > 0 ? pageLocalX / pageWidth : 0.5,
-      yRatio: pageHeight > 0 ? pageLocalY / pageHeight : 0.5
+      xRatio: frame.contentWidth > 0 ? pageLocalX / frame.contentWidth : 0.5,
+      yRatio: frame.contentHeight > 0 ? pageLocalY / frame.contentHeight : 0.5
     };
     return point;
   }
@@ -2602,130 +2647,146 @@ struct EditorWorkspace {
   }
 
   @Builder
-  private buildSimulatorGuideLines(): void {
+  private buildSimulatorGuideLines(frame: SimulatorCanvasFrame): void {
     if (this.simulatorGuideKind() !== 'plain') {
       ForEach([0, 1, 2, 3, 4, 5], (lineIndex: number) => {
         Row()
-          .width(this.simulatorCanvasWidth() - 44)
+          .width(frame.contentWidth)
           .height(this.simulatorGuideKind() === 'grid' ? 1 : 0.8)
           .backgroundColor(this.simulatorGuideKind() === 'cornell' ? '#D6DDE8' : '#E3E8EF')
           .opacity(this.simulatorGuideKind() === 'dotted' ? 0.5 : 0.8)
-          .position({ x: 22, y: 70 + lineIndex * ((this.simulatorCanvasHeight() - 110) / 6) })
+          .position({ x: frame.contentX, y: frame.contentY + 26 + lineIndex * ((frame.contentHeight - 48) / 6) })
       }, (lineIndex: number): string => `line-${lineIndex}`)
     }
     if (this.simulatorGuideKind() === 'grid' || this.simulatorGuideKind() === 'weekly') {
       ForEach([0, 1, 2, 3], (lineIndex: number) => {
         Row()
           .width(1)
-          .height(this.simulatorCanvasHeight() - 92)
+          .height(frame.contentHeight)
           .backgroundColor('#E3E8EF')
           .opacity(0.75)
-          .position({ x: 50 + lineIndex * ((this.simulatorCanvasWidth() - 92) / 4), y: 54 })
+          .position({ x: frame.contentX + 28 + lineIndex * ((frame.contentWidth - 56) / 4), y: frame.contentY })
       }, (lineIndex: number): string => `vline-${lineIndex}`)
     }
     if (this.simulatorGuideKind() === 'cornell') {
       Row()
         .width(1)
-        .height(this.simulatorCanvasHeight() - 86)
+        .height(frame.contentHeight)
         .backgroundColor('#CBD5E1')
-        .position({ x: 104, y: 44 })
+        .position({ x: frame.contentX + clampToRange(frame.contentWidth * 0.20, 72, 120), y: frame.contentY })
       Row()
-        .width(this.simulatorCanvasWidth() - 44)
+        .width(frame.contentWidth)
         .height(1)
         .backgroundColor('#CBD5E1')
-        .position({ x: 22, y: this.simulatorCanvasHeight() - 94 })
+        .position({ x: frame.contentX, y: frame.contentY + frame.contentHeight - clampToRange(frame.contentHeight * 0.12, 48, 72) })
     }
   }
 
   @Builder
   private buildPlaceholderSurface(): void {
-    if (this.simulatorObjectsForActivePage().length === 0) {
-      Stack() {
-        Column() {}
-          .width('100%')
-          .height('100%')
-          .backgroundColor('#F5F6F7')
+    Stack({ alignContent: Alignment.TopStart }) {
+      Column() {}
+        .width('100%')
+        .height('100%')
+        .backgroundColor('#F8FAFC')
+
+      Row()
+        .width(this.activeSimulatorCanvasFrame().frameWidth)
+        .height(this.activeSimulatorCanvasFrame().frameHeight)
+        .backgroundColor(this.simulatorPageFillColor())
+        .borderRadius(26)
+        .border({ width: 1, color: this.simulatorPageAccentColor() })
+        .position({
+          x: this.activeSimulatorCanvasFrame().frameX,
+          y: this.activeSimulatorCanvasFrame().frameY
+        })
+
+      this.buildSimulatorGuideLines(this.activeSimulatorCanvasFrame())
+
+      Row()
+        .width(this.activeSimulatorCanvasFrame().contentWidth)
+        .height(1)
+        .backgroundColor('#D8DEE8')
+        .position({
+          x: this.activeSimulatorCanvasFrame().contentX,
+          y: this.activeSimulatorCanvasFrame().frameY + 44
+        })
+
+      Text(this.document?.title ?? 'Untitled')
+        .fontSize(16)
+        .fontWeight(FontWeight.Medium)
+        .fontColor('#162033')
+        .maxLines(1)
+        .position({
+          x: this.activeSimulatorCanvasFrame().contentX,
+          y: this.activeSimulatorCanvasFrame().frameY + 18
+        })
+
+      Text(this.simulatorGuideLabel())
+        .fontSize(11)
+        .fontColor('#667085')
+        .position({
+          x: this.activeSimulatorCanvasFrame().contentX,
+          y: this.activeSimulatorCanvasFrame().frameY + 52
+        })
+
+      if (this.simulatorObjectsForActivePage().length === 0) {
         ForEach([0, 1, 2, 3], (rowIndex: number) => {
           ForEach([0, 1, 2, 3, 4], (columnIndex: number) => {
             Blank()
-              .width(14)
-              .height(14)
+              .width(12)
+              .height(12)
               .backgroundColor('#9CB0D0')
-              .opacity(0.85)
+              .opacity(0.82)
               .borderRadius(999)
-              .position({ x: 160 + columnIndex * 350, y: 135 + rowIndex * 260 })
+              .position({
+                x: this.activeSimulatorCanvasFrame().contentX +
+                  22 +
+                  columnIndex * ((this.activeSimulatorCanvasFrame().contentWidth - 56) / 4),
+                y: this.activeSimulatorCanvasFrame().contentY +
+                  44 +
+                  rowIndex * ((this.activeSimulatorCanvasFrame().contentHeight - 88) / 3)
+              })
           }, (columnIndex: number): string => `stub-dot-${rowIndex}-${columnIndex}`)
         }, (rowIndex: number): string => `stub-row-${rowIndex}`)
-      }
-      .width('100%')
-      .height('100%')
-    } else {
-      Stack({ alignContent: Alignment.Center }) {
-        Column({ space: 12 }) {
-          Stack({ alignContent: Alignment.TopStart }) {
-            Row()
-              .width(this.simulatorCanvasWidth())
-              .height(this.simulatorCanvasHeight())
-              .backgroundColor(this.simulatorPageFillColor())
-              .borderRadius(26)
-              .border({ width: 1, color: this.simulatorPageAccentColor() })
-
-            this.buildSimulatorGuideLines()
-
-            Row()
-              .width(this.simulatorCanvasWidth() - 44)
-              .height(1)
-              .backgroundColor('#D8DEE8')
-              .position({ x: 22, y: 44 })
-
-            Text(this.document?.title ?? 'Untitled')
-              .fontSize(16)
-              .fontWeight(FontWeight.Medium)
-              .fontColor('#162033')
+      } else {
+        ForEach(this.simulatorObjectsForActivePage(), (object: NativeSceneObject) => {
+          Row() {
+            Text(this.simulatorObjectLabel(object))
+              .fontSize(10)
+              .fontColor('#FFFFFF')
               .maxLines(1)
-              .position({ x: 22, y: 18 })
-
-            Text(this.simulatorGuideLabel())
-              .fontSize(11)
-              .fontColor('#667085')
-              .position({ x: 22, y: 52 })
-
-            ForEach(this.simulatorObjectsForActivePage(), (object: NativeSceneObject) => {
-              Row() {
-                Text(this.simulatorObjectLabel(object))
-                  .fontSize(10)
-                  .fontColor('#FFFFFF')
-                  .maxLines(1)
-              }
-              .justifyContent(FlexAlign.Center)
-              .width(this.simulatorObjectWidth(object))
-              .height(this.simulatorObjectHeight(object))
-              .padding({ left: 6, right: 6 })
-              .backgroundColor(object.colorHex)
-              .opacity(object.tool === 'highlighter' ? 0.58 : 0.9)
-              .borderRadius(object.tool === 'text' ? 10 : 16)
-              .position({ x: this.simulatorObjectX(object), y: this.simulatorObjectY(object) })
-            }, (object: NativeSceneObject): string => object.id)
-
           }
-          Row({ space: 10 }) {
-            Text(`objects=${this.simulatorObjectsForActivePage().length}`)
-              .fontSize(11)
-              .fontColor('#475467')
-            Text(`page=${this.activePageIndex + 1}/${this.pageCount()}`)
-              .fontSize(11)
-              .fontColor('#475467')
-            Text(this.simulatorCapabilitySummary())
-              .fontSize(11)
-              .fontColor('#667085')
-          }
-        }
-        .alignItems(HorizontalAlign.Center)
+          .justifyContent(FlexAlign.Center)
+          .width(this.simulatorObjectWidth(object))
+          .height(this.simulatorObjectHeight(object))
+          .padding({ left: 6, right: 6 })
+          .backgroundColor(object.colorHex)
+          .opacity(object.tool === 'highlighter' ? 0.58 : 0.9)
+          .borderRadius(object.tool === 'text' ? 10 : 16)
+          .position({ x: this.simulatorObjectX(object), y: this.simulatorObjectY(object) })
+        }, (object: NativeSceneObject): string => object.id)
       }
-      .width('100%')
-      .height('100%')
-      .backgroundColor('#F8FAFC')
+
+      Row({ space: 8 }) {
+        Text(`objects=${this.simulatorObjectsForActivePage().length}`)
+          .fontSize(10)
+          .fontColor('#475467')
+        Text(`page=${this.activePageIndex + 1}/${this.pageCount()}`)
+          .fontSize(10)
+          .fontColor('#475467')
+      }
+      .padding({ left: 10, right: 10, top: 6, bottom: 6 })
+      .backgroundColor('#FFFFFFCC')
+      .border({ width: 1, color: '#D8E0EA' })
+      .borderRadius(999)
+      .position({
+        x: this.activeSimulatorCanvasFrame().frameX + 14,
+        y: this.activeSimulatorCanvasFrame().frameY + this.activeSimulatorCanvasFrame().frameHeight - 34
+      })
     }
+    .width('100%')
+    .height('100%')
   }
 
   @Builder
