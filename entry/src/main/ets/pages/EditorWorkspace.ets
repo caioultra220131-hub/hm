@@ -234,8 +234,9 @@ struct EditorWorkspace {
   private debugRefreshTimerId: number = -1;
   private persistTask: Promise<boolean> | null = null;
   private autosaveTimerId: number = -1;
-  private autosaveIndicatorToken: number = 0;
   private lastNativeMutationSignature: string = '';
+  private contentMutationVersion: number = 0;
+  private lastPersistedContentMutationVersion: number = 0;
   private pageSelectionInFlight: boolean = false;
   private pageViewportInitialized: boolean = false;
   private toolbarDragOriginX: number = 0;
@@ -290,7 +291,7 @@ struct EditorWorkspace {
   @State private showTracePanel: boolean = false;
   @State private traceActionMessage: string = '';
   @State private surfaceReady: boolean = false;
-  @State private saveState: 'idle' | 'saving' | 'saved' | 'failed' = 'idle';
+  @State private saveState: 'idle' | 'saving' | 'failed' = 'idle';
   @State private writingViewportWidth: number = 0;
   @State private writingViewportHeight: number = 0;
   @State private pageStackPanX: number = 0;
@@ -437,10 +438,12 @@ struct EditorWorkspace {
 
   private applyDocumentActivePage(document: DocumentRecord, pageId: string): void {
     const pages: DocumentPageEntry[] = this.editablePages(document);
+    const previousPageId: string = this.activePageId;
     if (pages.length === 0) {
       this.document = document;
       this.activePageId = '';
       this.activePageIndex = document.previewSnapshot?.pageIndex ?? 0;
+      this.lastNativeMutationSignature = '';
       return;
     }
     const activePage: DocumentPageEntry = pages.find((page) => page.id === pageId) ?? pages[0];
@@ -480,6 +483,9 @@ struct EditorWorkspace {
     this.document = nextDocument;
     this.activePageId = activePage.id;
     this.activePageIndex = activePage.order;
+    if (this.activePageId !== previousPageId) {
+      this.lastNativeMutationSignature = '';
+    }
   }
 
   private stageCurrentPageDraft(): void {
@@ -729,37 +735,16 @@ struct EditorWorkspace {
     return MarkdownUtils.buildPreviewBlocks(this.markdownText);
   }
 
-  private autosaveStatusLabel(): string {
-    if (this.saveState === 'saving') {
-      return '自动保存中';
-    }
-    if (this.saveState === 'saved') {
-      return '已自动保存';
-    }
-    if (this.saveState === 'failed') {
-      return '自动保存失败';
-    }
-    return '自动保存';
+  private hasPendingContentPersistence(): boolean {
+    return this.contentMutationVersion > this.lastPersistedContentMutationVersion;
   }
 
-  private autosaveIndicatorBackgroundColor(): string {
-    if (this.saveState === 'failed') {
-      return '#FEE4E2';
-    }
-    if (this.saveState === 'saved') {
-      return '#ECFDF3';
-    }
-    return '#EEF2F6';
+  private markContentDirty(): void {
+    this.contentMutationVersion += 1;
   }
 
-  private autosaveIndicatorFontColor(): string {
-    if (this.saveState === 'failed') {
-      return '#B42318';
-    }
-    if (this.saveState === 'saved') {
-      return '#027A48';
-    }
-    return '#667085';
+  private markContentPersisted(version: number = this.contentMutationVersion): void {
+    this.lastPersistedContentMutationVersion = Math.max(this.lastPersistedContentMutationVersion, version);
   }
 
   private cancelPendingAutosave(): void {
@@ -769,19 +754,11 @@ struct EditorWorkspace {
     }
   }
 
-  private scheduleSaveStateReset(delayMs: number = 1400): void {
-    const token: number = this.autosaveIndicatorToken + 1;
-    this.autosaveIndicatorToken = token;
-    setTimeout(() => {
-      if (token !== this.autosaveIndicatorToken || this.saveState !== 'saved') {
-        return;
-      }
-      this.saveState = 'idle';
-    }, delayMs);
-  }
-
   private scheduleAutosave(delayMs: number = AUTOSAVE_DEBOUNCE_MS): void {
     if (this.shuttingDown || this.leavingEditor || !this.document || !this.libraryService) {
+      return;
+    }
+    if (!this.hasPendingContentPersistence()) {
       return;
     }
     this.cancelPendingAutosave();
@@ -795,6 +772,7 @@ struct EditorWorkspace {
     if (this.shuttingDown || this.leavingEditor || !this.document || !this.libraryService) {
       return;
     }
+    this.markContentDirty();
     if (this.saveState !== 'saving') {
       this.saveState = 'idle';
     }
@@ -811,22 +789,34 @@ struct EditorWorkspace {
       return;
     }
     this.lastNativeMutationSignature = nextSignature;
-    this.noteDocumentMutationForAutosave();
+    this.markContentDirty();
+    if (this.saveState !== 'saving') {
+      this.saveState = 'idle';
+    }
+    this.scheduleAutosave();
   }
 
   private async runAutosave(): Promise<void> {
     if (this.shuttingDown || this.leavingEditor || !this.document || !this.libraryService) {
       return;
     }
+    if (!this.hasPendingContentPersistence()) {
+      return;
+    }
     if (this.persistTask) {
       this.scheduleAutosave(320);
       return;
     }
+    const targetVersion: number = this.contentMutationVersion;
     this.saveState = 'saving';
     const didPersist: boolean = await this.persistDocumentState();
-    this.saveState = didPersist ? 'saved' : 'failed';
+    this.saveState = didPersist ? 'idle' : 'failed';
     if (didPersist) {
-      this.scheduleSaveStateReset();
+      this.markContentPersisted(targetVersion);
+      if (this.hasPendingContentPersistence()) {
+        this.scheduleAutosave(320);
+        return;
+      }
     }
   }
 
@@ -836,6 +826,9 @@ struct EditorWorkspace {
     }
     if (!this.document || !this.libraryService) {
       return false;
+    }
+    if (!this.hasPendingContentPersistence()) {
+      return true;
     }
     this.cancelPendingAutosave();
     const runPersist = async (): Promise<boolean> => {
@@ -913,7 +906,7 @@ struct EditorWorkspace {
     }
     this.saveState = 'saving';
     const didPersist: boolean = await this.persistDocumentState();
-    this.saveState = didPersist ? 'saved' : 'failed';
+    this.saveState = didPersist ? 'idle' : 'failed';
     return didPersist;
   }
 
@@ -1285,6 +1278,7 @@ struct EditorWorkspace {
     await this.libraryService.saveDocumentMarkdown(this.document.id, '', this.activePageId, false);
     await this.libraryService.clearPageEmbeddedBlocks(this.document.id, this.activePageId, false);
     this.dirtyPageIds.delete(this.activePageId);
+    this.markContentPersisted();
     await this.reloadDocumentEmbeddedBlocks();
     this.saveState = 'idle';
     this.traceActionMessage = '页面已清空';
@@ -1324,13 +1318,15 @@ struct EditorWorkspace {
       return;
     }
     this.cancelPendingAutosave();
-    if (this.document && this.libraryService && this.isBlankPagedEditable() && mode !== DocumentMode.PAGED) {
+    if (this.document && this.libraryService && this.isBlankPagedEditable() && mode !== DocumentMode.PAGED &&
+      this.hasPendingContentPersistence()) {
       this.stageCurrentPageDraft();
       await this.persistBlankPagedRuntimePage();
       if (this.activePageId.length > 0) {
         const currentMarkdown: string = this.pageMarkdownDrafts.get(this.activePageId) ?? this.markdownText;
         await this.libraryService.saveDocumentMarkdown(this.document.id, currentMarkdown, this.activePageId, false);
       }
+      this.markContentPersisted();
     }
     this.currentMode = mode;
     if (this.engineId.length > 0) {
@@ -2149,9 +2145,6 @@ struct EditorWorkspace {
     if (this.shouldShowSecondaryToolbar()) {
       height += this.toolUsesColorPalette() ? 80 : 116;
     }
-    if (this.saveState !== 'idle') {
-      height += 28;
-    }
     return height;
   }
 
@@ -2633,13 +2626,17 @@ struct EditorWorkspace {
           return;
         }
         const currentPageId: string = this.activePageId;
-        this.cancelPendingAutosave();
-        this.stageCurrentPageDraft();
-        await this.persistBlankPagedRuntimePage();
-        if (currentPageId.length > 0) {
-          const currentMarkdown: string = this.pageMarkdownDrafts.get(currentPageId) ?? this.markdownText;
-          await this.libraryService.saveDocumentMarkdown(this.document.id, currentMarkdown, currentPageId, false);
-          this.dirtyPageIds.delete(currentPageId);
+        const shouldPersistCurrentContent: boolean = this.hasPendingContentPersistence();
+        if (shouldPersistCurrentContent) {
+          this.cancelPendingAutosave();
+          this.stageCurrentPageDraft();
+          await this.persistBlankPagedRuntimePage();
+          if (currentPageId.length > 0) {
+            const currentMarkdown: string = this.pageMarkdownDrafts.get(currentPageId) ?? this.markdownText;
+            await this.libraryService.saveDocumentMarkdown(this.document.id, currentMarkdown, currentPageId, false);
+            this.dirtyPageIds.delete(currentPageId);
+          }
+          this.markContentPersisted();
         }
         const nextDocument: DocumentRecord = await this.libraryService.setDocumentActivePage(this.document.id, nextPage.id);
         this.applyDocumentActivePage(nextDocument, nextPage.id);
@@ -2671,9 +2668,12 @@ struct EditorWorkspace {
     if (!this.canAddRealPages()) {
       return;
     }
-    this.cancelPendingAutosave();
-    this.stageCurrentPageDraft();
-    await this.persistBlankPagedRuntimePage();
+    if (this.hasPendingContentPersistence()) {
+      this.cancelPendingAutosave();
+      this.stageCurrentPageDraft();
+      await this.persistBlankPagedRuntimePage();
+      this.markContentPersisted();
+    }
     const nextDocument: DocumentRecord = await this.libraryService!.addBlankPage((this.document as DocumentRecord).id);
     const insertedPage: DocumentPageEntry | undefined = nextDocument.pages.find((page) => page.id === nextDocument.activePageId);
     this.applyDocumentActivePage(nextDocument, nextDocument.activePageId);
@@ -2694,9 +2694,12 @@ struct EditorWorkspace {
       return;
     }
     const deletedPageId: string = this.activePageId;
-    this.cancelPendingAutosave();
-    this.stageCurrentPageDraft();
-    await this.persistBlankPagedRuntimePage();
+    if (this.hasPendingContentPersistence()) {
+      this.cancelPendingAutosave();
+      this.stageCurrentPageDraft();
+      await this.persistBlankPagedRuntimePage();
+      this.markContentPersisted();
+    }
     const nextDocument: DocumentRecord = await this.libraryService!.deleteBlankPage((this.document as DocumentRecord).id, deletedPageId);
     this.pageMarkdownDrafts.delete(deletedPageId);
     this.dirtyPageIds.delete(deletedPageId);
@@ -2939,15 +2942,6 @@ struct EditorWorkspace {
     Row({ space: 6 }) {
       this.buildInspectorShortcut('preview', this.inspectorTabLabel('preview'))
       this.buildInspectorShortcut('source', this.inspectorTabLabel('source'))
-      if (this.saveState !== 'idle') {
-        Text(this.autosaveStatusLabel())
-          .fontSize(11)
-          .fontWeight(FontWeight.Medium)
-          .fontColor(this.autosaveIndicatorFontColor())
-          .padding({ left: 12, right: 12, top: 10, bottom: 10 })
-          .backgroundColor(this.autosaveIndicatorBackgroundColor())
-          .borderRadius(12)
-      }
     }
     .padding(6)
     .backgroundColor('#F8F9FA')
@@ -3982,17 +3976,6 @@ struct EditorWorkspace {
           this.buildToolbarToolButton(tool)
         }, (tool: ToolType): string => `toolbar-${tool}`)
         this.buildFingerWritingToggleButton()
-        if (this.saveState !== 'idle') {
-          Text(this.autosaveStatusLabel())
-            .width('100%')
-            .textAlign(TextAlign.Center)
-            .fontSize(10)
-            .fontWeight(FontWeight.Medium)
-            .fontColor(this.autosaveIndicatorFontColor())
-            .padding({ left: 8, right: 8, top: 6, bottom: 6 })
-            .backgroundColor(this.autosaveIndicatorBackgroundColor())
-            .borderRadius(10)
-        }
       }
       .width('100%')
     } else {
@@ -4029,15 +4012,6 @@ struct EditorWorkspace {
         this.buildFingerWritingToggleButton()
         Blank()
           .layoutWeight(1)
-        if (this.saveState !== 'idle') {
-          Text(this.autosaveStatusLabel())
-            .fontSize(10)
-            .fontWeight(FontWeight.Medium)
-            .fontColor(this.autosaveIndicatorFontColor())
-            .padding({ left: 8, right: 8, top: 6, bottom: 6 })
-            .backgroundColor(this.autosaveIndicatorBackgroundColor())
-            .borderRadius(10)
-        }
       }
       .width('100%')
     }
