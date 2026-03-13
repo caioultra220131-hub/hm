@@ -112,6 +112,8 @@ interface SimulatorFingerGestureTarget {
 
 type EmbeddedOverlayDraft = DocumentEmbeddedBlock;
 type SingleFingerPanMode = 'disabled' | 'vertical' | 'free';
+type PageRailFilter = 'all' | 'bookmarked' | 'notes';
+type ToolbarSnapSlot = 'top-center' | 'left-middle' | 'right-middle' | 'bottom-center';
 type EditorUiIcon =
   'back' |
   'drag' |
@@ -137,7 +139,7 @@ const NATIVE_PAGE_METHOD_SET_ACTIVE: string = 'setActivePage';
 const NATIVE_PAGE_METHOD_INSERT: string = 'insertPage';
 const NATIVE_PAGE_METHOD_DELETE: string = 'deletePage';
 const EDITOR_INSPECTOR_WIDTH: number = 688;
-const EDITOR_PAGE_RAIL_WIDTH: number = 172;
+const EDITOR_PAGE_RAIL_WIDTH: number = 156;
 const EDITOR_PAGE_RAIL_COLLAPSED_WIDTH: number = 68;
 const PAGE_RAIL_THUMBNAIL_WIDTH: number = 104;
 const PAGE_RAIL_THUMBNAIL_HEIGHT: number = 142;
@@ -145,18 +147,18 @@ const PAGE_RAIL_MENU_WIDTH: number = 176;
 const PAGE_RAIL_ACTION_BUTTON_SIZE: number = 30;
 const PAGE_RAIL_CARD_RADIUS: number = 16;
 const PAGE_RAIL_PAGE_MENU_BUTTON_SIZE: number = 26;
-const FLOATING_TOOLBAR_WIDTH: number = 488;
+const FLOATING_TOOLBAR_WIDTH: number = 428;
 const FLOATING_TOOL_BUTTON_SIZE: number = 36;
 const FLOATING_TOOLBAR_MORE_BUTTON_SIZE: number = 34;
 const FLOATING_TOOLBAR_COLOR_CHIP_SIZE: number = 16;
 const PAGE_SWIPE_DRAG_LIMIT: number = 132;
 const PAGE_SWIPE_TRIGGER_DISTANCE: number = 84;
-const PAGE_STACK_GAP: number = 44;
-const PAGE_STACK_SIDE_PADDING: number = 72;
-const PAGE_STACK_VERTICAL_PADDING: number = 84;
+const PAGE_STACK_GAP: number = 28;
+const PAGE_STACK_SIDE_PADDING: number = 28;
+const PAGE_STACK_VERTICAL_PADDING: number = 42;
 const PAGE_STACK_MIN_ZOOM: number = 0.72;
 const PAGE_STACK_MAX_ZOOM: number = 1.95;
-const PAGE_STACK_BOUNDARY_PADDING: number = 52;
+const PAGE_STACK_BOUNDARY_PADDING: number = 28;
 const TOOLBAR_DRAG_BOUNDARY: number = 36;
 const EMBED_SELECTION_MIN_SIZE: number = 32;
 const VIEWPORT_INERTIA_FRAME_MS: number = 16;
@@ -246,6 +248,7 @@ struct EditorWorkspace {
   private simulatorFingerGesturePageIndex: number = -1;
   private simulatorFingerGestureLastXRatio: number = 0.5;
   private simulatorFingerGestureLastYRatio: number = 0.5;
+  private pageHudAutoHideToken: number = 0;
   private embeddedSelectionOriginX: number = 0;
   private embeddedSelectionOriginY: number = 0;
   private readonly embeddedOverlaysByPage: Map<string, EmbeddedOverlayDraft[]> = new Map<string, EmbeddedOverlayDraft[]>();
@@ -261,6 +264,9 @@ struct EditorWorkspace {
   @State private activePageId: string = '';
   @State private activePageIndex: number = 0;
   @State private pageSearchText: string = '';
+  @State private pageRailFilter: PageRailFilter = 'all';
+  @State private showRailFilterMenu: boolean = false;
+  @State private showPageHud: boolean = false;
   @State private showPageJumpInput: boolean = false;
   @State private pageJumpDraft: string = '';
   @State private showRailMenu: boolean = false;
@@ -287,6 +293,7 @@ struct EditorWorkspace {
   @State private fingerWritingEnabled: boolean = false;
   @State private floatingToolbarOffsetX: number = 0;
   @State private floatingToolbarOffsetY: number = 0;
+  @State private toolbarSnapSlot: ToolbarSnapSlot = 'top-center';
   @State private overlaysVersion: number = 0;
   @State private bookmarksVersion: number = 0;
   @State private embedPlacementArmed: boolean = false;
@@ -921,6 +928,47 @@ struct EditorWorkspace {
     return `${currentPageNumber}/${this.pageCount()}`;
   }
 
+  private pageRailFilterLabel(filter: PageRailFilter = this.pageRailFilter): string {
+    switch (filter) {
+      case 'bookmarked':
+        return '收藏页面';
+      case 'notes':
+        return '笔记页面';
+      case 'all':
+      default:
+        return '所有页面';
+    }
+  }
+
+  private pageHudLabel(): string {
+    return `第 ${this.activePageIndex + 1} / ${this.pageCount()} 页`;
+  }
+
+  private keepPageHudVisible(): void {
+    this.pageHudAutoHideToken += 1;
+    this.showPageHud = true;
+  }
+
+  private schedulePageHudAutoHide(delayMs: number = 1200): void {
+    const token: number = this.pageHudAutoHideToken + 1;
+    this.pageHudAutoHideToken = token;
+    setTimeout(() => {
+      if (token !== this.pageHudAutoHideToken || this.showPageJumpInput || this.showRailMenu || this.showRailFilterMenu) {
+        return;
+      }
+      if (this.openPageMenuId.length > 0) {
+        return;
+      }
+      this.showPageHud = false;
+    }, delayMs);
+  }
+
+  private pageHasNotes(index: number): boolean {
+    return this.pageSceneObjectsAt(index).length > 0 ||
+      this.pageEmbeddedBlocksAt(index).length > 0 ||
+      this.pageMarkdownTextAt(index).trim().length > 0;
+  }
+
   private shouldUseWideComposerLayout(): boolean {
     return this.writingViewportWidth >= 920 && this.writingViewportWidth > this.writingViewportHeight;
   }
@@ -962,10 +1010,16 @@ struct EditorWorkspace {
 
   private filteredPageIndexes(): number[] {
     const query: string = this.pageSearchText.trim().toLowerCase();
-    if (query.length === 0) {
-      return this.pageIndexes();
-    }
     return this.pageIndexes().filter((pageIndex: number) => {
+      if (this.pageRailFilter === 'bookmarked' && !this.isPageBookmarked(pageIndex)) {
+        return false;
+      }
+      if (this.pageRailFilter === 'notes' && !this.pageHasNotes(pageIndex)) {
+        return false;
+      }
+      if (query.length === 0) {
+        return true;
+      }
       const pageNumber: string = `${pageIndex + 1}`;
       const title: string = this.pagePlaceholderTitle(pageIndex).toLowerCase();
       const detail: string = this.pagePlaceholderDetail(pageIndex).toLowerCase();
@@ -978,7 +1032,9 @@ struct EditorWorkspace {
 
   private openPageJumpInput(): void {
     this.showRailMenu = false;
+    this.showRailFilterMenu = false;
     this.openPageMenuId = '';
+    this.keepPageHudVisible();
     this.showPageJumpInput = true;
     this.pageJumpDraft = `${this.activePageIndex + 1}`;
   }
@@ -986,6 +1042,7 @@ struct EditorWorkspace {
   private closePageJumpInput(): void {
     this.showPageJumpInput = false;
     this.pageJumpDraft = '';
+    this.schedulePageHudAutoHide(900);
   }
 
   private async jumpToDraftPage(): Promise<void> {
@@ -993,12 +1050,13 @@ struct EditorWorkspace {
     if (targetIndex < 0) {
       return;
     }
-    await this.selectPage(targetIndex);
+    await this.focusPageInViewport(targetIndex);
     this.closePageJumpInput();
   }
 
   private closeRailMenus(): void {
     this.showRailMenu = false;
+    this.showRailFilterMenu = false;
     this.openPageMenuId = '';
   }
 
@@ -1006,15 +1064,40 @@ struct EditorWorkspace {
     this.railCollapsed = collapsed;
     this.closeRailMenus();
     this.showPageJumpInput = false;
+    this.keepPageHudVisible();
+    this.schedulePageHudAutoHide();
   }
 
   private toggleRailMenu(): void {
-    if (this.railCollapsed) {
-      return;
-    }
+    this.keepPageHudVisible();
+    this.showRailFilterMenu = false;
     this.showPageJumpInput = false;
     this.showRailMenu = !this.showRailMenu;
     this.openPageMenuId = '';
+    if (!this.showRailMenu) {
+      this.schedulePageHudAutoHide();
+    }
+  }
+
+  private toggleRailFilterMenu(): void {
+    if (this.railCollapsed) {
+      return;
+    }
+    this.keepPageHudVisible();
+    this.showPageJumpInput = false;
+    this.showRailMenu = false;
+    this.openPageMenuId = '';
+    this.showRailFilterMenu = !this.showRailFilterMenu;
+    if (!this.showRailFilterMenu) {
+      this.schedulePageHudAutoHide();
+    }
+  }
+
+  private applyRailFilter(filter: PageRailFilter): void {
+    this.pageRailFilter = filter;
+    this.showRailFilterMenu = false;
+    this.keepPageHudVisible();
+    this.schedulePageHudAutoHide();
   }
 
   private isPageMenuOpen(pageIndex: number): boolean {
@@ -1028,6 +1111,8 @@ struct EditorWorkspace {
     }
     this.showPageJumpInput = false;
     this.showRailMenu = false;
+    this.showRailFilterMenu = false;
+    this.keepPageHudVisible();
     if (!this.isSelectedPageIndex(pageIndex)) {
       await this.selectPage(pageIndex);
     }
@@ -1301,33 +1386,17 @@ struct EditorWorkspace {
   private simulatorCanvasFrame(index: number): SimulatorCanvasFrame {
     const renderedWidth: number = this.renderedWritingPageWidth(index);
     const renderedHeight: number = this.renderedWritingPageHeight(index);
-    const sourceWidth: number = this.simulatorPageWidth();
-    const sourceHeight: number = this.simulatorPageHeight();
-    const aspectRatio: number = sourceWidth / sourceHeight;
-    const horizontalInset: number = clampToRange(renderedWidth * 0.06, 18, 28);
-    const topInset: number = clampToRange(renderedHeight * 0.10, 52, 74);
-    const bottomInset: number = clampToRange(renderedHeight * 0.05, 18, 34);
-    const availableWidth: number = Math.max(220, renderedWidth - (horizontalInset * 2));
-    const availableHeight: number = Math.max(280, renderedHeight - topInset - bottomInset);
-    let frameWidth: number = availableWidth;
-    let frameHeight: number = frameWidth / Math.max(0.1, aspectRatio);
-    if (frameHeight > availableHeight) {
-      frameHeight = availableHeight;
-      frameWidth = frameHeight * Math.max(0.1, aspectRatio);
-    }
-    const frameX: number = (renderedWidth - frameWidth) / 2;
-    const frameY: number = topInset + ((availableHeight - frameHeight) / 2);
-    const contentInsetX: number = clampToRange(frameWidth * 0.06, 18, 26);
-    const contentInsetY: number = clampToRange(frameHeight * 0.05, 20, 26);
+    const contentInsetX: number = clampToRange(renderedWidth * 0.028, 10, 18);
+    const contentInsetY: number = clampToRange(renderedHeight * 0.03, 12, 20);
     const frame: SimulatorCanvasFrame = {
-      frameX,
-      frameY,
-      frameWidth,
-      frameHeight,
-      contentX: frameX + contentInsetX,
-      contentY: frameY + contentInsetY,
-      contentWidth: Math.max(120, frameWidth - (contentInsetX * 2)),
-      contentHeight: Math.max(180, frameHeight - (contentInsetY * 2))
+      frameX: 0,
+      frameY: 0,
+      frameWidth: renderedWidth,
+      frameHeight: renderedHeight,
+      contentX: contentInsetX,
+      contentY: contentInsetY,
+      contentWidth: Math.max(120, renderedWidth - (contentInsetX * 2)),
+      contentHeight: Math.max(180, renderedHeight - (contentInsetY * 2))
     };
     return frame;
   }
@@ -1720,6 +1789,8 @@ struct EditorWorkspace {
     await this.selectPage(index);
     this.pageStackPanY = this.clampedPageStackPanY(this.pageFocusTargetPanY(index));
     this.pageStackPanX = this.clampedPageStackPanX(this.pageStackPanX);
+    this.keepPageHudVisible();
+    this.schedulePageHudAutoHide();
   }
 
   private syncViewportToActivePage(forceFocus: boolean = false): void {
@@ -1747,8 +1818,8 @@ struct EditorWorkspace {
     this.writingViewportHeight = height;
     this.syncSimulatorStubViewportSize();
     this.syncViewportToActivePage();
-    this.floatingToolbarOffsetX = this.clampedFloatingToolbarX(this.floatingToolbarOffsetX);
-    this.floatingToolbarOffsetY = this.clampedFloatingToolbarY(this.floatingToolbarOffsetY);
+    this.floatingToolbarOffsetX = 0;
+    this.floatingToolbarOffsetY = 0;
   }
 
   private toolUsesColorPalette(): boolean {
@@ -1838,6 +1909,7 @@ struct EditorWorkspace {
 
   private handleViewportPanStart(): void {
     this.stopViewportInertia();
+    this.keepPageHudVisible();
     this.viewportPanOriginX = this.pageStackPanX;
     this.viewportPanOriginY = this.pageStackPanY;
     this.viewportPanLastOffsetX = 0;
@@ -1914,6 +1986,7 @@ struct EditorWorkspace {
     if (!canPan) {
       return;
     }
+    this.keepPageHudVisible();
     const offsetX: number = this.readGestureNumber(event, 'offsetX', 0);
     const offsetY: number = this.readGestureNumber(event, 'offsetY', 0);
     this.recordViewportPanVelocity(offsetX, offsetY, panMode);
@@ -1933,10 +2006,12 @@ struct EditorWorkspace {
     }
     await this.startViewportInertia(panMode);
     await this.syncViewportAfterGesture();
+    this.schedulePageHudAutoHide();
   }
 
   private handleViewportPinchStart(): void {
     this.stopViewportInertia();
+    this.keepPageHudVisible();
     this.viewportPinchOriginScale = this.pageStackScale;
   }
 
@@ -1944,6 +2019,7 @@ struct EditorWorkspace {
     if (!this.canTwoFingerPanViewport()) {
       return;
     }
+    this.keepPageHudVisible();
     const scaleDelta: number = this.readGestureNumber(event, 'scale', 1);
     const nextScale: number = clampToRange(
       this.viewportPinchOriginScale * (Number.isNaN(scaleDelta) ? 1 : scaleDelta),
@@ -1960,37 +2036,93 @@ struct EditorWorkspace {
       return;
     }
     await this.syncViewportAfterGesture();
+    this.schedulePageHudAutoHide();
+  }
+
+  private floatingToolbarChromeHeight(): number {
+    return this.shouldShowSecondaryToolbar() ? 118 : 74;
+  }
+
+  private toolbarAnchorPosition(slot: ToolbarSnapSlot = this.toolbarSnapSlot): GestureRatioPoint {
+    const topY: number = 18;
+    const middleY: number = Math.max(topY, (this.writingViewportHeight - this.floatingToolbarChromeHeight()) / 2);
+    const bottomY: number = Math.max(topY, this.writingViewportHeight - this.floatingToolbarChromeHeight() - 24);
+    const leftX: number = 16;
+    const rightX: number = Math.max(leftX, this.writingViewportWidth - FLOATING_TOOLBAR_WIDTH - 16);
+    const centerX: number = Math.max(leftX, (this.writingViewportWidth - FLOATING_TOOLBAR_WIDTH) / 2);
+    switch (slot) {
+      case 'left-middle':
+        return { xRatio: leftX, yRatio: middleY };
+      case 'right-middle':
+        return { xRatio: rightX, yRatio: middleY };
+      case 'bottom-center':
+        return { xRatio: centerX, yRatio: bottomY };
+      case 'top-center':
+      default:
+        return { xRatio: centerX, yRatio: topY };
+    }
   }
 
   private clampedFloatingToolbarX(value: number): number {
     if (this.writingViewportWidth <= 0) {
       return value;
     }
-    const overflow: number = Math.max(0, (this.writingViewportWidth - FLOATING_TOOLBAR_WIDTH) / 2) - TOOLBAR_DRAG_BOUNDARY;
-    if (overflow <= 0) {
-      return 0;
-    }
-    return clampToRange(value, -overflow, overflow);
+    const minX: number = 16;
+    const maxX: number = Math.max(minX, this.writingViewportWidth - FLOATING_TOOLBAR_WIDTH - 16);
+    return clampToRange(value, minX, maxX);
   }
 
   private clampedFloatingToolbarY(value: number): number {
     if (this.writingViewportHeight <= 0) {
       return value;
     }
-    const maxOffset: number = Math.max(0, (this.writingViewportHeight * 0.28));
-    return clampToRange(value, -8, maxOffset);
+    const minY: number = 18;
+    const maxY: number = Math.max(minY, this.writingViewportHeight - this.floatingToolbarChromeHeight() - 20);
+    return clampToRange(value, minY, maxY);
+  }
+
+  private floatingToolbarPositionX(): number {
+    const anchor: GestureRatioPoint = this.toolbarAnchorPosition();
+    return this.clampedFloatingToolbarX(anchor.xRatio + this.floatingToolbarOffsetX);
+  }
+
+  private floatingToolbarPositionY(): number {
+    const anchor: GestureRatioPoint = this.toolbarAnchorPosition();
+    return this.clampedFloatingToolbarY(anchor.yRatio + this.floatingToolbarOffsetY);
+  }
+
+  private snapFloatingToolbarToNearestAnchor(): void {
+    const currentX: number = this.floatingToolbarPositionX();
+    const currentY: number = this.floatingToolbarPositionY();
+    const slots: ToolbarSnapSlot[] = ['top-center', 'left-middle', 'right-middle', 'bottom-center'];
+    let nearestSlot: ToolbarSnapSlot = this.toolbarSnapSlot;
+    let nearestDistance: number = Number.MAX_VALUE;
+    slots.forEach((slot: ToolbarSnapSlot) => {
+      const anchor: GestureRatioPoint = this.toolbarAnchorPosition(slot);
+      const deltaX: number = anchor.xRatio - currentX;
+      const deltaY: number = anchor.yRatio - currentY;
+      const distance: number = (deltaX * deltaX) + (deltaY * deltaY);
+      if (distance < nearestDistance) {
+        nearestDistance = distance;
+        nearestSlot = slot;
+      }
+    });
+    this.toolbarSnapSlot = nearestSlot;
+    this.floatingToolbarOffsetX = 0;
+    this.floatingToolbarOffsetY = 0;
   }
 
   private handleToolbarDragStart(): void {
-    this.toolbarDragOriginX = this.floatingToolbarOffsetX;
-    this.toolbarDragOriginY = this.floatingToolbarOffsetY;
+    this.toolbarDragOriginX = this.floatingToolbarPositionX();
+    this.toolbarDragOriginY = this.floatingToolbarPositionY();
   }
 
   private updateToolbarDrag(event: Object): void {
-    const nextX: number = this.toolbarDragOriginX + this.readGestureNumber(event, 'offsetX', 0);
-    const nextY: number = this.toolbarDragOriginY + this.readGestureNumber(event, 'offsetY', 0);
-    this.floatingToolbarOffsetX = this.clampedFloatingToolbarX(nextX);
-    this.floatingToolbarOffsetY = this.clampedFloatingToolbarY(nextY);
+    const nextX: number = this.clampedFloatingToolbarX(this.toolbarDragOriginX + this.readGestureNumber(event, 'offsetX', 0));
+    const nextY: number = this.clampedFloatingToolbarY(this.toolbarDragOriginY + this.readGestureNumber(event, 'offsetY', 0));
+    const anchor: GestureRatioPoint = this.toolbarAnchorPosition();
+    this.floatingToolbarOffsetX = nextX - anchor.xRatio;
+    this.floatingToolbarOffsetY = nextY - anchor.yRatio;
   }
 
   private readGestureNumber(event: Object | undefined, key: string, fallback: number = 0): number {
@@ -2368,6 +2500,7 @@ struct EditorWorkspace {
       return;
     }
     this.pageSelectionInFlight = true;
+    this.keepPageHudVisible();
     this.closeRailMenus();
     this.showPageJumpInput = false;
     try {
@@ -2392,9 +2525,11 @@ struct EditorWorkspace {
           await this.reopenNativeDocumentForCurrentState();
         }
         this.refreshDebugState();
+        this.schedulePageHudAutoHide();
         return;
       }
       this.activePageIndex = index;
+      this.schedulePageHudAutoHide();
     } finally {
       this.pageSelectionInFlight = false;
     }
@@ -2759,67 +2894,33 @@ struct EditorWorkspace {
       Column() {}
         .width('100%')
         .height('100%')
-        .backgroundColor('#F8FAFC')
-
-      Row()
-        .width(this.activeSimulatorCanvasFrame().frameWidth)
-        .height(this.activeSimulatorCanvasFrame().frameHeight)
         .backgroundColor(this.simulatorPageFillColor())
-        .borderRadius(26)
-        .border({ width: 1, color: this.simulatorPageAccentColor() })
-        .position({
-          x: this.activeSimulatorCanvasFrame().frameX,
-          y: this.activeSimulatorCanvasFrame().frameY
-        })
 
       this.buildSimulatorGuideLines(this.activeSimulatorCanvasFrame())
 
-      Row()
-        .width(this.activeSimulatorCanvasFrame().contentWidth)
-        .height(1)
-        .backgroundColor('#D8DEE8')
-        .position({
-          x: this.activeSimulatorCanvasFrame().contentX,
-          y: this.activeSimulatorCanvasFrame().frameY + 44
-        })
-
-      Text(this.document?.title ?? 'Untitled')
-        .fontSize(16)
-        .fontWeight(FontWeight.Medium)
-        .fontColor('#162033')
-        .maxLines(1)
-        .position({
-          x: this.activeSimulatorCanvasFrame().contentX,
-          y: this.activeSimulatorCanvasFrame().frameY + 18
-        })
-
-      Text(this.simulatorGuideLabel())
-        .fontSize(11)
-        .fontColor('#667085')
-        .position({
-          x: this.activeSimulatorCanvasFrame().contentX,
-          y: this.activeSimulatorCanvasFrame().frameY + 52
-        })
-
       if (this.simulatorObjectsForActivePage().length === 0) {
-        ForEach([0, 1, 2, 3], (rowIndex: number) => {
-          ForEach([0, 1, 2, 3, 4], (columnIndex: number) => {
+        ForEach([0, 1, 2], (rowIndex: number) => {
+          Row({ space: 10 }) {
             Blank()
-              .width(12)
-              .height(12)
-              .backgroundColor('#9CB0D0')
-              .opacity(0.82)
+              .width(clampToRange(this.activeSimulatorCanvasFrame().contentWidth * 0.24, 56, 120))
+              .height(6)
+              .backgroundColor('#C2CFDF')
+              .opacity(0.7)
               .borderRadius(999)
-              .position({
-                x: this.activeSimulatorCanvasFrame().contentX +
-                  22 +
-                  columnIndex * ((this.activeSimulatorCanvasFrame().contentWidth - 56) / 4),
-                y: this.activeSimulatorCanvasFrame().contentY +
-                  44 +
-                  rowIndex * ((this.activeSimulatorCanvasFrame().contentHeight - 88) / 3)
-              })
-          }, (columnIndex: number): string => `stub-dot-${rowIndex}-${columnIndex}`)
-        }, (rowIndex: number): string => `stub-row-${rowIndex}`)
+            Blank()
+              .width(clampToRange(this.activeSimulatorCanvasFrame().contentWidth * 0.18, 40, 96))
+              .height(6)
+              .backgroundColor('#D3DDE9')
+              .opacity(0.68)
+              .borderRadius(999)
+          }
+          .position({
+            x: this.activeSimulatorCanvasFrame().contentX + 18,
+            y: this.activeSimulatorCanvasFrame().contentY +
+              54 +
+              rowIndex * clampToRange(this.activeSimulatorCanvasFrame().contentHeight * 0.18, 52, 84)
+          })
+        }, (rowIndex: number): string => `stub-line-${rowIndex}`)
       } else {
         ForEach(this.simulatorObjectsForActivePage(), (object: NativeSceneObject) => {
           Row() {
@@ -2838,23 +2939,6 @@ struct EditorWorkspace {
           .position({ x: this.simulatorObjectX(object), y: this.simulatorObjectY(object) })
         }, (object: NativeSceneObject): string => object.id)
       }
-
-      Row({ space: 8 }) {
-        Text(`objects=${this.simulatorObjectsForActivePage().length}`)
-          .fontSize(10)
-          .fontColor('#475467')
-        Text(`page=${this.activePageIndex + 1}/${this.pageCount()}`)
-          .fontSize(10)
-          .fontColor('#475467')
-      }
-      .padding({ left: 10, right: 10, top: 6, bottom: 6 })
-      .backgroundColor('#FFFFFFCC')
-      .border({ width: 1, color: '#D8E0EA' })
-      .borderRadius(999)
-      .position({
-        x: this.activeSimulatorCanvasFrame().frameX + 14,
-        y: this.activeSimulatorCanvasFrame().frameY + this.activeSimulatorCanvasFrame().frameHeight - 34
-      })
     }
     .width('100%')
     .height('100%')
@@ -3268,7 +3352,7 @@ struct EditorWorkspace {
         Row()
           .width(PAGE_RAIL_THUMBNAIL_WIDTH)
           .height(PAGE_RAIL_THUMBNAIL_HEIGHT)
-          .border({ width: 2, color: '#2A9D8F' })
+          .border({ width: 1.5, color: '#2A9D8F' })
           .borderRadius(PAGE_RAIL_CARD_RADIUS)
       }
     }
@@ -3758,6 +3842,9 @@ struct EditorWorkspace {
           .onActionUpdate((event) => {
             this.updateToolbarDrag(event as Object);
           })
+          .onActionEnd(() => {
+            this.snapFloatingToolbarToNearestAnchor();
+          })
       )
       ForEach([
         ToolType.PEN,
@@ -3773,13 +3860,13 @@ struct EditorWorkspace {
       Blank()
         .layoutWeight(1)
       Button(this.saveButtonLabel())
-        .height(FLOATING_TOOL_BUTTON_SIZE)
-        .padding({ left: 12, right: 12 })
+        .height(FLOATING_TOOL_BUTTON_SIZE - 2)
+        .padding({ left: 10, right: 10 })
         .enabled(this.saveState !== 'saving')
         .backgroundColor(this.saveState === 'saving' ? '#98A2B3' : '#0F766E')
         .fontColor('#FFFFFF')
-        .fontSize(12)
-        .borderRadius(14)
+        .fontSize(11)
+        .borderRadius(12)
         .onClick(async () => {
           await this.saveDocument();
         })
@@ -3884,14 +3971,125 @@ struct EditorWorkspace {
       }
     }
     .width(FLOATING_TOOLBAR_WIDTH)
-    .padding(12)
-    .backgroundColor('#F8FAFC')
-    .border({ width: 1, color: '#D8E0EA' })
-    .borderRadius(20)
+    .padding(10)
+    .backgroundColor('#FFFFFFF2')
+    .border({ width: 1, color: '#DCE5EE' })
+    .borderRadius(18)
     .position({
-      x: Math.max(16, ((this.writingViewportWidth - FLOATING_TOOLBAR_WIDTH) / 2) + this.floatingToolbarOffsetX),
-      y: 18 + this.floatingToolbarOffsetY
+      x: this.floatingToolbarPositionX(),
+      y: this.floatingToolbarPositionY()
     })
+  }
+
+  @Builder
+  private buildCanvasActionGroup(): void {
+    Column({ space: 10 }) {
+      Row({ space: 6 }) {
+        Stack({ alignContent: Alignment.Center }) {
+          this.buildEditorIcon('undo', '#344054', 15)
+        }
+          .width(38)
+          .height(38)
+          .backgroundColor('#FFFFFFF2')
+          .border({ width: 1, color: '#D8E0EA' })
+          .borderRadius(14)
+          .onClick(() => {
+            this.undoStroke();
+          })
+        Stack({ alignContent: Alignment.Center }) {
+          this.buildEditorIcon('redo', '#344054', 15)
+        }
+          .width(38)
+          .height(38)
+          .backgroundColor('#FFFFFFF2')
+          .border({ width: 1, color: '#D8E0EA' })
+          .borderRadius(14)
+          .onClick(() => {
+            this.redoStroke();
+          })
+        Stack({ alignContent: Alignment.Center }) {
+          this.buildEditorIcon('more', '#344054', 15)
+        }
+          .width(38)
+          .height(38)
+          .backgroundColor('#FFFFFFF2')
+          .border({ width: 1, color: '#D8E0EA' })
+          .borderRadius(14)
+          .onClick(() => {
+            this.toggleRailMenu();
+          })
+        Stack({ alignContent: Alignment.Center }) {
+          this.buildEditorIcon(this.railToggleIconKind(), '#162033', 15)
+        }
+          .width(38)
+          .height(38)
+          .backgroundColor('#FFFFFFF2')
+          .border({ width: 1, color: '#D8E0EA' })
+          .borderRadius(14)
+          .onClick(() => {
+            this.setRailCollapsed(!this.railCollapsed);
+          })
+      }
+      .padding(6)
+      .backgroundColor('#FFFFFFD8')
+      .border({ width: 1, color: '#DCE5EE' })
+      .borderRadius(18)
+      if (this.showRailMenu) {
+        this.buildRailMenu()
+      }
+    }
+    .position({ x: Math.max(18, this.writingViewportWidth - 196), y: 18 })
+  }
+
+  @Builder
+  private buildPageHud(): void {
+    if (this.showPageHud || this.showPageJumpInput) {
+      Column({ space: 8 }) {
+        if (this.showPageJumpInput) {
+          Row({ space: 8 }) {
+            TextInput({ text: this.pageJumpDraft, placeholder: `${this.activePageIndex + 1}` })
+              .width(72)
+              .height(36)
+              .textAlign(TextAlign.Center)
+              .backgroundColor('#FFFFFF')
+              .borderRadius(12)
+              .onChange((value: string) => {
+                this.pageJumpDraft = value.replace(/[^0-9]/g, '');
+              })
+            Button('前往')
+              .height(36)
+              .enabled(this.pageJumpTargetIndex() >= 0)
+              .backgroundColor('#162033')
+              .fontColor('#FFFFFF')
+              .fontSize(11)
+              .padding({ left: 12, right: 12 })
+              .borderRadius(12)
+              .onClick(async () => {
+                await this.jumpToDraftPage();
+              })
+          }
+        } else {
+          Button(this.pageHudLabel())
+            .height(38)
+            .padding({ left: 14, right: 14 })
+            .backgroundColor('#FFFFFF')
+            .fontColor('#162033')
+            .fontSize(12)
+            .borderRadius(14)
+            .onClick(() => {
+              this.openPageJumpInput();
+            })
+        }
+      }
+      .padding(8)
+      .backgroundColor('#FFFFFFE8')
+      .border({ width: 1, color: '#DCE5EE' })
+      .borderRadius(18)
+      .position({
+        x: Math.max(20, this.writingViewportWidth - (this.showPageJumpInput ? 168 : 132) - 20),
+        y: Math.max(92, this.writingViewportHeight - 86)
+      })
+    }
   }
 
   @Builder
@@ -4024,12 +4222,12 @@ struct EditorWorkspace {
       Column() {}
         .width(this.renderedWritingPageWidth(pageIndex))
         .height(this.renderedWritingPageHeight(pageIndex))
-        .backgroundColor('#FFFFFF')
+        .backgroundColor('#FFFEFC')
         .border({
-          width: this.isSelectedPageIndex(pageIndex) ? 2 : 1,
-          color: this.isSelectedPageIndex(pageIndex) ? '#16324F' : '#D8E0EA'
+          width: this.isSelectedPageIndex(pageIndex) ? 1.5 : 1,
+          color: this.isSelectedPageIndex(pageIndex) ? '#C8D6E4' : '#E4EBF2'
         })
-        .borderRadius(28)
+        .borderRadius(18)
       if (this.isSelectedPageIndex(pageIndex)) {
         this.buildPageMotionLayer()
         this.buildPageEmbeddedOverlayLayer(pageIndex)
@@ -4037,22 +4235,6 @@ struct EditorWorkspace {
       } else {
         this.buildWritingPageFallback(pageIndex)
       }
-      Row({ space: 8 }) {
-        Text(`第${pageIndex + 1}页`)
-          .fontSize(12)
-          .fontWeight(FontWeight.Medium)
-          .fontColor('#162033')
-        if (this.isPageBookmarked(pageIndex)) {
-          Text('已加书签')
-            .fontSize(10)
-            .fontColor('#0F766E')
-        }
-      }
-      .padding({ left: 14, right: 14, top: 8, bottom: 8 })
-      .backgroundColor('#FFFFFF')
-      .border({ width: 1, color: '#E4E7EC' })
-      .borderRadius(14)
-      .position({ x: 18, y: 18 })
     }
     .width(this.renderedWritingPageWidth(pageIndex))
     .height(this.renderedWritingPageHeight(pageIndex))
@@ -4345,38 +4527,46 @@ struct EditorWorkspace {
 
   @Builder
   private buildModernPageRailItem(pageIndex: number): void {
-    Column({ space: 6 }) {
-      this.buildPageRailPreviewCard(pageIndex)
-      Row({ space: 4 }) {
+    Column({ space: 8 }) {
+      Stack({ alignContent: Alignment.TopStart }) {
+        this.buildPageRailPreviewCard(pageIndex)
         Stack({ alignContent: Alignment.Center }) {
-          this.buildEditorIcon('bookmark', this.isPageBookmarked(pageIndex) ? '#FFFFFF' : '#344054', 16)
+          this.buildEditorIcon('bookmark', this.isPageBookmarked(pageIndex) ? '#FFFFFF' : '#344054', 14)
         }
-          .height(26)
-          .width(34)
+          .height(28)
+          .width(28)
           .backgroundColor(this.isPageBookmarked(pageIndex) ? '#16324F' : '#FFFFFF')
-          .borderRadius(12)
+          .border({ width: 1, color: this.isPageBookmarked(pageIndex) ? '#16324F' : '#D8E0EA' })
+          .borderRadius(10)
+          .position({ x: PAGE_RAIL_THUMBNAIL_WIDTH - 36, y: 8 })
           .onClick(async () => {
             await this.toggleBookmarkForPage(pageIndex);
           })
-        Blank()
-          .layoutWeight(1)
         Stack({ alignContent: Alignment.Center }) {
           this.buildEditorIcon('more', '#475467', 15)
         }
-          .width(PAGE_RAIL_PAGE_MENU_BUTTON_SIZE)
-          .height(PAGE_RAIL_PAGE_MENU_BUTTON_SIZE)
+          .width(28)
+          .height(28)
           .backgroundColor('#FFFFFF')
-          .borderRadius(14)
+          .border({ width: 1, color: '#D8E0EA' })
+          .borderRadius(10)
+          .position({ x: 8, y: PAGE_RAIL_THUMBNAIL_HEIGHT - 36 })
           .onClick(async () => {
             await this.togglePageMenu(pageIndex);
           })
       }
-      .width(PAGE_RAIL_THUMBNAIL_WIDTH)
       Row() {
         Text(`第${pageIndex + 1}页`)
-          .fontSize(10)
+          .fontSize(11)
           .fontWeight(this.isSelectedPageIndex(pageIndex) ? FontWeight.Medium : FontWeight.Normal)
           .fontColor(this.isSelectedPageIndex(pageIndex) ? '#0F766E' : '#475467')
+        Blank()
+          .layoutWeight(1)
+        if (this.pageHasNotes(pageIndex)) {
+          Text('笔记')
+            .fontSize(10)
+            .fontColor('#667085')
+        }
       }
       .width(PAGE_RAIL_THUMBNAIL_WIDTH)
       if (this.isPageMenuOpen(pageIndex)) {
@@ -4393,172 +4583,83 @@ struct EditorWorkspace {
 
   @Builder
   private buildModernPageRail(): void {
-    if (this.railCollapsed) {
-      Column({ space: 12 }) {
-        Stack({ alignContent: Alignment.Center }) {
-          this.buildEditorIcon(this.railToggleIconKind(), '#344054', 16)
-        }
-          .width(40)
-          .height(40)
-          .backgroundColor('#FFFFFF')
-          .borderRadius(14)
-          .onClick(() => {
-            this.setRailCollapsed(false);
-          })
-        Text('页')
-          .fontSize(11)
-          .fontColor('#667085')
-        Text(this.selectedPageLabel())
-          .fontSize(12)
-          .fontWeight(FontWeight.Medium)
-          .fontColor('#162033')
-          .textAlign(TextAlign.Center)
-      }
-      .width(EDITOR_PAGE_RAIL_COLLAPSED_WIDTH)
-      .height('100%')
-      .padding({ top: 12, bottom: 12, left: 8, right: 8 })
-      .backgroundColor('#F3F4F6')
-      .border({ width: 1, color: '#D8E0EA' })
-      .borderRadius(20)
-      .justifyContent(FlexAlign.Start)
-      .alignItems(HorizontalAlign.Center)
-    } else {
-      Column({ space: 10 }) {
-      Row({ space: 4 }) {
-        Stack({ alignContent: Alignment.Center }) {
-          this.buildEditorIcon(this.railToggleIconKind(), '#344054', 15)
-        }
-          .width(PAGE_RAIL_ACTION_BUTTON_SIZE)
-          .height(PAGE_RAIL_ACTION_BUTTON_SIZE)
-          .backgroundColor('#FFFFFF')
-          .borderRadius(14)
-          .onClick(() => {
-            this.setRailCollapsed(true);
-          })
-        Stack({ alignContent: Alignment.Center }) {
-          this.buildEditorIcon('undo', '#667085', 15)
-        }
-          .width(PAGE_RAIL_ACTION_BUTTON_SIZE)
-          .height(PAGE_RAIL_ACTION_BUTTON_SIZE)
-          .backgroundColor('#FFFFFF')
-          .borderRadius(14)
-          .onClick(() => {
-            this.undoStroke();
-          })
-        Stack({ alignContent: Alignment.Center }) {
-          this.buildEditorIcon('redo', '#667085', 15)
-        }
-          .width(PAGE_RAIL_ACTION_BUTTON_SIZE)
-          .height(PAGE_RAIL_ACTION_BUTTON_SIZE)
-          .backgroundColor('#FFFFFF')
-          .borderRadius(14)
-          .onClick(() => {
-            this.redoStroke();
-          })
-        Stack({ alignContent: Alignment.Center }) {
-          this.buildEditorIcon('more', '#344054', 15)
-        }
-          .width(PAGE_RAIL_ACTION_BUTTON_SIZE)
-          .height(PAGE_RAIL_ACTION_BUTTON_SIZE)
-          .backgroundColor('#FFFFFF')
-          .borderRadius(14)
-          .onClick(() => {
-            this.toggleRailMenu();
-          })
-        if (this.canAddRealPages()) {
-          Stack({ alignContent: Alignment.Center }) {
-            this.buildEditorIcon('addPage', '#FFFFFF', 15)
-          }
-            .width(PAGE_RAIL_ACTION_BUTTON_SIZE)
-            .height(PAGE_RAIL_ACTION_BUTTON_SIZE)
-            .backgroundColor('#0F766E')
-            .borderRadius(14)
-            .onClick(async () => {
-              await this.addPage();
-            })
-        }
-      }
-      .width('100%')
-      Row({ space: 8 }) {
-        TextInput({ text: this.pageSearchText, placeholder: '搜索页面' })
-          .layoutWeight(1)
-          .height(34)
-          .backgroundColor('#FFFFFF')
-          .fontSize(12)
-          .borderRadius(12)
-          .onChange((value: string) => {
-            this.pageSearchText = value;
-          })
-      }
-      .width('100%')
-      Row() {
-        Text(`页面 ${this.selectedPageLabel()}`)
-          .fontSize(13)
-          .fontWeight(FontWeight.Medium)
-          .fontColor('#101828')
-        Blank()
-          .layoutWeight(1)
-        Button('跳页')
-          .height(30)
-          .padding({ left: 10, right: 10 })
-          .backgroundColor('#FFFFFF')
-          .fontColor('#344054')
-          .fontSize(11)
-          .borderRadius(12)
-          .onClick(() => {
-            this.openPageJumpInput();
-          })
-      }
-      .width('100%')
-      if (this.showPageJumpInput) {
-        Row({ space: 6 }) {
-          TextInput({ text: this.pageJumpDraft, placeholder: `${this.activePageIndex + 1}` })
-            .layoutWeight(1)
+    if (!this.railCollapsed) {
+      Stack({ alignContent: Alignment.TopEnd }) {
+        Column({ space: 10 }) {
+          TextInput({ text: this.pageSearchText, placeholder: '搜索页面' })
+            .width('100%')
             .height(34)
             .backgroundColor('#FFFFFF')
-            .textAlign(TextAlign.Center)
+            .fontSize(12)
             .borderRadius(12)
-              .onChange((value: string) => {
-                this.pageJumpDraft = value.replace(/[^0-9]/g, '');
+            .onChange((value: string) => {
+              this.pageSearchText = value;
+            })
+          Stack({ alignContent: Alignment.TopStart }) {
+            Button(this.pageRailFilterLabel())
+              .height(32)
+              .padding({ left: 12, right: 12 })
+              .backgroundColor('#FFFFFF')
+              .fontColor('#344054')
+              .fontSize(11)
+              .borderRadius(12)
+              .onClick(() => {
+                this.toggleRailFilterMenu();
               })
-          Button('前往')
-            .height(34)
-            .enabled(this.pageJumpTargetIndex() >= 0)
+            if (this.showRailFilterMenu) {
+              Column({ space: 4 }) {
+                ForEach(['all', 'bookmarked', 'notes'], (filter: string) => {
+                  Button(this.pageRailFilterLabel(filter as PageRailFilter))
+                    .width(108)
+                    .height(30)
+                    .backgroundColor(this.pageRailFilter === filter ? '#162033' : '#FFFFFF')
+                    .fontColor(this.pageRailFilter === filter ? '#FFFFFF' : '#344054')
+                    .fontSize(11)
+                    .borderRadius(10)
+                    .onClick(() => {
+                      this.applyRailFilter(filter as PageRailFilter);
+                    })
+                }, (filter: string): string => `rail-filter-${filter}`)
+              }
+              .padding(6)
+              .backgroundColor('#FFFFFFF6')
+              .border({ width: 1, color: '#D8E0EA' })
+              .borderRadius(14)
+              .position({ x: 0, y: 38 })
+            }
+          }
+          .width('100%')
+          Scroll() {
+            Column({ space: 6 }) {
+              ForEach(this.filteredPageIndexes(), (pageIndex: number) => {
+                this.buildModernPageRailItem(pageIndex)
+              }, (pageIndex: number): string => `modern-page-rail-${this.pageKeyAt(pageIndex)}`)
+            }
+            .width('100%')
+            .padding({ top: 6, bottom: 20 })
+          }
+          .layoutWeight(1)
+        }
+        .width(EDITOR_PAGE_RAIL_WIDTH)
+        .height('100%')
+        .padding({ top: 12, right: 10, bottom: 10, left: 10 })
+        .backgroundColor('#FFFFFFD6')
+        .border({ width: 1, color: '#D8E0EA' })
+        .borderRadius(18)
+        if (this.canAddRealPages()) {
+          Button('多选')
+            .height(30)
+            .padding({ left: 10, right: 10 })
             .backgroundColor('#162033')
             .fontColor('#FFFFFF')
-            .fontSize(11)
-            .padding({ left: 12, right: 12 })
+            .fontSize(10)
             .borderRadius(12)
-            .onClick(async () => {
-              const targetIndex: number = this.pageJumpTargetIndex();
-              if (targetIndex >= 0) {
-                await this.focusPageInViewport(targetIndex);
-              }
-              this.closePageJumpInput();
+            .position({ x: EDITOR_PAGE_RAIL_WIDTH - 58, y: -8 })
+            .onClick(() => {
+              this.noteUnsupportedMenuAction('多选');
             })
         }
-        .width('100%')
       }
-      Scroll() {
-        Column({ space: 2 }) {
-          ForEach(this.filteredPageIndexes(), (pageIndex: number) => {
-            this.buildModernPageRailItem(pageIndex)
-          }, (pageIndex: number): string => `modern-page-rail-${this.pageKeyAt(pageIndex)}`)
-        }
-        .width('100%')
-        .padding({ top: 4, bottom: 18 })
-      }
-      .layoutWeight(1)
-      if (this.showRailMenu) {
-        this.buildRailMenu()
-      }
-      }
-      .width(EDITOR_PAGE_RAIL_WIDTH)
-      .height('100%')
-      .padding(8)
-      .backgroundColor('#F3F4F6')
-      .border({ width: 1, color: '#D8E0EA' })
-      .borderRadius(22)
     }
   }
 
@@ -4601,11 +4702,13 @@ struct EditorWorkspace {
         .justifyContent(FlexAlign.Center)
         .backgroundColor('#EEF2F8')
       } else {
-        Row({ space: 10 }) {
+        Row({ space: this.railCollapsed ? 0 : 8 }) {
           Stack({ alignContent: Alignment.TopStart }) {
             this.buildContinuousWritingViewport()
             this.buildFloatingBackButton()
             this.buildFloatingToolbarChrome()
+            this.buildCanvasActionGroup()
+            this.buildPageHud()
             if (this.showInspectorDrawer) {
               this.buildInspectorModal()
             }
@@ -4615,14 +4718,16 @@ struct EditorWorkspace {
           }
           .layoutWeight(1)
           .height('100%')
-          .backgroundColor('#E9EEF5')
-          .borderRadius(26)
-          this.buildModernPageRail()
+          .backgroundColor('#EEF3F8')
+          .borderRadius(22)
+          if (!this.railCollapsed) {
+            this.buildModernPageRail()
+          }
         }
         .width('100%')
         .height('100%')
-        .padding(10)
-        .backgroundColor('#E9EEF5')
+        .padding(8)
+        .backgroundColor('#E8EEF5')
       }
     }
   }
