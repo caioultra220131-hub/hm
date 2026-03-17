@@ -250,6 +250,11 @@ function removeFileIfExists(path: string): void {
   }
 }
 
+function clearDocumentPersistence(packagePath: string): void {
+  removeFileIfExists(`${packagePath}/strokes.json`);
+  removeFileIfExists(`${packagePath}/simulator-strokes.json`);
+}
+
 function buildTestPdfContent(pageCount: number): string {
   const pageObjects: string[] = [];
   for (let index = 0; index < pageCount; index += 1) {
@@ -378,6 +383,8 @@ export default function nativeNoteEngineTest() {
       const handle: NativeEngineHandle = createNativeEngineHandle();
       const engine: NativeNoteEngine = handle.engine;
       const engineId: string = handle.engineId;
+      ensureDir(document.packagePath);
+      clearDocumentPersistence(document.packagePath);
       try {
         expect(engine.openDocument(engineId, document.id, document.packagePath, config)).assertEqual(true);
 
@@ -388,15 +395,28 @@ export default function nativeNoteEngineTest() {
         expect(initialDebug?.committedStrokeCount).assertEqual(0);
         expect(initialDebug?.undoDepth).assertEqual(0);
         expect(initialDebug?.redoDepth).assertEqual(0);
+        expect(initialDebug?.activeBrushWidth).assertEqual(3.2);
 
         const initialPreview = engine.requestPreviewRender(engineId, document.id, 1, 640, 480);
         expect(initialPreview !== null).assertEqual(true);
         expect(initialPreview?.pageId).assertEqual('page-1');
         expect(initialPreview?.objectCount).assertEqual(0);
         expect(initialPreview?.layers.length).assertEqual(0);
+        expect(initialPreview?.width).assertEqual(640);
+        expect(initialPreview?.height).assertEqual(480);
+        expect(initialPreview?.raster === undefined).assertEqual(true);
+        expect(initialPreview?.imageBase64 === undefined).assertEqual(true);
+        expect(initialPreview?.imageUri === undefined).assertEqual(true);
+        expect(initialPreview?.mimeType === undefined).assertEqual(true);
 
         expect(engine.setTool(engineId, ToolType.HIGHLIGHTER)).assertEqual(true);
+        expect(engine.setBrushWidth(engineId, 2.4)).assertEqual(true);
+        expect(engine.setBrushWidth(engineId, Number.NaN)).assertEqual(false);
         expect(engine.setBrushColor(engineId, '#FF5500')).assertEqual(true);
+
+        const debugAfterFirstWidth = engine.getDebugState(engineId);
+        expect(debugAfterFirstWidth !== null).assertEqual(true);
+        expect(debugAfterFirstWidth?.activeBrushWidth).assertEqual(2.4);
         expect(engine.saveCheckpoint(engineId, document.id)).assertEqual(true);
 
         const sceneAfterFirstCheckpoint = engine.exportSceneSnapshot(engineId, document.id);
@@ -405,6 +425,7 @@ export default function nativeNoteEngineTest() {
         expect(sceneAfterFirstCheckpoint?.objects[0].pageId).assertEqual('page-1');
         expect(sceneAfterFirstCheckpoint?.objects[0].tool).assertEqual('highlighter');
         expect(sceneAfterFirstCheckpoint?.objects[0].colorHex).assertEqual('#FF5500');
+        expect(sceneAfterFirstCheckpoint?.objects[0].strokeWidth).assertEqual(2.4);
 
         const debugAfterFirstCheckpoint = engine.getDebugState(engineId);
         expect(debugAfterFirstCheckpoint !== null).assertEqual(true);
@@ -412,17 +433,31 @@ export default function nativeNoteEngineTest() {
         expect(debugAfterFirstCheckpoint?.undoDepth).assertEqual(1);
         expect(debugAfterFirstCheckpoint?.redoDepth).assertEqual(0);
         expect(debugAfterFirstCheckpoint?.lastCommittedStrokeType).assertEqual('highlight-stroke');
+        expect(debugAfterFirstCheckpoint?.activeBrushWidth).assertEqual(2.4);
 
         const previewAfterFirstCheckpoint = engine.requestPreviewRender(engineId, document.id, 1, 640, 480);
         expect(previewAfterFirstCheckpoint !== null).assertEqual(true);
         expect(previewAfterFirstCheckpoint?.objectCount).assertEqual(1);
         expect(previewAfterFirstCheckpoint?.layers.length).assertEqual(1);
         expect(previewAfterFirstCheckpoint?.layers[0]).assertEqual('ink');
+        expect(previewAfterFirstCheckpoint?.width).assertEqual(640);
+        expect(previewAfterFirstCheckpoint?.height).assertEqual(480);
+        expect(previewAfterFirstCheckpoint?.raster !== undefined).assertEqual(true);
+        expect(previewAfterFirstCheckpoint?.raster?.mimeType).assertEqual('image/png');
+        expect((previewAfterFirstCheckpoint?.raster?.base64?.length ?? 0) > 0).assertEqual(true);
+        expect(previewAfterFirstCheckpoint?.raster?.width).assertEqual(640);
+        expect(previewAfterFirstCheckpoint?.raster?.height).assertEqual(480);
+        expect((previewAfterFirstCheckpoint?.imageBase64?.length ?? 0) > 0).assertEqual(true);
+        expect(previewAfterFirstCheckpoint?.mimeType).assertEqual('image/png');
 
         expect(engine.undo(engineId)).assertEqual(true);
         const sceneAfterUndo = engine.exportSceneSnapshot(engineId, document.id);
         expect(sceneAfterUndo !== null).assertEqual(true);
         expect(sceneAfterUndo?.objectCount).assertEqual(0);
+        const previewAfterUndo = engine.requestPreviewRender(engineId, document.id, 1, 640, 480);
+        expect(previewAfterUndo !== null).assertEqual(true);
+        expect(previewAfterUndo?.objectCount).assertEqual(0);
+        expect(previewAfterUndo?.raster === undefined).assertEqual(true);
 
         const debugAfterUndo = engine.getDebugState(engineId);
         expect(debugAfterUndo !== null).assertEqual(true);
@@ -433,16 +468,36 @@ export default function nativeNoteEngineTest() {
         expect(engine.redo(engineId)).assertEqual(true);
         expect(engine.setActivePage(engineId, 'page-0')).assertEqual(true);
         expect(engine.setTool(engineId, ToolType.PEN)).assertEqual(true);
+        expect(engine.setBrushWidth(engineId, 9.5)).assertEqual(true);
         expect(engine.setBrushColor(engineId, '#0EA5E9')).assertEqual(true);
         expect(engine.saveCheckpoint(engineId, document.id)).assertEqual(true);
 
         const sceneAfterSecondCheckpoint = engine.exportSceneSnapshot(engineId, document.id);
         expect(sceneAfterSecondCheckpoint !== null).assertEqual(true);
         expect(sceneAfterSecondCheckpoint?.objectCount).assertEqual(2);
-        expect(sceneAfterSecondCheckpoint?.objects.some((object: { pageId?: string; tool: string; colorHex: string }) =>
-          object.pageId === 'page-0' && object.tool === 'pen' && object.colorHex === '#0EA5E9')).assertEqual(true);
-        expect(sceneAfterSecondCheckpoint?.objects.some((object: { pageId?: string; tool: string; colorHex: string }) =>
-          object.pageId === 'page-1' && object.tool === 'highlighter' && object.colorHex === '#FF5500')).assertEqual(true);
+        expect(sceneAfterSecondCheckpoint?.objects.some((object: { pageId?: string; tool: string; colorHex: string; strokeWidth?: number }) =>
+          object.pageId === 'page-0' && object.tool === 'pen' && object.colorHex === '#0EA5E9' && object.strokeWidth === 9.5)).assertEqual(true);
+        expect(sceneAfterSecondCheckpoint?.objects.some((object: { pageId?: string; tool: string; colorHex: string; strokeWidth?: number }) =>
+          object.pageId === 'page-1' && object.tool === 'highlighter' && object.colorHex === '#FF5500' && object.strokeWidth === 2.4)).assertEqual(true);
+
+        const debugAfterSecondCheckpoint = engine.getDebugState(engineId);
+        expect(debugAfterSecondCheckpoint !== null).assertEqual(true);
+        expect(debugAfterSecondCheckpoint?.activeBrushWidth).assertEqual(9.5);
+
+        expect(engine.openDocument(engineId, document.id, document.packagePath, config)).assertEqual(true);
+        const reopenedScene = engine.exportSceneSnapshot(engineId, document.id);
+        expect(reopenedScene !== null).assertEqual(true);
+        expect(reopenedScene?.objectCount).assertEqual(2);
+        expect(reopenedScene?.objects.some((object: { pageId?: string; tool: string; strokeWidth?: number }) =>
+          object.pageId === 'page-0' && object.tool === 'pen' && object.strokeWidth === 9.5)).assertEqual(true);
+        expect(reopenedScene?.objects.some((object: { pageId?: string; tool: string; strokeWidth?: number }) =>
+          object.pageId === 'page-1' && object.tool === 'highlighter' && object.strokeWidth === 2.4)).assertEqual(true);
+        const reopenedPreview = engine.requestPreviewRender(engineId, document.id, 1, 640, 480);
+        expect(reopenedPreview !== null).assertEqual(true);
+        expect(reopenedPreview?.pageId).assertEqual('page-1');
+        expect(reopenedPreview?.objectCount).assertEqual(1);
+        expect(reopenedPreview?.raster?.mimeType).assertEqual('image/png');
+        expect((reopenedPreview?.raster?.base64?.length ?? 0) > 0).assertEqual(true);
 
         const insertedContract = {
           ...(config.pageContracts?.['page-0'] ?? config.pageContract),
@@ -469,6 +524,82 @@ export default function nativeNoteEngineTest() {
         expect(debugAfterDelete?.pageCount).assertEqual(2);
       } finally {
         disposeNativeEngineHandle(engine, engineId, document.id);
+        clearDocumentPersistence(document.packagePath);
+      }
+    });
+
+    it('simulatorFingerWritingCommitsFreshStrokeWithoutSyntheticSaveDuplication', 0, () => {
+      const document = buildBlankPagedDocument();
+      const config = buildNativeOpenDocumentConfig(document, ToolType.PEN);
+      const handle: NativeEngineHandle = createNativeEngineHandle();
+      const engine: NativeNoteEngine = handle.engine;
+      const engineId: string = handle.engineId;
+      ensureDir(document.packagePath);
+      clearDocumentPersistence(document.packagePath);
+      try {
+        expect(engine.openDocument(engineId, document.id, document.packagePath, config)).assertEqual(true);
+        expect(engine.setFingerWritingEnabled(engineId, true)).assertEqual(true);
+        expect(engine.setTool(engineId, ToolType.PEN)).assertEqual(true);
+        expect(engine.setBrushColor(engineId, '#EF4444')).assertEqual(true);
+        expect(engine.setBrushWidth(engineId, 8.4)).assertEqual(true);
+
+        const previewBeforeStroke = engine.requestPreviewRender(engineId, document.id, 1, 640, 480);
+        expect(previewBeforeStroke !== null).assertEqual(true);
+        expect(previewBeforeStroke?.objectCount).assertEqual(0);
+        expect(previewBeforeStroke?.raster === undefined).assertEqual(true);
+
+        expect(engine.injectSimulatorFingerEvent(engineId, 'down', 0.18, 0.22, 1)).assertEqual(true);
+        expect(engine.injectSimulatorFingerEvent(engineId, 'move', 0.36, 0.30, 1)).assertEqual(true);
+        expect(engine.injectSimulatorFingerEvent(engineId, 'move', 0.58, 0.41, 1)).assertEqual(true);
+        expect(engine.injectSimulatorFingerEvent(engineId, 'up', 0.74, 0.56, 0)).assertEqual(true);
+
+        const debugAfterStroke = engine.getDebugState(engineId);
+        expect(debugAfterStroke !== null).assertEqual(true);
+        expect(debugAfterStroke?.fingerWritingEnabled).assertEqual(true);
+        expect(debugAfterStroke?.committedStrokeCount).assertEqual(1);
+        expect(debugAfterStroke?.undoDepth).assertEqual(1);
+        expect(debugAfterStroke?.activeBrushWidth).assertEqual(8.4);
+
+        const sceneAfterStroke = engine.exportSceneSnapshot(engineId, document.id);
+        expect(sceneAfterStroke !== null).assertEqual(true);
+        expect(sceneAfterStroke?.objectCount).assertEqual(1);
+        expect(sceneAfterStroke?.objects[0].pageId).assertEqual('page-1');
+        expect(sceneAfterStroke?.objects[0].tool).assertEqual('pen');
+        expect(sceneAfterStroke?.objects[0].colorHex).assertEqual('#EF4444');
+        expect(sceneAfterStroke?.objects[0].strokeWidth).assertEqual(8.4);
+        expect((sceneAfterStroke?.objects[0].pointCount ?? 0) >= 4).assertEqual(true);
+
+        const previewAfterStroke = engine.requestPreviewRender(engineId, document.id, 1, 640, 480);
+        expect(previewAfterStroke !== null).assertEqual(true);
+        expect(previewAfterStroke?.objectCount).assertEqual(1);
+        expect(previewAfterStroke?.raster?.mimeType).assertEqual('image/png');
+        expect((previewAfterStroke?.raster?.base64?.length ?? 0) > 0).assertEqual(true);
+        const previewBase64AfterStroke: string = previewAfterStroke?.raster?.base64 ?? '';
+
+        expect(engine.saveCheckpoint(engineId, document.id)).assertEqual(true);
+        const sceneAfterSave = engine.exportSceneSnapshot(engineId, document.id);
+        expect(sceneAfterSave !== null).assertEqual(true);
+        expect(sceneAfterSave?.objectCount).assertEqual(1);
+        expect(sceneAfterSave?.objects[0].colorHex).assertEqual('#EF4444');
+
+        expect(engine.undo(engineId)).assertEqual(true);
+        const sceneAfterUndo = engine.exportSceneSnapshot(engineId, document.id);
+        expect(sceneAfterUndo !== null).assertEqual(true);
+        expect(sceneAfterUndo?.objectCount).assertEqual(0);
+        const previewAfterUndo = engine.requestPreviewRender(engineId, document.id, 1, 640, 480);
+        expect(previewAfterUndo !== null).assertEqual(true);
+        expect(previewAfterUndo?.objectCount).assertEqual(0);
+        expect(previewAfterUndo?.raster === undefined).assertEqual(true);
+        expect((previewAfterUndo?.imageBase64 ?? '') === previewBase64AfterStroke).assertEqual(false);
+
+        expect(engine.saveCheckpoint(engineId, document.id)).assertEqual(true);
+        expect(engine.openDocument(engineId, document.id, document.packagePath, config)).assertEqual(true);
+        const reopenedScene = engine.exportSceneSnapshot(engineId, document.id);
+        expect(reopenedScene !== null).assertEqual(true);
+        expect(reopenedScene?.objectCount).assertEqual(0);
+      } finally {
+        disposeNativeEngineHandle(engine, engineId, document.id);
+        clearDocumentPersistence(document.packagePath);
       }
     });
 
@@ -535,6 +666,8 @@ export default function nativeNoteEngineTest() {
         expect(preview?.layers[1]).assertEqual('ink');
         expect(preview?.objectCount).assertEqual(1);
         expect(preview?.layout?.pages[0].backgroundId?.startsWith('paper/')).assertEqual(true);
+        expect(preview?.raster?.mimeType).assertEqual('image/png');
+        expect((preview?.raster?.base64?.length ?? 0) > 0).assertEqual(true);
 
         const debugState = engine.getDebugState(engineId);
         expect(debugState !== null).assertEqual(true);
@@ -563,6 +696,7 @@ export default function nativeNoteEngineTest() {
         activeBackend: 'opengles',
         activeMode: 'paged',
         activeColor: '#1D2736',
+        activeBrushWidth: 7.25,
         checkpointCount: 3,
         predictionEnabled: true,
         pressureEnabled: true,
@@ -614,6 +748,7 @@ export default function nativeNoteEngineTest() {
       expect(debugState?.activePageId).assertEqual('page-2');
       expect(debugState?.activePageIndex).assertEqual(2);
       expect(debugState?.pageCount).assertEqual(5);
+      expect(debugState?.activeBrushWidth).assertEqual(7.25);
       expect(debugState?.inputTraceRecording).assertEqual(true);
       expect(debugState?.inputReplayActive).assertEqual(false);
       expect(debugState?.inputTraceStatus).assertEqual('recording');
@@ -637,6 +772,7 @@ export default function nativeNoteEngineTest() {
       expect(deviceState?.activePageId).assertEqual('page-0');
       expect(deviceState?.activePageIndex).assertEqual(0);
       expect(deviceState?.pageCount).assertEqual(1);
+      expect(deviceState?.activeBrushWidth).assertEqual(3.2);
       expect(deviceState?.runtimeProfile).assertEqual('device-native');
       expect(deviceState?.traceSupported).assertEqual(true);
       expect(deviceState?.previewRenderSupported).assertEqual(true);
@@ -648,6 +784,7 @@ export default function nativeNoteEngineTest() {
       expect(fallbackState?.activePageId).assertEqual('page-0');
       expect(fallbackState?.activePageIndex).assertEqual(0);
       expect(fallbackState?.pageCount).assertEqual(1);
+      expect(fallbackState?.activeBrushWidth).assertEqual(3.2);
       expect(fallbackState?.inputTraceRecording).assertEqual(false);
       expect(fallbackState?.inputReplayActive).assertEqual(false);
       expect(fallbackState?.inputTraceStatus).assertEqual('');
@@ -668,6 +805,7 @@ export default function nativeNoteEngineTest() {
       expect(compatState?.activePageId).assertEqual('page-0');
       expect(compatState?.activePageIndex).assertEqual(0);
       expect(compatState?.pageCount).assertEqual(1);
+      expect(compatState?.activeBrushWidth).assertEqual(3.2);
       expect(compatState?.runtimeProfile).assertEqual('simulator-stub');
       expect(compatState?.traceSupported).assertEqual(true);
     });

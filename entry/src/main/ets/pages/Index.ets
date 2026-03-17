@@ -598,13 +598,14 @@ struct Index {
           Text(INDEX_COPY.libraryTitle)
             .fontSize(28)
             .fontWeight(FontWeight.Bold)
-            .fontColor('#162033')
+            .fontColor('#344054')
           Scroll() {
             Column() {
               TextInput({ text: this.searchText, placeholder: INDEX_COPY.searchPlaceholder })
                 .height(42)
                 .margin({ top: 16, bottom: 16 })
-                .backgroundColor('#FFFFFF')
+                .backgroundColor('#F2F4F7')
+                .borderRadius(12)
                 .onChange((value: string) => {
                   this.searchText = value;
                   this.reload();
@@ -612,8 +613,9 @@ struct Index {
               Button(INDEX_COPY.createDocument)
                 .width('100%')
                 .height(42)
-                .backgroundColor('#162033')
+                .backgroundColor('#006FFF')
                 .fontColor('#FFFFFF')
+                .borderRadius(12)
                 .onClick(() => {
                   this.showCreatePanel = true;
                   this.showDetailsPanel = false;
@@ -624,8 +626,9 @@ struct Index {
                 .width('100%')
                 .height(36)
                 .margin({ top: 10 })
-                .backgroundColor(this.viewMode === 'home' ? '#DCE6FF' : '#FFFFFF')
-                .fontColor('#162033')
+                .backgroundColor(this.viewMode === 'home' ? '#E8F0FE' : '#FFFFFF')
+                .fontColor('#344054')
+                .borderRadius(10)
                 .onClick(() => {
                   this.viewMode = 'home';
                   this.reload();
@@ -635,7 +638,8 @@ struct Index {
                 .height(36)
                 .margin({ top: 8 })
                 .backgroundColor(this.viewMode === 'favorites' ? '#FFE8C7' : '#FFFFFF')
-                .fontColor('#162033')
+                .fontColor('#344054')
+                .borderRadius(10)
                 .onClick(() => {
                   this.viewMode = 'favorites';
                   this.reload();
@@ -645,7 +649,8 @@ struct Index {
                 .height(36)
                 .margin({ top: 8, bottom: 18 })
                 .backgroundColor(this.viewMode === 'trash' ? '#FFD8D8' : '#FFFFFF')
-                .fontColor('#162033')
+                .fontColor('#344054')
+                .borderRadius(10)
                 .onClick(() => {
                   this.viewMode = 'trash';
                   this.reload();
@@ -654,12 +659,14 @@ struct Index {
               Text(INDEX_COPY.folders)
                 .fontSize(14)
                 .fontWeight(FontWeight.Medium)
+                .fontColor('#344054')
                 .margin({ bottom: 8 })
               Button(INDEX_COPY.allFolders)
                 .width('100%')
                 .height(34)
-                .backgroundColor(this.activeFolderId === 'all' ? '#162033' : '#FFFFFF')
-                .fontColor(this.activeFolderId === 'all' ? '#FFFFFF' : '#162033')
+                .backgroundColor(this.activeFolderId === 'all' ? '#0B57D0' : '#FFFFFF')
+                .fontColor(this.activeFolderId === 'all' ? '#FFFFFF' : '#344054')
+                .borderRadius(10)
                 .onClick(() => {
                   this.activeFolderId = 'all';
                   this.reload();
@@ -669,8 +676,9 @@ struct Index {
                   .width('100%')
                   .height(34)
                   .margin({ top: 8 })
-                  .backgroundColor(this.activeFolderId === folder.id ? folder.color : '#FFFFFF')
-                  .fontColor(this.activeFolderId === folder.id ? '#FFFFFF' : '#162033')
+                  .backgroundColor(this.activeFolderId === folder.id ? '#E8F0FE' : '#FFFFFF')
+                  .fontColor(this.activeFolderId === folder.id ? '#0B57D0' : '#344054')
+                  .borderRadius(10)
                   .onClick(() => {
                     this.activeFolderId = folder.id;
                     this.viewMode = 'home';
@@ -681,10 +689,12 @@ struct Index {
               Text(INDEX_COPY.tags)
                 .fontSize(14)
                 .fontWeight(FontWeight.Medium)
+                .fontColor('#344054')
                 .margin({ top: 18, bottom: 8 })
               TextInput({ text: this.createTagTitle, placeholder: INDEX_COPY.newTagPlaceholder })
                 .height(40)
-                .backgroundColor('#FFFFFF')
+                .backgroundColor('#F2F4F7')
+                .borderRadius(10)
                 .onChange((value: string) => {
                   this.createTagTitle = value;
                   this.createTagErrorMessage = '';
@@ -693,8 +703,9 @@ struct Index {
                 .width('100%')
                 .height(34)
                 .margin({ top: 8, bottom: this.createTagErrorMessage.length > 0 ? 0 : 8 })
-                .backgroundColor(this.createTagBusy ? '#98A2B3' : '#4C7DFF')
+                .backgroundColor(this.createTagBusy ? '#98A2B3' : '#006FFF')
                 .fontColor('#FFFFFF')
+                .borderRadius(10)
                 .onClick(() => {
                   this.createTag();
                 })
@@ -707,8 +718,9 @@ struct Index {
               Button(INDEX_COPY.allTags)
                 .width('100%')
                 .height(34)
-                .backgroundColor(this.activeTagId === 'all' ? '#162033' : '#FFFFFF')
-                .fontColor(this.activeTagId === 'all' ? '#FFFFFF' : '#162033')
+                .backgroundColor(this.activeTagId === 'all' ? '#0B57D0' : '#FFFFFF')
+                .fontColor(this.activeTagId === 'all' ? '#FFFFFF' : '#344054')
+                .borderRadius(10)
                 .onClick(() => {
                   this.activeTagId = 'all';
                   this.reload();
@@ -718,8 +730,9 @@ struct Index {
                   .width('100%')
                   .height(34)
                   .margin({ top: 8 })
-                  .backgroundColor(this.activeTagId === tag.id ? tag.color : '#FFFFFF')
-                  .fontColor(this.activeTagId === tag.id ? '#FFFFFF' : '#162033')
+                  .backgroundColor(this.activeTagId === tag.id ? '#E8F0FE' : '#FFFFFF')
+                  .fontColor(this.activeTagId === tag.id ? '#0B57D0' : '#344054')
+                  .borderRadius(10)
                   .onClick(() => {
                     this.activeTagId = tag.id;
                     this.viewMode = 'home';
@@ -736,13 +749,13 @@ struct Index {
         .width(250)
         .height('100%')
         .padding(20)
-        .backgroundColor('#F4F7FB')
+        .backgroundColor('#FFFFFF')
 
         Column() {
           Text(this.viewMode === 'trash' ? INDEX_COPY.trash : INDEX_COPY.documents)
             .fontSize(28)
             .fontWeight(FontWeight.Bold)
-            .fontColor('#162033')
+            .fontColor('#1A1A1A')
           if (this.loading) {
             LoadingProgress()
               .width(32)
@@ -813,7 +826,7 @@ struct Index {
                         Text(doc.title)
                           .fontSize(20)
                           .fontWeight(FontWeight.Bold)
-                          .fontColor('#162033')
+                          .fontColor('#1A1A1A')
                         Row({ space: 8 }) {
                           ForEach(this.documentBadges(doc), (badge: DocumentBadgeVM) => {
                             Text(badge.label)
@@ -842,24 +855,27 @@ struct Index {
                     Row() {
                       Button(INDEX_COPY.open)
                         .height(34)
-                        .backgroundColor('#162033')
+                        .backgroundColor('#006FFF')
                         .fontColor('#FFFFFF')
+                        .borderRadius(10)
                         .onClick(() => {
                           this.openDocument(doc);
                         })
                       Button(doc.isFavorite ? INDEX_COPY.unfavorite : INDEX_COPY.favorites)
                         .height(34)
                         .margin({ left: 8 })
-                        .backgroundColor('#F2F5FA')
-                        .fontColor('#162033')
+                        .backgroundColor('#F2F4F7')
+                        .fontColor('#344054')
+                        .borderRadius(10)
                         .onClick(() => {
                           this.toggleFavorite(doc);
                         })
                       Button(INDEX_COPY.details)
                         .height(34)
                         .margin({ left: 8 })
-                        .backgroundColor('#F2F5FA')
-                        .fontColor('#162033')
+                        .backgroundColor('#F2F4F7')
+                        .fontColor('#344054')
+                        .borderRadius(10)
                         .onClick(() => {
                           this.toggleDetailsPanel(doc);
                         })
@@ -877,8 +893,8 @@ struct Index {
                   .width('100%')
                   .padding(18)
                   .margin({ top: 18 })
-                  .backgroundColor(this.showDetailsPanel && this.selectedDocumentId === doc.id ? '#EEF4FF' : '#FFFFFF')
-                  .borderRadius(22)
+                  .backgroundColor(this.showDetailsPanel && this.selectedDocumentId === doc.id ? '#E8F0FE' : '#FFFFFF')
+                  .borderRadius(16)
                   .onClick(() => {
                     this.selectDocument(doc);
                   })
@@ -891,7 +907,7 @@ struct Index {
         .layoutWeight(1)
         .height('100%')
         .padding(24)
-        .backgroundColor('#F7F9FC')
+        .backgroundColor('#FFFFFF')
 
         if (this.isSidePanelVisible()) {
           Column() {
@@ -899,7 +915,7 @@ struct Index {
               Text(this.showCreatePanel ? INDEX_COPY.createPanelTitle : INDEX_COPY.detailsPanelTitle)
                 .fontSize(22)
                 .fontWeight(FontWeight.Bold)
-                .fontColor('#162033')
+                .fontColor('#1A1A1A')
               Blank()
                 .layoutWeight(1)
                 .height('100%')
@@ -909,8 +925,9 @@ struct Index {
               Button('X')
                 .width(36)
                 .height(36)
-                .backgroundColor('#F2F5FA')
-                .fontColor('#162033')
+                .backgroundColor('#F2F4F7')
+                .fontColor('#344054')
+                .borderRadius(18)
                 .fontSize(20)
                 .onClick(() => {
                   this.closeSidePanel();
@@ -934,8 +951,9 @@ struct Index {
                       Button(DOCUMENT_TYPE_LABELS[type])
                         .height(34)
                         .margin({ top: 16, right: 8 })
-                        .backgroundColor(this.createType === type ? '#162033' : '#FFFFFF')
-                        .fontColor(this.createType === type ? '#FFFFFF' : '#162033')
+                        .backgroundColor(this.createType === type ? '#0B57D0' : '#FFFFFF')
+                        .fontColor(this.createType === type ? '#FFFFFF' : '#344054')
+                        .borderRadius(10)
                         .onClick(() => {
                           this.selectCreateType(type);
                         })
@@ -947,8 +965,9 @@ struct Index {
                         .height(34)
                         .margin({ top: 12, right: 8 })
                         .enabled(!this.isImportCreateType() || mode === DocumentMode.PAGED)
-                        .backgroundColor(this.createMode === mode ? '#162033' : '#FFFFFF')
-                        .fontColor(this.createMode === mode ? '#FFFFFF' : '#162033')
+                        .backgroundColor(this.createMode === mode ? '#0B57D0' : '#FFFFFF')
+                        .fontColor(this.createMode === mode ? '#FFFFFF' : '#344054')
+                        .borderRadius(10)
                         .onClick(() => {
                           if (this.isImportCreateType() && mode !== DocumentMode.PAGED) {
                             return;
@@ -968,8 +987,9 @@ struct Index {
                       Button(this.createBackendLabel(backend))
                         .height(34)
                         .margin({ top: 12, right: 8 })
-                        .backgroundColor(this.createBackend === backend ? '#162033' : '#FFFFFF')
-                        .fontColor(this.createBackend === backend ? '#FFFFFF' : '#162033')
+                        .backgroundColor(this.createBackend === backend ? '#0B57D0' : '#FFFFFF')
+                        .fontColor(this.createBackend === backend ? '#FFFFFF' : '#344054')
+                        .borderRadius(10)
                         .onClick(() => {
                           this.createBackend = backend;
                         })
@@ -1010,8 +1030,8 @@ struct Index {
                   .height(40)
                   .margin({ top: 18 })
                   .justifyContent(FlexAlign.Center)
-                  .backgroundColor(this.createBusy ? '#98A2B3' : '#162033')
-                  .borderRadius(999)
+                  .backgroundColor(this.createBusy ? '#98A2B3' : '#006FFF')
+                  .borderRadius(12)
                   .opacity(this.createBusy ? 0.72 : 1)
                   .onClick(() => {
                     if (this.createBusy) {
@@ -1031,8 +1051,9 @@ struct Index {
                     .width('100%')
                     .height(38)
                     .margin({ top: 12 })
-                    .backgroundColor('#F2F5FA')
-                    .fontColor('#162033')
+                    .backgroundColor('#F2F4F7')
+                    .fontColor('#344054')
+                    .borderRadius(10)
                     .onClick(() => {
                       this.saveRename();
                     })
@@ -1076,7 +1097,7 @@ struct Index {
           .width(320)
           .height('100%')
           .padding(20)
-          .backgroundColor('#F4F7FB')
+          .backgroundColor('#FFFFFF')
         }
       }
       .width('100%')
@@ -1092,13 +1113,14 @@ struct Index {
             Text(INDEX_COPY.deletePanelTitle)
               .fontSize(20)
               .fontWeight(FontWeight.Bold)
-              .fontColor('#162033')
+              .fontColor('#1A1A1A')
             Button(INDEX_COPY.moveToTrash)
               .width('100%')
               .height(40)
               .margin({ top: 18 })
-              .backgroundColor('#162033')
+              .backgroundColor('#006FFF')
               .fontColor('#FFFFFF')
+              .borderRadius(12)
               .onClick(() => {
                 this.deleteDocument('trash');
               })
@@ -1115,8 +1137,9 @@ struct Index {
               .width('100%')
               .height(40)
               .margin({ top: 10 })
-              .backgroundColor('#F2F5FA')
-              .fontColor('#162033')
+              .backgroundColor('#F2F4F7')
+              .fontColor('#344054')
+              .borderRadius(12)
               .onClick(() => {
                 this.showDeletePanel = false;
                 this.deleteTargetId = '';
@@ -1131,6 +1154,6 @@ struct Index {
         .height('100%')
       }
     }
-    .backgroundColor('#EEF2F8')
+    .backgroundColor('#FFFFFF')
   }
 }

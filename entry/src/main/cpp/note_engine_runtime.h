@@ -31,6 +31,7 @@ public:
     virtual bool SetBackend(const std::string& engineId, const std::string& backend) = 0;
     virtual bool SetDocumentMode(const std::string& engineId, const std::string& mode) = 0;
     virtual bool SetBrushColor(const std::string& engineId, const std::string& colorHex) = 0;
+    virtual bool SetBrushWidth(const std::string& engineId, double width) = 0;
     virtual bool Undo(const std::string& engineId) = 0;
     virtual bool Redo(const std::string& engineId) = 0;
     virtual bool StartInputTraceRecording(const std::string& engineId, const std::string& tracePath) = 0;

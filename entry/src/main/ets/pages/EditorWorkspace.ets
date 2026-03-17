@@ -1,5 +1,7 @@
-﻿import { router } from '@kit.ArkUI';
+import { router } from '@kit.ArkUI';
 import { common } from '@kit.AbilityKit';
+import common2D from '@ohos.graphics.common2D';
+import imageFeaturePicker from '@hms.officeservice.imageFeaturePicker';
 import nativeModule from 'libentry.so';
 import { PreviewThumbnail } from '../components/PreviewThumbnail';
 import {
@@ -29,8 +31,17 @@ import {
 } from '../models/NoteModels';
 import { DocumentPreviewSnapshot } from '../models/PreviewModels';
 import { DocumentLibraryService } from '../services/DocumentLibraryService';
+import { AppSettingsService } from '../services/AppSettingsService';
 import { EngineConfig, NativeDebugState, NativeNoteEngine, TraceActionResult } from '../services/NativeNoteEngine';
 import { MarkdownPreviewBlock, MarkdownUtils } from '../utils/MarkdownUtils';
+import {
+  AppSettings,
+  BRUSH_RECENT_COLOR_LIMIT,
+  BrushSettings,
+  LineWidthPreset,
+  PressureCurvePoint,
+  createDefaultAppSettings
+} from '../models/AppSettingsModels';
 
 function parseAreaValue(value: Object): number {
   const parsed: number = Number.parseFloat(`${value}`);
@@ -113,7 +124,7 @@ interface SimulatorFingerGestureTarget {
 type EmbeddedOverlayDraft = DocumentEmbeddedBlock;
 type SingleFingerPanMode = 'disabled' | 'vertical' | 'free';
 type PageRailFilter = 'all' | 'bookmarked' | 'notes';
-type ToolbarSnapSlot = 'top-center' | 'left-middle' | 'right-middle' | 'bottom-center';
+type ToolbarSnapSlot = 'top-center' | 'left-middle';
 type EditorUiIcon =
   'back' |
   'drag' |
@@ -140,19 +151,22 @@ const NATIVE_PAGE_METHOD_SET_ACTIVE: string = 'setActivePage';
 const NATIVE_PAGE_METHOD_INSERT: string = 'insertPage';
 const NATIVE_PAGE_METHOD_DELETE: string = 'deletePage';
 const EDITOR_INSPECTOR_WIDTH: number = 688;
-const EDITOR_PAGE_RAIL_WIDTH: number = 156;
+const EDITOR_PAGE_RAIL_WIDTH: number = 216;
 const EDITOR_PAGE_RAIL_COLLAPSED_WIDTH: number = 68;
-const PAGE_RAIL_THUMBNAIL_WIDTH: number = 104;
-const PAGE_RAIL_THUMBNAIL_HEIGHT: number = 142;
+const PAGE_RAIL_THUMBNAIL_WIDTH: number = 136;
+const PAGE_RAIL_THUMBNAIL_HEIGHT: number = 186;
 const PAGE_RAIL_MENU_WIDTH: number = 176;
-const PAGE_RAIL_ACTION_BUTTON_SIZE: number = 30;
+const PAGE_RAIL_ACTION_BUTTON_SIZE: number = 34;
 const PAGE_RAIL_CARD_RADIUS: number = 16;
-const PAGE_RAIL_PAGE_MENU_BUTTON_SIZE: number = 26;
-const FLOATING_TOOLBAR_WIDTH: number = 428;
-const FLOATING_TOOLBAR_VERTICAL_WIDTH: number = 116;
-const FLOATING_TOOL_BUTTON_SIZE: number = 36;
+const PAGE_RAIL_PAGE_MENU_BUTTON_SIZE: number = 30;
+/** 水平工具栏可见宽度，超出部分通过滑动查看（参考图二） */
+const FLOATING_TOOLBAR_VISIBLE_WIDTH: number = 380;
+const FLOATING_TOOLBAR_WIDTH: number = 592;
+/** 竖向工具栏时属性面板宽度，收窄以突出竖向排列 */
+const FLOATING_TOOLBAR_VERTICAL_WIDTH: number = 200;
+const FLOATING_TOOL_BUTTON_SIZE: number = 40;
 const FLOATING_TOOLBAR_MORE_BUTTON_SIZE: number = 34;
-const FLOATING_TOOLBAR_COLOR_CHIP_SIZE: number = 16;
+const FLOATING_TOOLBAR_COLOR_CHIP_SIZE: number = 20;
 const AUTOSAVE_DEBOUNCE_MS: number = 900;
 const PAGE_SWIPE_DRAG_LIMIT: number = 132;
 const PAGE_SWIPE_TRIGGER_DISTANCE: number = 84;
@@ -168,6 +182,12 @@ const VIEWPORT_INERTIA_FRAME_MS: number = 16;
 const VIEWPORT_INERTIA_FRICTION: number = 0.88;
 const VIEWPORT_INERTIA_MIN_SPEED: number = 0.02;
 const VIEWPORT_HORIZONTAL_OVERFLOW_THRESHOLD: number = 12;
+const BRUSH_WIDTH_MIN: number = 1.2;
+const BRUSH_WIDTH_MAX: number = 12;
+const BRUSH_WIDTH_STEP: number = 0.1;
+const NATIVE_PREVIEW_SYNC_RETRY_DELAY_MS: number = 60;
+const NATIVE_PREVIEW_SYNC_MAX_RETRIES: number = 6;
+const DEFAULT_APP_SETTINGS: AppSettings = createDefaultAppSettings();
 const EDITOR_WORKSPACE_COPY: EditorWorkspaceCopy = {
   back: '返回',
   save: '保存',
@@ -225,6 +245,9 @@ struct EditorWorkspace {
   private readonly nativePageBridge: Record<string, Object> = nativeModule as Record<string, Object>;
   private readonly xComponentId: string = `note-surface-${Date.now()}`;
   private libraryService?: DocumentLibraryService;
+  private settingsService?: AppSettingsService;
+  private appSettings: AppSettings = createDefaultAppSettings();
+  private brushSettingsPersistTask: Promise<void> = Promise.resolve();
   private readonly pageMarkdownDrafts: Map<string, string> = new Map<string, string>();
   private readonly dirtyPageIds: Set<string> = new Set<string>();
   private bootstrapping: boolean = false;
@@ -237,6 +260,11 @@ struct EditorWorkspace {
   private lastNativeMutationSignature: string = '';
   private contentMutationVersion: number = 0;
   private lastPersistedContentMutationVersion: number = 0;
+  private nativePreviewSyncTimerId: number = -1;
+  private nativePreviewSyncInFlight: boolean = false;
+  private nativePreviewSyncQueued: boolean = false;
+  private nativePreviewSyncExpectedStrokeCount: number = 0;
+  private nativePreviewSyncRetryBudget: number = 0;
   private pageSelectionInFlight: boolean = false;
   private pageViewportInitialized: boolean = false;
   private toolbarDragOriginX: number = 0;
@@ -251,10 +279,13 @@ struct EditorWorkspace {
   private viewportInertiaTimerId: number = -1;
   private viewportInertiaResolve: (() => void) | null = null;
   private viewportPinchOriginScale: number = 1;
+  private lastPreviewRenderSignature: string = '';
   private simulatorFingerGestureActive: boolean = false;
   private simulatorFingerGesturePageIndex: number = -1;
   private simulatorFingerGestureLastXRatio: number = 0.5;
   private simulatorFingerGestureLastYRatio: number = 0.5;
+  private simulatorFingerGestureOriginLocalX: number = Number.NaN;
+  private simulatorFingerGestureOriginLocalY: number = Number.NaN;
   private pageHudAutoHideToken: number = 0;
   private embeddedSelectionOriginX: number = 0;
   private embeddedSelectionOriginY: number = 0;
@@ -283,10 +314,15 @@ struct EditorWorkspace {
   @State private engineId: string = '';
   @State private currentTool: ToolType = ToolType.PEN;
   @State private currentColor: string = PALETTE_COLORS[0];
+  @State private currentWidthValue: number = DEFAULT_APP_SETTINGS.brush.lineWidthPresets[1].width;
+  @State private selectedWidthSlotId: string = DEFAULT_APP_SETTINGS.brush.defaultLineWidthPresetId;
+  @State private widthSlots: LineWidthPreset[] = createDefaultAppSettings().brush.lineWidthPresets;
+  @State private visibleRecentColors: string[] = createDefaultAppSettings().brush.recentColors;
   @State private currentMode: DocumentMode = DocumentMode.PAGED;
   @State private currentBackend: RenderBackend = RenderBackend.OPEN_GLES;
   @State private debugStateText: string = '';
   @State private debugState: NativeDebugState | null = null;
+  @State private previewRefreshVersion: number = 0;
   @State private simulatorSceneSnapshot: NativeSceneSnapshot | null = null;
   @State private showTracePanel: boolean = false;
   @State private traceActionMessage: string = '';
@@ -315,6 +351,10 @@ struct EditorWorkspace {
   @State private embeddedComposerPageId: string = '';
   @State private embeddedComposerPageIndex: number = -1;
   @State private embeddedComposerPreviewVersion: number = 0;
+  @State private showCustomColorDialog: boolean = false;
+  @State private customColorDraft: string = PALETTE_COLORS[0];
+  /** 工具栏是否展开更多工具（水平布局时使用） */
+  @State private toolbarExpanded: boolean = false;
 
   aboutToAppear(): void {
     if (this.bootstrapping || this.engineId.length > 0 || this.document !== null || !this.loading) {
@@ -325,6 +365,7 @@ struct EditorWorkspace {
 
   aboutToDisappear(): void {
     this.cancelPendingAutosave();
+    this.cancelPendingNativePreviewSync();
     if (this.leavingEditor || this.shuttingDown) {
       if (!this.shuttingDown && !this.shutdownScheduled) {
         this.shutdownScheduled = true;
@@ -378,6 +419,355 @@ struct EditorWorkspace {
       return fallback;
     }
     return 'Unknown error';
+  }
+
+  private cloneLineWidthPreset(preset: LineWidthPreset): LineWidthPreset {
+    return {
+      id: preset.id,
+      title: preset.title,
+      description: preset.description,
+      width: preset.width
+    };
+  }
+
+  private cloneLineWidthPresets(presets: LineWidthPreset[]): LineWidthPreset[] {
+    const cloned: LineWidthPreset[] = [];
+    for (const preset of presets) {
+      cloned.push(this.cloneLineWidthPreset(preset));
+    }
+    return cloned;
+  }
+
+  private cloneRecentColors(colors: string[]): string[] {
+    const cloned: string[] = [];
+    for (const color of colors) {
+      cloned.push(color);
+    }
+    return cloned;
+  }
+
+  private brushWidthSlots(): LineWidthPreset[] {
+    return this.widthSlots.length > 0 ? this.widthSlots : this.cloneLineWidthPresets(DEFAULT_APP_SETTINGS.brush.lineWidthPresets);
+  }
+
+  private widthSlotById(slotId: string, presets: LineWidthPreset[] = this.brushWidthSlots()): LineWidthPreset | undefined {
+    return presets.find((preset: LineWidthPreset) => preset.id === slotId);
+  }
+
+  private activeWidthSlot(): LineWidthPreset {
+    return this.widthSlotById(this.selectedWidthSlotId) ??
+      this.widthSlotById('medium') ??
+      this.brushWidthSlots()[0];
+  }
+
+  private clampBrushWidth(value: number): number {
+    const clamped: number = clampToRange(value, BRUSH_WIDTH_MIN, BRUSH_WIDTH_MAX);
+    return Math.round(clamped * 10) / 10;
+  }
+
+  private normalizeEditorRecentColors(colors: string[]): string[] {
+    const normalized: string[] = [];
+    for (const color of colors) {
+      const sanitizedColor: string = this.sanitizeColorString(color);
+      if (sanitizedColor.length === 0 || normalized.includes(sanitizedColor)) {
+        continue;
+      }
+      normalized.push(sanitizedColor);
+      if (normalized.length >= BRUSH_RECENT_COLOR_LIMIT) {
+        break;
+      }
+    }
+    return normalized;
+  }
+
+  private sanitizeColorString(color: string): string {
+    const trimmedColor: string = `${color}`.trim();
+    if (trimmedColor.length === 0) {
+      return '';
+    }
+    if (trimmedColor.startsWith('#')) {
+      return trimmedColor.toUpperCase();
+    }
+    if (/^[0-9A-Fa-f]{6}$/.test(trimmedColor) || /^[0-9A-Fa-f]{8}$/.test(trimmedColor)) {
+      return `#${trimmedColor.toUpperCase()}`;
+    }
+    return trimmedColor;
+  }
+
+  private setVisibleRecentColors(colors: string[]): void {
+    const normalized: string[] = this.normalizeEditorRecentColors(colors);
+    this.visibleRecentColors = normalized.length > 0
+      ? normalized
+      : this.cloneRecentColors(DEFAULT_APP_SETTINGS.brush.recentColors);
+  }
+
+  private pushRecentColor(color: string): void {
+    const nextColors: string[] = [this.sanitizeColorString(color)];
+    this.visibleRecentColors.forEach((entry: string) => {
+      const sanitizedEntry: string = this.sanitizeColorString(entry);
+      if (sanitizedEntry.length === 0 || nextColors.includes(sanitizedEntry)) {
+        return;
+      }
+      nextColors.push(sanitizedEntry);
+    });
+    this.setVisibleRecentColors(nextColors);
+  }
+
+  private widthPreviewLabel(): string {
+    return `${this.currentWidthValue.toFixed(1)} px`;
+  }
+
+  private widthSaveButtonEnabled(): boolean {
+    return Math.abs(this.activeWidthSlot().width - this.currentWidthValue) > 0.05;
+  }
+
+  private toolUsesBrushControls(tool: ToolType = this.currentTool): boolean {
+    return tool === ToolType.PEN || tool === ToolType.PENCIL || tool === ToolType.HIGHLIGHTER;
+  }
+
+  private clonePressureCurvePoints(points: PressureCurvePoint[]): PressureCurvePoint[] {
+    const cloned: PressureCurvePoint[] = [];
+    for (const point of points) {
+      const clonedPoint: PressureCurvePoint = {
+        input: point.input,
+        output: point.output
+      };
+      cloned.push(clonedPoint);
+    }
+    return cloned;
+  }
+
+  private buildBrushSettingsFromState(): BrushSettings {
+    return {
+      defaultTool: this.currentTool,
+      defaultColor: this.currentColor,
+      recentColors: this.cloneRecentColors(this.visibleRecentColors),
+      defaultLineWidthPresetId: this.activeWidthSlot().id,
+      lineWidthPresets: this.cloneLineWidthPresets(this.brushWidthSlots()),
+      pressureEnabled: this.appSettings.brush.pressureEnabled,
+      pressureCurvePreset: this.appSettings.brush.pressureCurvePreset,
+      pressureCurvePoints: this.clonePressureCurvePoints(this.appSettings.brush.pressureCurvePoints)
+    };
+  }
+
+  private buildSettingsWithCurrentBrushState(): AppSettings {
+    const nextBrush = this.buildBrushSettingsFromState();
+    return {
+      brush: nextBrush,
+      editor: {
+        predictionTailEnabled: this.appSettings.editor.predictionTailEnabled,
+        shapeCorrectionEnabled: this.appSettings.editor.shapeCorrectionEnabled,
+        palmRejectionEnabled: this.appSettings.editor.palmRejectionEnabled,
+        defaultDocumentMode: this.appSettings.editor.defaultDocumentMode,
+        defaultRenderBackend: this.appSettings.editor.defaultRenderBackend
+      },
+      document: {
+        defaultTemplateId: this.appSettings.document.defaultTemplateId,
+        defaultPageSizeId: this.appSettings.document.defaultPageSizeId,
+        paperBackgroundId: this.appSettings.document.paperBackgroundId
+      },
+      application: {
+        homeSortOrder: this.appSettings.application.homeSortOrder,
+        showRecentDocuments: this.appSettings.application.showRecentDocuments,
+        trashRetentionPolicy: this.appSettings.application.trashRetentionPolicy
+      }
+    };
+  }
+
+  private applyBrushSettings(settings: AppSettings): void {
+    this.appSettings = settings;
+    this.currentTool = settings.brush.defaultTool;
+    this.currentColor = this.sanitizeColorString(settings.brush.defaultColor);
+    this.widthSlots = this.cloneLineWidthPresets(settings.brush.lineWidthPresets);
+    this.selectedWidthSlotId = settings.brush.defaultLineWidthPresetId;
+    const recentColors: string[] = [this.currentColor];
+    settings.brush.recentColors.forEach((color: string) => {
+      recentColors.push(color);
+    });
+    this.setVisibleRecentColors(recentColors);
+    this.currentWidthValue = this.clampBrushWidth(this.activeWidthSlot().width);
+    this.showToolExtras = this.toolHasSecondaryControls(this.currentTool);
+    this.customColorDraft = this.currentColor;
+  }
+
+  private persistBrushSettings(): void {
+    this.appSettings = this.buildSettingsWithCurrentBrushState();
+    if (!this.settingsService) {
+      return;
+    }
+    const pendingSettings: AppSettings = this.buildSettingsWithCurrentBrushState();
+    this.brushSettingsPersistTask = this.brushSettingsPersistTask
+      .catch(() => {
+        return;
+      })
+      .then(async () => {
+        if (!this.settingsService) {
+          return;
+        }
+        try {
+          const savedSettings: AppSettings = await this.settingsService.saveSettings(pendingSettings);
+          this.appSettings = savedSettings;
+          this.widthSlots = this.cloneLineWidthPresets(savedSettings.brush.lineWidthPresets);
+          this.selectedWidthSlotId = savedSettings.brush.defaultLineWidthPresetId;
+          this.setVisibleRecentColors(savedSettings.brush.recentColors);
+        } catch (_) {
+          return;
+        }
+      });
+  }
+
+  private applyBrushAppearanceToRuntime(): void {
+    if (this.engineId.length > 0) {
+      this.nativeEngine.setBrushColor(this.engineId, this.currentColor);
+      this.refreshDebugState();
+    }
+  }
+
+  private selectWidthSlot(slotId: string): void {
+    const slot: LineWidthPreset | undefined = this.widthSlotById(slotId);
+    if (!slot) {
+      return;
+    }
+    this.selectedWidthSlotId = slot.id;
+    this.currentWidthValue = this.clampBrushWidth(slot.width);
+    this.applyBrushAppearanceToRuntime();
+    this.persistBrushSettings();
+  }
+
+  private updateCurrentWidthValue(value: number): void {
+    this.currentWidthValue = this.clampBrushWidth(value);
+    this.applyBrushAppearanceToRuntime();
+  }
+
+  private saveCurrentWidthToSelectedSlot(): void {
+    const nextSlots: LineWidthPreset[] = [];
+    this.brushWidthSlots().forEach((slot: LineWidthPreset) => {
+      if (slot.id === this.selectedWidthSlotId) {
+        nextSlots.push({
+          id: slot.id,
+          title: slot.title,
+          description: slot.description,
+          width: this.clampBrushWidth(this.currentWidthValue)
+        });
+        return;
+      }
+      nextSlots.push(this.cloneLineWidthPreset(slot));
+    });
+    this.widthSlots = nextSlots;
+    this.currentWidthValue = this.clampBrushWidth(this.activeWidthSlot().width);
+    this.applyBrushAppearanceToRuntime();
+    this.persistBrushSettings();
+  }
+
+  private applySelectedColor(color: string): void {
+    const sanitizedColor: string = this.sanitizeColorString(color);
+    if (sanitizedColor.length === 0) {
+      return;
+    }
+    this.currentColor = sanitizedColor;
+    this.customColorDraft = sanitizedColor;
+    this.pushRecentColor(sanitizedColor);
+    this.applyBrushAppearanceToRuntime();
+    this.persistBrushSettings();
+  }
+
+  private updateCustomColorDraft(value: string): void {
+    const normalizedValue: string = value.replace(/[^0-9a-fA-F#]/g, '').slice(0, 9);
+    this.customColorDraft = normalizedValue.startsWith('#') ? normalizedValue.toUpperCase() : `#${normalizedValue.toUpperCase()}`;
+  }
+
+  private closeCustomColorDialog(): void {
+    this.showCustomColorDialog = false;
+    this.customColorDraft = this.currentColor;
+  }
+
+  private customColorDraftIsValid(): boolean {
+    return /^#[0-9A-F]{6}([0-9A-F]{2})?$/.test(this.customColorDraft);
+  }
+
+  private confirmCustomColorDialog(): void {
+    if (!this.customColorDraftIsValid()) {
+      return;
+    }
+    this.showCustomColorDialog = false;
+    this.applySelectedColor(this.customColorDraft);
+  }
+
+  private normalizeColorComponent(value: number): string {
+    const normalizedValue: number = clampToRange(Math.round(value), 0, 255);
+    return normalizedValue.toString(16).toUpperCase().padStart(2, '0');
+  }
+
+  private colorStructToHex(color: common2D.Color): string {
+    const alphaHex: string = this.normalizeColorComponent(color.alpha);
+    const redHex: string = this.normalizeColorComponent(color.red);
+    const greenHex: string = this.normalizeColorComponent(color.green);
+    const blueHex: string = this.normalizeColorComponent(color.blue);
+    return alphaHex === 'FF'
+      ? `#${redHex}${greenHex}${blueHex}`
+      : `#${alphaHex}${redHex}${greenHex}${blueHex}`;
+  }
+
+  private openCustomColorDialog(): void {
+    this.customColorDraft = this.currentColor;
+    this.showCustomColorDialog = true;
+  }
+
+  private openSystemColorPicker(): void {
+    if (this.shouldUseSimulatorStubUi() || typeof imageFeaturePicker.pickForResult !== 'function') {
+      this.openCustomColorDialog();
+      return;
+    }
+    try {
+      imageFeaturePicker.pickForResult()
+        .then((pickedColor) => {
+          const nextColor: string = this.colorStructToHex(pickedColor.color);
+          this.applySelectedColor(nextColor);
+        })
+        .catch(() => {
+          this.openCustomColorDialog();
+        });
+    } catch (_) {
+      this.openCustomColorDialog();
+    }
+  }
+
+  private activePlaceholderFrame(): SimulatorCanvasFrame {
+    return this.activeSimulatorCanvasFrame();
+  }
+
+  private activePlaceholderPreviewSnapshot(): DocumentPreviewSnapshot | undefined {
+    return this.pagePreviewSnapshotAt(this.activePageIndex);
+  }
+
+  private previewSnapshotHasRaster(snapshot: DocumentPreviewSnapshot | undefined): boolean {
+    if (!snapshot?.raster) {
+      return false;
+    }
+    const base64: string = snapshot.raster.base64?.trim() ?? '';
+    const uri: string = snapshot.raster.uri?.trim() ?? '';
+    return base64.length > 0 || uri.length > 0;
+  }
+
+  private previewSnapshotObjectCount(snapshot: DocumentPreviewSnapshot | undefined): number {
+    const objectCount: number = Number(snapshot?.objectCount ?? 0);
+    return Number.isFinite(objectCount) ? Math.max(0, objectCount) : 0;
+  }
+
+  private shouldOverlayActiveSimulatorSceneObjects(): boolean {
+    const sceneObjects: NativeSceneObject[] = this.simulatorObjectsForActivePage();
+    const previewSnapshot: DocumentPreviewSnapshot | undefined = this.activePlaceholderPreviewSnapshot();
+    return sceneObjects.length > 0 &&
+      (!this.previewSnapshotHasRaster(previewSnapshot) ||
+        this.previewSnapshotObjectCount(previewSnapshot) < sceneObjects.length);
+  }
+
+  private shouldOverlayPageSceneObjects(index: number): boolean {
+    const sceneObjects: NativeSceneObject[] = this.pageSceneObjectsAt(index);
+    const previewSnapshot: DocumentPreviewSnapshot | undefined = this.pagePreviewSnapshotAt(index);
+    return sceneObjects.length > 0 &&
+      (!this.previewSnapshotHasRaster(previewSnapshot) ||
+        this.previewSnapshotObjectCount(previewSnapshot) < sceneObjects.length);
   }
 
   private isBlankPagedEditable(document: DocumentRecord | null = this.document): boolean {
@@ -441,9 +831,12 @@ struct EditorWorkspace {
     const previousPageId: string = this.activePageId;
     if (pages.length === 0) {
       this.document = document;
+      this.bumpPreviewRefreshVersion(document.previewSnapshot);
       this.activePageId = '';
       this.activePageIndex = document.previewSnapshot?.pageIndex ?? 0;
       this.lastNativeMutationSignature = '';
+      this.nativePreviewSyncExpectedStrokeCount = 0;
+      this.nativePreviewSyncRetryBudget = 0;
       return;
     }
     const activePage: DocumentPageEntry = pages.find((page) => page.id === pageId) ?? pages[0];
@@ -481,11 +874,49 @@ struct EditorWorkspace {
       tags: document.tags
     };
     this.document = nextDocument;
+    this.bumpPreviewRefreshVersion(nextDocument.previewSnapshot);
     this.activePageId = activePage.id;
     this.activePageIndex = activePage.order;
     if (this.activePageId !== previousPageId) {
       this.lastNativeMutationSignature = '';
+      this.nativePreviewSyncExpectedStrokeCount = 0;
+      this.nativePreviewSyncRetryBudget = 0;
     }
+  }
+
+  private previewSnapshotRenderSignature(snapshot: DocumentPreviewSnapshot | undefined): string {
+    if (snapshot === undefined) {
+      return 'empty';
+    }
+    const generatedAt: number = Math.trunc(snapshot.generatedAt ?? 0);
+    const objectCount: number = Math.trunc(snapshot.objectCount ?? 0);
+    const pageIndex: number = Math.trunc(snapshot.pageIndex ?? -1);
+    const source: string = snapshot.source ?? '';
+    const status: string = snapshot.previewStatus ?? '';
+    const uri: string = snapshot.raster?.uri?.trim() ?? '';
+    const base64Length: number = snapshot.raster?.base64?.trim().length ?? 0;
+    return [
+      `page:${pageIndex}`,
+      `generated:${generatedAt}`,
+      `objects:${objectCount}`,
+      `source:${source}`,
+      `status:${status}`,
+      `uri:${uri}`,
+      `base64:${base64Length}`
+    ].join(':');
+  }
+
+  private bumpPreviewRefreshVersion(snapshot: DocumentPreviewSnapshot | undefined): void {
+    const nextSignature: string = this.previewSnapshotRenderSignature(snapshot);
+    if (nextSignature === this.lastPreviewRenderSignature) {
+      return;
+    }
+    this.lastPreviewRenderSignature = nextSignature;
+    this.previewRefreshVersion += 1;
+  }
+
+  private previewThumbnailRenderKey(scope: string, snapshot: DocumentPreviewSnapshot, pageIndex: number = -1): string {
+    return `${scope}:${pageIndex}:${this.previewRefreshVersion}:${this.previewSnapshotRenderSignature(snapshot)}`;
   }
 
   private stageCurrentPageDraft(): void {
@@ -574,9 +1005,10 @@ struct EditorWorkspace {
       this.document.packagePath,
       buildNativeOpenDocumentConfig(this.document, this.currentTool)
     );
-    this.nativeEngine.setBrushColor(this.engineId, this.currentColor);
+    this.applyBrushAppearanceToRuntime();
     this.applyFingerWritingState();
     this.refreshDebugState();
+    this.scheduleNativePreviewSnapshotSync(0);
   }
 
   private async bootstrap(): Promise<void> {
@@ -591,6 +1023,9 @@ struct EditorWorkspace {
       if (documentId.length === 0) {
         throw new Error('Missing documentId');
       }
+      this.settingsService = await AppSettingsService.getInstance(this.appContext);
+      const loadedSettings: AppSettings = await this.settingsService.getSettings();
+      this.applyBrushSettings(loadedSettings);
       this.libraryService = await DocumentLibraryService.getInstance(this.appContext);
       this.document = await this.libraryService.openDocumentById(documentId);
       this.currentMode = this.document.documentMode;
@@ -626,11 +1061,12 @@ struct EditorWorkspace {
         this.document.packagePath,
         buildNativeOpenDocumentConfig(this.document, this.currentTool)
       );
-      this.nativeEngine.setBrushColor(this.engineId, this.currentColor);
+      this.applyBrushAppearanceToRuntime();
       this.applyFingerWritingState();
       this.startDebugPolling();
       this.attachSurfaceIfReady();
       this.refreshDebugState();
+      this.scheduleNativePreviewSnapshotSync(0);
     } catch (error) {
       this.errorMessage = this.formatError(error as Object);
     } finally {
@@ -731,6 +1167,98 @@ struct EditorWorkspace {
     this.debugRefreshTimerId = -1;
   }
 
+  private cancelPendingNativePreviewSync(): void {
+    if (this.nativePreviewSyncTimerId >= 0) {
+      clearTimeout(this.nativePreviewSyncTimerId);
+      this.nativePreviewSyncTimerId = -1;
+    }
+    this.nativePreviewSyncQueued = false;
+  }
+
+  private currentCommittedStrokeCount(): number {
+    const strokeCount: number = Math.trunc(this.debugState?.committedStrokeCount ?? 0);
+    return Number.isFinite(strokeCount) ? Math.max(0, strokeCount) : 0;
+  }
+
+  private armNativePreviewCatchUp(expectedStrokeCount: number = this.currentCommittedStrokeCount()): void {
+    if (!this.shouldUseSimulatorStubUi()) {
+      this.nativePreviewSyncExpectedStrokeCount = 0;
+      this.nativePreviewSyncRetryBudget = 0;
+      return;
+    }
+    this.nativePreviewSyncExpectedStrokeCount = Math.max(0, expectedStrokeCount);
+    this.nativePreviewSyncRetryBudget = NATIVE_PREVIEW_SYNC_MAX_RETRIES;
+  }
+
+  private clearNativePreviewCatchUp(): void {
+    this.nativePreviewSyncExpectedStrokeCount = 0;
+    this.nativePreviewSyncRetryBudget = 0;
+  }
+
+  private shouldRetryNativePreviewSync(document: DocumentRecord): boolean {
+    if (!this.shouldUseSimulatorStubUi()) {
+      this.clearNativePreviewCatchUp();
+      return false;
+    }
+    const expectedStrokeCount: number = this.nativePreviewSyncExpectedStrokeCount;
+    if (expectedStrokeCount <= 0) {
+      return false;
+    }
+    const previewSnapshot: DocumentPreviewSnapshot | undefined = document.previewSnapshot;
+    const previewCaughtUp: boolean = this.previewSnapshotHasRaster(previewSnapshot) &&
+      this.previewSnapshotObjectCount(previewSnapshot) >= expectedStrokeCount;
+    if (previewCaughtUp) {
+      this.clearNativePreviewCatchUp();
+      return false;
+    }
+    if (this.nativePreviewSyncRetryBudget <= 0) {
+      return false;
+    }
+    this.nativePreviewSyncRetryBudget -= 1;
+    return true;
+  }
+
+  private shouldSyncNativePreviewSnapshot(): boolean {
+    return this.shouldUseSimulatorStubUi() &&
+      Boolean(this.debugState?.previewRenderSupported) &&
+      this.document !== null &&
+      this.libraryService !== undefined &&
+      this.engineId.length > 0;
+  }
+
+  private scheduleNativePreviewSnapshotSync(delayMs: number = 120): void {
+    if (!this.shouldSyncNativePreviewSnapshot()) {
+      return;
+    }
+    this.nativePreviewSyncQueued = true;
+    if (this.nativePreviewSyncTimerId >= 0) {
+      clearTimeout(this.nativePreviewSyncTimerId);
+    }
+    this.nativePreviewSyncTimerId = setTimeout(() => {
+      this.nativePreviewSyncTimerId = -1;
+      void this.flushNativePreviewSnapshotSync();
+    }, Math.max(0, delayMs));
+  }
+
+  private async flushNativePreviewSnapshotSync(): Promise<void> {
+    if (!this.nativePreviewSyncQueued) {
+      return;
+    }
+    if (this.nativePreviewSyncInFlight) {
+      return;
+    }
+    this.nativePreviewSyncQueued = false;
+    this.nativePreviewSyncInFlight = true;
+    try {
+      await this.syncNativePreviewSnapshot();
+    } finally {
+      this.nativePreviewSyncInFlight = false;
+      if (this.nativePreviewSyncQueued) {
+        this.scheduleNativePreviewSnapshotSync(120);
+      }
+    }
+  }
+
   private previewBlocks(): MarkdownPreviewBlock[] {
     return MarkdownUtils.buildPreviewBlocks(this.markdownText);
   }
@@ -789,6 +1317,8 @@ struct EditorWorkspace {
       return;
     }
     this.lastNativeMutationSignature = nextSignature;
+    this.armNativePreviewCatchUp(Math.max(0, Math.trunc(state.committedStrokeCount)));
+    this.scheduleNativePreviewSnapshotSync(80);
     this.markContentDirty();
     if (this.saveState !== 'saving') {
       this.saveState = 'idle';
@@ -918,6 +1448,7 @@ struct EditorWorkspace {
     this.shutdownScheduled = false;
     this.shuttingDown = true;
     this.cancelPendingAutosave();
+    this.cancelPendingNativePreviewSync();
     this.stopViewportInertia();
     this.stopDebugPolling();
     await this.persistDocumentState();
@@ -952,6 +1483,7 @@ struct EditorWorkspace {
     }
     this.nativeEngine.undo(this.engineId);
     this.refreshDebugState();
+    this.scheduleNativePreviewSnapshotSync(40);
   }
 
   private redoStroke(): void {
@@ -960,6 +1492,7 @@ struct EditorWorkspace {
     }
     this.nativeEngine.redo(this.engineId);
     this.refreshDebugState();
+    this.scheduleNativePreviewSnapshotSync(40);
   }
 
   private setTool(tool: ToolType): void {
@@ -970,13 +1503,16 @@ struct EditorWorkspace {
     const previousTool: ToolType = this.currentTool;
     const isSameTool: boolean = previousTool === tool;
     this.currentTool = tool;
-    this.showToolExtras = isSameTool ? false : this.toolHasSecondaryControls(tool);
+    this.showToolExtras = this.toolHasSecondaryControls(tool) ? (isSameTool ? !this.showToolExtras : true) : false;
     if (previousTool !== tool || !this.toolUsesContextActions() || isSameTool) {
       this.clearEmbeddedPlacement();
     }
     if (this.engineId.length > 0) {
       this.nativeEngine.setTool(this.engineId, tool);
       this.refreshDebugState();
+    }
+    if (previousTool !== tool) {
+      this.persistBrushSettings();
     }
   }
 
@@ -986,6 +1522,10 @@ struct EditorWorkspace {
       return;
     }
     this.nativeEngine.setFingerWritingEnabled(this.engineId, this.fingerWritingEnabled);
+  }
+
+  private toggleToolbarExpanded(): void {
+    this.toolbarExpanded = !this.toolbarExpanded;
   }
 
   private toggleFingerWritingMode(): void {
@@ -1371,17 +1911,31 @@ struct EditorWorkspace {
       return;
     }
     try {
-      const previewSize = buildNativePreviewRequestSize(this.document);
-      const nativePreview: NativePreviewPayload | null = this.nativeEngine.requestPreviewRender(
-        this.engineId,
+      const shouldUsePersistedPreviewFallback: boolean = this.nativePreviewSyncExpectedStrokeCount > 0;
+      let nativePreview: NativePreviewPayload | null = null;
+      if (!shouldUsePersistedPreviewFallback) {
+        const previewSize = buildNativePreviewRequestSize(this.document);
+        nativePreview = this.nativeEngine.requestPreviewRender(
+          this.engineId,
+          this.document.id,
+          this.activePageIndex,
+          previewSize.width,
+          previewSize.height
+        );
+      }
+      const mergedDocument: DocumentRecord = await this.libraryService.mergeNativePreviewSnapshot(
         this.document.id,
-        this.activePageIndex,
-        previewSize.width,
-        previewSize.height
+        nativePreview
       );
-      const mergedDocument: DocumentRecord = await this.libraryService.mergeNativePreviewSnapshot(this.document.id, nativePreview);
       this.applyDocumentActivePage(mergedDocument, this.activePageId);
+      if (this.shouldRetryNativePreviewSync(mergedDocument)) {
+        this.scheduleNativePreviewSnapshotSync(NATIVE_PREVIEW_SYNC_RETRY_DELAY_MS);
+      }
     } catch (_) {
+      if (this.nativePreviewSyncExpectedStrokeCount > 0 && this.nativePreviewSyncRetryBudget > 0) {
+        this.nativePreviewSyncRetryBudget -= 1;
+        this.scheduleNativePreviewSnapshotSync(NATIVE_PREVIEW_SYNC_RETRY_DELAY_MS);
+      }
       return;
     }
   }
@@ -1530,14 +2084,20 @@ struct EditorWorkspace {
     const frame: SimulatorCanvasFrame = this.simulatorCanvasFrame(this.activePageIndex);
     const pageWidth: number = this.simulatorPageWidth();
     const widthRatio: number = Math.max(0, object.bounds.maxX - object.bounds.minX) / pageWidth;
-    return clampToRange(widthRatio * frame.contentWidth, 34, frame.contentWidth - 4);
+    const fallbackWidth: number = Math.max(18, (object.strokeWidth ?? 3.2) * 5.5);
+    return clampToRange(Math.max(widthRatio * frame.contentWidth, fallbackWidth), fallbackWidth, frame.contentWidth - 4);
   }
 
   private simulatorObjectHeight(object: NativeSceneObject): number {
     const frame: SimulatorCanvasFrame = this.simulatorCanvasFrame(this.activePageIndex);
     const pageHeight: number = this.simulatorPageHeight();
     const heightRatio: number = Math.max(0, object.bounds.maxY - object.bounds.minY) / pageHeight;
-    return clampToRange(heightRatio * frame.contentHeight, 20, Math.max(32, frame.contentHeight * 0.22));
+    const fallbackHeight: number = Math.max(6, (object.strokeWidth ?? 3.2) * 2.4);
+    return clampToRange(
+      Math.max(heightRatio * frame.contentHeight, fallbackHeight),
+      fallbackHeight,
+      Math.max(fallbackHeight + 2, frame.contentHeight * 0.22)
+    );
   }
 
   private simulatorPageFillColor(): string {
@@ -1572,6 +2132,39 @@ struct EditorWorkspace {
   private simulatorObjectLabel(object: NativeSceneObject): string {
     const pageNumber: number = (object.pageIndex ?? this.activePageIndex) + 1;
     return `${object.tool} · p${pageNumber}`;
+  }
+
+  private simulatorObjectOpacity(object: NativeSceneObject): number {
+    if (object.tool === 'highlighter') {
+      return 0.28;
+    }
+    return object.tool === 'text' ? 0.82 : 0.92;
+  }
+
+  private simulatorObjectIsTextLike(object: NativeSceneObject): boolean {
+    return object.tool === 'text' || object.shapeType === 'text';
+  }
+
+  private simulatorObjectCornerRadius(object: NativeSceneObject): number {
+    return Math.min(this.simulatorObjectWidth(object), this.simulatorObjectHeight(object)) * 0.5;
+  }
+
+  @Builder
+  private buildSimulatorSceneObject(object: NativeSceneObject): void {
+    Row()
+      .width(this.simulatorObjectWidth(object))
+      .height(this.simulatorObjectHeight(object))
+      .backgroundColor(this.simulatorObjectIsTextLike(object) ? '#00000000' : object.colorHex)
+      .border({
+        width: this.simulatorObjectIsTextLike(object) ? 1 : 0,
+        color: object.colorHex
+      })
+      .borderRadius(this.simulatorObjectCornerRadius(object))
+      .opacity(this.simulatorObjectOpacity(object))
+      .position({
+        x: this.simulatorObjectX(object),
+        y: this.simulatorObjectY(object)
+      })
   }
 
   private toggleTracePanel(): void {
@@ -1921,9 +2514,7 @@ struct EditorWorkspace {
   }
 
   private toolUsesColorPalette(): boolean {
-    return this.currentTool === ToolType.PEN ||
-      this.currentTool === ToolType.PENCIL ||
-      this.currentTool === ToolType.HIGHLIGHTER;
+    return this.toolUsesBrushControls();
   }
 
   private toolUsesContextActions(): boolean {
@@ -1931,11 +2522,7 @@ struct EditorWorkspace {
   }
 
   private toolHasSecondaryControls(tool: ToolType): boolean {
-    return tool === ToolType.PEN ||
-      tool === ToolType.PENCIL ||
-      tool === ToolType.HIGHLIGHTER ||
-      tool === ToolType.TEXT ||
-      tool === ToolType.LASSO;
+    return this.toolUsesBrushControls(tool) || tool === ToolType.TEXT || tool === ToolType.LASSO;
   }
 
   private shouldShowSecondaryToolbar(): boolean {
@@ -1953,7 +2540,7 @@ struct EditorWorkspace {
     if (this.currentTool === ToolType.LASSO) {
       return this.embedPlacementArmed ? '在当前页拖出混排区域' : '套索后可插入图文块';
     }
-    return '颜色';
+    return '颜色与笔宽';
   }
 
   private toolIconKind(tool: ToolType): EditorUiIcon {
@@ -2139,40 +2726,38 @@ struct EditorWorkspace {
 
   private floatingToolbarChromeHeight(): number {
     if (!this.toolbarUsesVerticalLayout()) {
-      return this.shouldShowSecondaryToolbar() ? 118 : 74;
+      if (this.toolbarExpanded) {
+        return 164;
+      }
+      return this.shouldShowSecondaryToolbar() ? 164 : 82;
     }
-    let height: number = 342;
-    if (this.shouldShowSecondaryToolbar()) {
-      height += this.toolUsesColorPalette() ? 80 : 116;
-    }
-    return height;
+    return this.shouldShowSecondaryToolbar() ? 404 : 358;
   }
 
   private toolbarUsesVerticalLayout(): boolean {
-    return this.toolbarSnapSlot === 'left-middle' || this.toolbarSnapSlot === 'right-middle';
+    return this.toolbarSnapSlot === 'left-middle';
   }
 
   private floatingToolbarChromeWidth(): number {
-    return this.toolbarUsesVerticalLayout() ? FLOATING_TOOLBAR_VERTICAL_WIDTH : FLOATING_TOOLBAR_WIDTH;
+    if (!this.toolbarUsesVerticalLayout()) {
+      return this.toolbarExpanded ? FLOATING_TOOLBAR_WIDTH : FLOATING_TOOLBAR_VISIBLE_WIDTH;
+    }
+    return this.shouldShowSecondaryToolbar()
+      ? FLOATING_TOOLBAR_VERTICAL_WIDTH
+      : FLOATING_TOOL_BUTTON_SIZE + 24;
   }
 
   private toolbarAnchorPosition(slot: ToolbarSnapSlot = this.toolbarSnapSlot): GestureRatioPoint {
-    const toolbarWidth: number = slot === 'left-middle' || slot === 'right-middle'
-      ? FLOATING_TOOLBAR_VERTICAL_WIDTH
-      : FLOATING_TOOLBAR_WIDTH;
+    const toolbarWidth: number = slot === 'left-middle'
+      ? (this.shouldShowSecondaryToolbar() ? FLOATING_TOOLBAR_VERTICAL_WIDTH : FLOATING_TOOL_BUTTON_SIZE + 24)
+      : (this.toolbarExpanded ? FLOATING_TOOLBAR_WIDTH : FLOATING_TOOLBAR_VISIBLE_WIDTH);
     const topY: number = 18;
     const middleY: number = Math.max(topY, (this.writingViewportHeight - this.floatingToolbarChromeHeight()) / 2);
-    const bottomY: number = Math.max(topY, this.writingViewportHeight - this.floatingToolbarChromeHeight() - 24);
     const leftX: number = 16;
-    const rightX: number = Math.max(leftX, this.writingViewportWidth - toolbarWidth - 16);
     const centerX: number = Math.max(leftX, (this.writingViewportWidth - toolbarWidth) / 2);
     switch (slot) {
       case 'left-middle':
         return { xRatio: leftX, yRatio: middleY };
-      case 'right-middle':
-        return { xRatio: rightX, yRatio: middleY };
-      case 'bottom-center':
-        return { xRatio: centerX, yRatio: bottomY };
       case 'top-center':
       default:
         return { xRatio: centerX, yRatio: topY };
@@ -2210,7 +2795,7 @@ struct EditorWorkspace {
   private snapFloatingToolbarToNearestAnchor(): void {
     const currentX: number = this.floatingToolbarPositionX();
     const currentY: number = this.floatingToolbarPositionY();
-    const slots: ToolbarSnapSlot[] = ['top-center', 'left-middle', 'right-middle', 'bottom-center'];
+    const slots: ToolbarSnapSlot[] = ['top-center', 'left-middle'];
     let nearestSlot: ToolbarSnapSlot = this.toolbarSnapSlot;
     let nearestDistance: number = Number.MAX_VALUE;
     slots.forEach((slot: ToolbarSnapSlot) => {
@@ -2278,16 +2863,34 @@ struct EditorWorkspace {
     const fallbackFrame: SimulatorCanvasFrame = this.simulatorCanvasFrame(fallbackPageIndex);
     const fallbackPageOffsetX: number = this.pageCardOffsetX(fallbackPageIndex);
     const fallbackPageOffsetY: number = this.pageCardOffsetY(fallbackPageIndex);
-    const localX: number = this.readGestureCoordinate(
-      event,
-      ['localX', 'x'],
-      fallbackPageOffsetX + fallbackFrame.contentX + (fallbackFrame.contentWidth / 2)
-    );
-    const localY: number = this.readGestureCoordinate(
-      event,
-      ['localY', 'y'],
-      fallbackPageOffsetY + fallbackFrame.contentY + (fallbackFrame.contentHeight / 2)
-    );
+    const fallbackLocalX: number = fallbackPageOffsetX + fallbackFrame.contentX + (fallbackFrame.contentWidth / 2);
+    const fallbackLocalY: number = fallbackPageOffsetY + fallbackFrame.contentY + (fallbackFrame.contentHeight / 2);
+    const offsetX: number = this.readGestureNumber(event, 'offsetX', Number.NaN);
+    const offsetY: number = this.readGestureNumber(event, 'offsetY', Number.NaN);
+    const absoluteLocalX: number = this.readGestureCoordinate(event, ['localX', 'x'], Number.NaN);
+    const absoluteLocalY: number = this.readGestureCoordinate(event, ['localY', 'y'], Number.NaN);
+    if (!Number.isNaN(absoluteLocalX)) {
+      const normalizedOffsetX: number = Number.isNaN(offsetX) ? 0 : offsetX;
+      this.simulatorFingerGestureOriginLocalX = absoluteLocalX - normalizedOffsetX;
+    } else if (Number.isNaN(this.simulatorFingerGestureOriginLocalX)) {
+      this.simulatorFingerGestureOriginLocalX = fallbackLocalX;
+    }
+    if (!Number.isNaN(absoluteLocalY)) {
+      const normalizedOffsetY: number = Number.isNaN(offsetY) ? 0 : offsetY;
+      this.simulatorFingerGestureOriginLocalY = absoluteLocalY - normalizedOffsetY;
+    } else if (Number.isNaN(this.simulatorFingerGestureOriginLocalY)) {
+      this.simulatorFingerGestureOriginLocalY = fallbackLocalY;
+    }
+    const localX: number = !Number.isNaN(absoluteLocalX)
+      ? absoluteLocalX
+      : (!Number.isNaN(offsetX) && !Number.isNaN(this.simulatorFingerGestureOriginLocalX))
+        ? this.simulatorFingerGestureOriginLocalX + offsetX
+        : fallbackLocalX;
+    const localY: number = !Number.isNaN(absoluteLocalY)
+      ? absoluteLocalY
+      : (!Number.isNaN(offsetY) && !Number.isNaN(this.simulatorFingerGestureOriginLocalY))
+        ? this.simulatorFingerGestureOriginLocalY + offsetY
+        : fallbackLocalY;
     const pageIndex: number = this.simulatorFingerGestureActive && this.simulatorFingerGesturePageIndex >= 0
       ? this.simulatorFingerGesturePageIndex
       : this.nearestPageIndexToViewportPoint(localX, localY);
@@ -2323,6 +2926,8 @@ struct EditorWorkspace {
     this.simulatorFingerGesturePageIndex = -1;
     this.simulatorFingerGestureLastXRatio = 0.5;
     this.simulatorFingerGestureLastYRatio = 0.5;
+    this.simulatorFingerGestureOriginLocalX = Number.NaN;
+    this.simulatorFingerGestureOriginLocalY = Number.NaN;
   }
 
   private updateSimulatorFingerGesture(event: Object): void {
@@ -2366,6 +2971,7 @@ struct EditorWorkspace {
       this.nativeEngine.injectSimulatorFingerEvent(this.engineId, 'up', xRatio, yRatio, 0);
       this.traceActionMessage = this.fingerWritingEnabled ? '模拟器手指写入已注入' : '模拟器触摸事件已记录';
       this.refreshDebugState();
+      this.scheduleNativePreviewSnapshotSync(60);
     }
     this.resetSimulatorFingerGesture(false);
   }
@@ -2646,6 +3252,7 @@ struct EditorWorkspace {
           await this.reopenNativeDocumentForCurrentState();
         }
         this.refreshDebugState();
+        this.scheduleNativePreviewSnapshotSync(0);
         this.schedulePageHudAutoHide();
         return;
       }
@@ -2742,13 +3349,16 @@ struct EditorWorkspace {
     }
     const pageEntry: DocumentPageEntry | undefined = this.pageEntryAt(index);
     if (pageEntry) {
+      if (snapshot.pageIndex === index) {
+        return snapshot;
+      }
       if (snapshot.coverPageId === pageEntry.id) {
         return snapshot;
       }
-      if (snapshot.pageIndex === index && (snapshot.pageIds.length === 0 || snapshot.pageIds.includes(pageEntry.id))) {
-        return snapshot;
-      }
-      if (this.document?.coverPage === index && snapshot.pageIds.includes(pageEntry.id)) {
+      if (
+        snapshot.pageIds.includes(pageEntry.id) &&
+        (this.document?.coverPage === index || this.activePageId === pageEntry.id)
+      ) {
         return snapshot;
       }
       return undefined;
@@ -2871,6 +3481,63 @@ struct EditorWorkspace {
       (((object.pageId ?? '') === pageId && pageId.length > 0) || (object.pageIndex ?? -1) === index));
   }
 
+  private writingPageObjectX(index: number, object: NativeSceneObject): number {
+    const frame: SimulatorCanvasFrame = this.simulatorCanvasFrame(index);
+    return frame.contentX + clampToRange(
+      (object.bounds.minX / this.pageSceneWidthAt(index)) * frame.contentWidth,
+      0,
+      frame.contentWidth - 28
+    );
+  }
+
+  private writingPageObjectY(index: number, object: NativeSceneObject): number {
+    const frame: SimulatorCanvasFrame = this.simulatorCanvasFrame(index);
+    return frame.contentY + clampToRange(
+      (object.bounds.minY / this.pageSceneHeightAt(index)) * frame.contentHeight,
+      0,
+      frame.contentHeight - 22
+    );
+  }
+
+  private writingPageObjectWidth(index: number, object: NativeSceneObject): number {
+    const frame: SimulatorCanvasFrame = this.simulatorCanvasFrame(index);
+    const widthRatio: number = Math.max(0, object.bounds.maxX - object.bounds.minX) / this.pageSceneWidthAt(index);
+    const fallbackWidth: number = Math.max(18, (object.strokeWidth ?? 3.2) * 5.5);
+    return clampToRange(Math.max(widthRatio * frame.contentWidth, fallbackWidth), fallbackWidth, frame.contentWidth - 4);
+  }
+
+  private writingPageObjectHeight(index: number, object: NativeSceneObject): number {
+    const frame: SimulatorCanvasFrame = this.simulatorCanvasFrame(index);
+    const heightRatio: number = Math.max(0, object.bounds.maxY - object.bounds.minY) / this.pageSceneHeightAt(index);
+    const fallbackHeight: number = Math.max(6, (object.strokeWidth ?? 3.2) * 2.4);
+    return clampToRange(
+      Math.max(heightRatio * frame.contentHeight, fallbackHeight),
+      fallbackHeight,
+      Math.max(fallbackHeight + 2, frame.contentHeight * 0.22)
+    );
+  }
+
+  @Builder
+  private buildWritingPageSceneObject(pageIndex: number, object: NativeSceneObject): void {
+    Row()
+      .width(this.writingPageObjectWidth(pageIndex, object))
+      .height(this.writingPageObjectHeight(pageIndex, object))
+      .backgroundColor(this.simulatorObjectIsTextLike(object) ? '#00000000' : object.colorHex)
+      .border({
+        width: this.simulatorObjectIsTextLike(object) ? 1 : 0,
+        color: object.colorHex
+      })
+      .borderRadius(Math.min(
+        this.writingPageObjectWidth(pageIndex, object),
+        this.writingPageObjectHeight(pageIndex, object)
+      ) * 0.5)
+      .opacity(this.simulatorObjectOpacity(object))
+      .position({
+        x: this.writingPageObjectX(pageIndex, object),
+        y: this.writingPageObjectY(pageIndex, object)
+      })
+  }
+
   private pageRailObjectX(index: number, object: NativeSceneObject): number {
     const innerWidth: number = PAGE_RAIL_THUMBNAIL_WIDTH - 20;
     return 10 + clampToRange(
@@ -2899,6 +3566,39 @@ struct EditorWorkspace {
     return clampToRange(heightRatio * (PAGE_RAIL_THUMBNAIL_HEIGHT - 22), 8, 44);
   }
 
+  private pageRailObjectOpacity(object: NativeSceneObject): number {
+    if (object.tool === 'highlighter') {
+      return 0.24;
+    }
+    return object.tool === 'text' ? 0.76 : 0.88;
+  }
+
+  private pageRailObjectIsTextLike(object: NativeSceneObject): boolean {
+    return object.tool === 'text' || object.shapeType === 'text';
+  }
+
+  private pageRailObjectCornerRadius(pageIndex: number, object: NativeSceneObject): number {
+    return Math.min(this.pageRailObjectWidth(pageIndex, object), this.pageRailObjectHeight(pageIndex, object)) * 0.5;
+  }
+
+  @Builder
+  private buildPageRailSceneObject(pageIndex: number, object: NativeSceneObject): void {
+    Row()
+      .width(this.pageRailObjectWidth(pageIndex, object))
+      .height(this.pageRailObjectHeight(pageIndex, object))
+      .backgroundColor(this.pageRailObjectIsTextLike(object) ? '#00000000' : object.colorHex)
+      .border({
+        width: this.pageRailObjectIsTextLike(object) ? 0.8 : 0,
+        color: object.colorHex
+      })
+      .borderRadius(this.pageRailObjectCornerRadius(pageIndex, object))
+      .opacity(this.pageRailObjectOpacity(object))
+      .position({
+        x: this.pageRailObjectX(pageIndex, object),
+        y: this.pageRailObjectY(pageIndex, object)
+      })
+  }
+
   private pagePlaceholderTitle(index: number): string {
     if (!this.supportsPagedDocumentRuntime()) {
       return '文档页';
@@ -2917,8 +3617,8 @@ struct EditorWorkspace {
     if (!this.supportsPagedDocumentRuntime()) {
       return '仅文档摘要';
     }
-    if (this.pageSceneObjectsAt(index).length > 0) {
-      return '运行时预览可用';
+    if (this.pagePreviewSnapshotAt(index) !== undefined) {
+      return '预览可用';
     }
     return this.pagePreviewFallbackBlocks(index).length > 0 ? '已有预览' : '暂无预览';
   }
@@ -2928,8 +3628,8 @@ struct EditorWorkspace {
     Button(label)
       .height(40)
       .padding({ left: 14, right: 14 })
-      .backgroundColor(this.isInspectorModeActive(mode) ? '#162033' : '#F3F6FB')
-      .fontColor(this.isInspectorModeActive(mode) ? '#FFFFFF' : '#162033')
+      .backgroundColor(this.isInspectorModeActive(mode) ? '#0B57D0' : '#F9FAFB')
+      .fontColor(this.isInspectorModeActive(mode) ? '#FFFFFF' : '#374151')
       .fontSize(12)
       .borderRadius(12)
       .onClick(() => {
@@ -3014,48 +3714,31 @@ struct EditorWorkspace {
         .height('100%')
         .backgroundColor(this.simulatorPageFillColor())
 
-      this.buildSimulatorGuideLines(this.activeSimulatorCanvasFrame())
-
-      if (this.simulatorObjectsForActivePage().length === 0) {
-        ForEach([0, 1, 2], (rowIndex: number) => {
-          Row({ space: 10 }) {
-            Blank()
-              .width(clampToRange(this.activeSimulatorCanvasFrame().contentWidth * 0.24, 56, 120))
-              .height(6)
-              .backgroundColor('#C2CFDF')
-              .opacity(0.7)
-              .borderRadius(999)
-            Blank()
-              .width(clampToRange(this.activeSimulatorCanvasFrame().contentWidth * 0.18, 40, 96))
-              .height(6)
-              .backgroundColor('#D3DDE9')
-              .opacity(0.68)
-              .borderRadius(999)
-          }
-          .position({
-            x: this.activeSimulatorCanvasFrame().contentX + 18,
-            y: this.activeSimulatorCanvasFrame().contentY +
-              54 +
-              rowIndex * clampToRange(this.activeSimulatorCanvasFrame().contentHeight * 0.18, 52, 84)
-          })
-        }, (rowIndex: number): string => `stub-line-${rowIndex}`)
+      if (this.activePlaceholderPreviewSnapshot() !== undefined) {
+        Stack({ alignContent: Alignment.TopStart }) {
+          ForEach([
+            this.previewThumbnailRenderKey(
+              'placeholder-active',
+              this.activePlaceholderPreviewSnapshot() as DocumentPreviewSnapshot,
+              this.activePageIndex
+            )
+          ], (_: string) => {
+            PreviewThumbnail({
+              previewSnapshot: this.activePlaceholderPreviewSnapshot() as DocumentPreviewSnapshot,
+              fallbackSummary: '',
+              thumbnailWidth: this.activePlaceholderFrame().frameWidth,
+              thumbnailHeight: this.activePlaceholderFrame().frameHeight
+            })
+          }, (key: string): string => key)
+        }
+          .position({ x: this.activePlaceholderFrame().frameX, y: this.activePlaceholderFrame().frameY })
       } else {
+        this.buildSimulatorGuideLines(this.activePlaceholderFrame())
+      }
+      if (this.shouldOverlayActiveSimulatorSceneObjects()) {
         ForEach(this.simulatorObjectsForActivePage(), (object: NativeSceneObject) => {
-          Row() {
-            Text(this.simulatorObjectLabel(object))
-              .fontSize(10)
-              .fontColor('#FFFFFF')
-              .maxLines(1)
-          }
-          .justifyContent(FlexAlign.Center)
-          .width(this.simulatorObjectWidth(object))
-          .height(this.simulatorObjectHeight(object))
-          .padding({ left: 6, right: 6 })
-          .backgroundColor(object.colorHex)
-          .opacity(object.tool === 'highlighter' ? 0.58 : 0.9)
-          .borderRadius(object.tool === 'text' ? 10 : 16)
-          .position({ x: this.simulatorObjectX(object), y: this.simulatorObjectY(object) })
-        }, (object: NativeSceneObject): string => object.id)
+          this.buildSimulatorSceneObject(object)
+        }, (object: NativeSceneObject): string => `simulator-object-${object.id}`)
       }
     }
     .width('100%')
@@ -3152,7 +3835,7 @@ struct EditorWorkspace {
     }
     .padding({ left: 10, right: 10, top: 8, bottom: 8 })
     .backgroundColor('#FFFFFF')
-    .border({ width: 1, color: '#D8E0EA' })
+    .border({ width: 1, color: '#E5E7EB' })
     .borderRadius(999)
   }
 
@@ -3165,7 +3848,7 @@ struct EditorWorkspace {
             Text(block.text)
               .fontSize(block.level === 1 ? 24 : 19)
               .fontWeight(FontWeight.Bold)
-              .fontColor('#162033')
+              .fontColor('#0B57D0')
               .width('100%')
               .margin({ top: index === 0 ? 0 : 14 })
           } else if (block.type === 'formula') {
@@ -3180,7 +3863,7 @@ struct EditorWorkspace {
           } else if (block.type === 'list') {
             Text(`- ${block.text}`)
               .fontSize(14)
-              .fontColor('#344054')
+              .fontColor('#374151')
               .width('100%')
               .margin({ top: 8 })
           } else if (block.type === 'quote') {
@@ -3200,13 +3883,13 @@ struct EditorWorkspace {
               .fontColor('#E2E8F0')
               .width('100%')
               .padding(14)
-              .backgroundColor('#162033')
+              .backgroundColor('#0B57D0')
               .borderRadius(16)
               .margin({ top: 10 })
           } else {
             Text(block.text)
               .fontSize(14)
-              .fontColor('#344054')
+              .fontColor('#374151')
               .width('100%')
               .lineHeight(22)
               .margin({ top: 10 })
@@ -3249,13 +3932,13 @@ struct EditorWorkspace {
         Text(this.inspectorPanelTitle())
           .fontSize(18)
           .fontWeight(FontWeight.Bold)
-          .fontColor('#162033')
+          .fontColor('#0B57D0')
         Blank()
           .layoutWeight(1)
         Button(EDITOR_WORKSPACE_COPY.close)
           .height(32)
           .backgroundColor('#F3F6FB')
-          .fontColor('#162033')
+          .fontColor('#0B57D0')
           .onClick(() => {
             this.closeInspector();
           })
@@ -3270,7 +3953,7 @@ struct EditorWorkspace {
     .height('100%')
     .padding(14)
     .backgroundColor('#FFFFFF')
-    .border({ width: 1, color: '#D8E0EA' })
+    .border({ width: 1, color: '#E5E7EB' })
     .borderRadius(22)
   }
 
@@ -3397,12 +4080,20 @@ struct EditorWorkspace {
   private buildPageRailPreviewCard(pageIndex: number): void {
     Stack({ alignContent: Alignment.TopStart }) {
       if (this.pagePreviewSnapshotAt(pageIndex) !== undefined) {
-        PreviewThumbnail({
-          previewSnapshot: this.pagePreviewSnapshotAt(pageIndex) as DocumentPreviewSnapshot,
-          fallbackSummary: '',
-          thumbnailWidth: PAGE_RAIL_THUMBNAIL_WIDTH,
-          thumbnailHeight: PAGE_RAIL_THUMBNAIL_HEIGHT
-        })
+        ForEach([
+          this.previewThumbnailRenderKey(
+            'page-rail',
+            this.pagePreviewSnapshotAt(pageIndex) as DocumentPreviewSnapshot,
+            pageIndex
+          )
+        ], (_: string) => {
+          PreviewThumbnail({
+            previewSnapshot: this.pagePreviewSnapshotAt(pageIndex) as DocumentPreviewSnapshot,
+            fallbackSummary: '',
+            thumbnailWidth: PAGE_RAIL_THUMBNAIL_WIDTH,
+            thumbnailHeight: PAGE_RAIL_THUMBNAIL_HEIGHT
+          })
+        }, (key: string): string => key)
       } else {
         Stack({ alignContent: Alignment.TopStart }) {
           Row()
@@ -3410,14 +4101,14 @@ struct EditorWorkspace {
             .height(PAGE_RAIL_THUMBNAIL_HEIGHT)
             .backgroundColor('#FFFEFB')
             .borderRadius(PAGE_RAIL_CARD_RADIUS)
-            .border({ width: 1, color: '#D8E0EA' })
+            .border({ width: 1, color: '#E5E7EB' })
           if (this.pageEntryAt(pageIndex)?.pageKind === 'pdf' || this.pageEntryAt(pageIndex)?.pageKind === 'pdf-fragment') {
             Column({ space: 8 }) {
               Row()
                 .width(PAGE_RAIL_THUMBNAIL_WIDTH - 18)
                 .height(78)
                 .backgroundColor('#EEF2F6')
-                .borderRadius(14)
+                .borderRadius(12)
               Row()
                 .width(PAGE_RAIL_THUMBNAIL_WIDTH - 34)
                 .height(10)
@@ -3431,23 +4122,6 @@ struct EditorWorkspace {
             }
             .position({ x: 9, y: 10 })
             .alignItems(HorizontalAlign.Start)
-          } else if (this.pageSceneObjectsAt(pageIndex).length > 0) {
-            Stack({ alignContent: Alignment.TopStart }) {
-              ForEach(this.pageSceneObjectsAt(pageIndex), (object: NativeSceneObject) => {
-                Row()
-                  .width(this.pageRailObjectWidth(pageIndex, object))
-                  .height(this.pageRailObjectHeight(pageIndex, object))
-                  .backgroundColor(object.colorHex)
-                  .opacity(object.tool === 'highlighter' ? 0.42 : 0.82)
-                  .borderRadius(object.tool === 'text' ? 8 : 999)
-                  .position({
-                    x: this.pageRailObjectX(pageIndex, object),
-                    y: this.pageRailObjectY(pageIndex, object)
-                  })
-              }, (object: NativeSceneObject): string => object.id)
-            }
-            .width(PAGE_RAIL_THUMBNAIL_WIDTH)
-            .height(PAGE_RAIL_THUMBNAIL_HEIGHT)
           } else if (this.pagePreviewFallbackBlocks(pageIndex).length > 0) {
             Column({ space: 6 }) {
               ForEach(this.pagePreviewFallbackBlocks(pageIndex), (block: MarkdownPreviewBlock, blockIndex: number) => {
@@ -3457,20 +4131,28 @@ struct EditorWorkspace {
                   .textOverflow({ overflow: TextOverflow.Ellipsis })
                   .fontSize(block.type === 'heading' ? 10 : 8)
                   .fontWeight(block.type === 'heading' ? FontWeight.Medium : FontWeight.Normal)
-                  .fontColor(blockIndex === 0 ? '#344054' : '#667085')
+                  .fontColor(blockIndex === 0 ? '#374151' : '#667085')
                   .lineHeight(block.type === 'heading' ? 14 : 12)
               }, (block: MarkdownPreviewBlock, blockIndex: number): string => `${pageIndex}-fallback-${block.type}-${blockIndex}`)
             }
             .position({ x: 12, y: 14 })
             .alignItems(HorizontalAlign.Start)
           }
+          ForEach(this.pageSceneObjectsAt(pageIndex), (object: NativeSceneObject) => {
+            this.buildPageRailSceneObject(pageIndex, object)
+          }, (object: NativeSceneObject): string => `page-rail-object-${pageIndex}-${object.id}`)
         }
+      }
+      if (this.shouldOverlayPageSceneObjects(pageIndex)) {
+        ForEach(this.pageSceneObjectsAt(pageIndex), (object: NativeSceneObject) => {
+          this.buildPageRailSceneObject(pageIndex, object)
+        }, (object: NativeSceneObject): string => `page-rail-overlay-object-${pageIndex}-${object.id}`)
       }
       if (this.isSelectedPageIndex(pageIndex)) {
         Row()
           .width(PAGE_RAIL_THUMBNAIL_WIDTH)
           .height(PAGE_RAIL_THUMBNAIL_HEIGHT)
-          .border({ width: 1.5, color: '#2A9D8F' })
+          .border({ width: 2, color: '#0B57D0' })
           .borderRadius(PAGE_RAIL_CARD_RADIUS)
       }
     }
@@ -3560,10 +4242,10 @@ struct EditorWorkspace {
         Button(EDITOR_WORKSPACE_COPY.preview)
           .layoutWeight(1)
           .height(42)
-          .backgroundColor(this.previewMode === 'preview' ? '#162033' : '#FFFFFF')
-          .fontColor(this.previewMode === 'preview' ? '#FFFFFF' : '#162033')
+          .backgroundColor(this.previewMode === 'preview' ? '#0B57D0' : '#FFFFFF')
+          .fontColor(this.previewMode === 'preview' ? '#FFFFFF' : '#374151')
           .fontSize(13)
-          .borderRadius(14)
+          .borderRadius(12)
           .onClick(() => {
             this.previewMode = 'preview';
             this.showInspectorDrawer = true;
@@ -3572,10 +4254,10 @@ struct EditorWorkspace {
         Button(EDITOR_WORKSPACE_COPY.source)
           .layoutWeight(1)
           .height(42)
-          .backgroundColor(this.previewMode === 'source' ? '#162033' : '#FFFFFF')
-          .fontColor(this.previewMode === 'source' ? '#FFFFFF' : '#162033')
+          .backgroundColor(this.previewMode === 'source' ? '#0B57D0' : '#FFFFFF')
+          .fontColor(this.previewMode === 'source' ? '#FFFFFF' : '#374151')
           .fontSize(13)
-          .borderRadius(14)
+          .borderRadius(12)
           .onClick(() => {
             this.previewMode = 'source';
             this.showInspectorDrawer = true;
@@ -3682,7 +4364,7 @@ struct EditorWorkspace {
               Text(block.text)
                 .fontSize(block.level <= 1 ? 22 : 18)
                 .fontWeight(FontWeight.Bold)
-                .fontColor('#162033')
+                .fontColor('#0B57D0')
                 .width('100%')
             } else if (block.type === 'formula') {
               Text(block.text)
@@ -3691,19 +4373,19 @@ struct EditorWorkspace {
                 .padding(12)
                 .width('100%')
                 .backgroundColor('#EEF4FF')
-                .borderRadius(14)
+                .borderRadius(12)
             } else if (block.type === 'code') {
               Text(block.text)
                 .fontSize(12)
                 .fontColor('#E2E8F0')
                 .padding(12)
                 .width('100%')
-                .backgroundColor('#162033')
-                .borderRadius(14)
+                .backgroundColor('#0B57D0')
+                .borderRadius(12)
             } else {
               Text(block.type === 'list' ? `- ${block.text}` : block.text)
                 .fontSize(14)
-                .fontColor('#344054')
+                .fontColor('#374151')
                 .width('100%')
                 .lineHeight(22)
             }
@@ -3803,15 +4485,15 @@ struct EditorWorkspace {
         this.buildIconBar(3, 9, 4, 2, color, 1)
         this.buildIconBar(10, 7, 3, 2, color, 1)
       } else if (icon === 'undo') {
-        this.buildIconBar(6, 4, 6, 2, color, 1)
-        this.buildIconBar(5, 4, 2, 6, color, 1)
-        this.buildIconBar(2, 5, 4, 2, color, 1)
-        this.buildIconBar(3, 7, 3, 2, color, 1)
+        // 撤销 - 左箭头曲线
+        this.buildIconBar(4, 7, 8, 2, color, 1)
+        this.buildIconBar(4, 7, 2, 4, color, 1)
+        this.buildIconBar(4, 9, 3, 2, color, 1)
       } else if (icon === 'redo') {
-        this.buildIconBar(6, 4, 6, 2, color, 1)
-        this.buildIconBar(11, 4, 2, 6, color, 1)
-        this.buildIconBar(12, 5, 4, 2, color, 1)
-        this.buildIconBar(12, 7, 3, 2, color, 1)
+        // 重做 - 右箭头曲线
+        this.buildIconBar(6, 7, 8, 2, color, 1)
+        this.buildIconBar(12, 7, 2, 4, color, 1)
+        this.buildIconBar(11, 9, 3, 2, color, 1)
       } else if (icon === 'more') {
         this.buildIconDot(3, 7.2, 3, color, 1)
         this.buildIconDot(7.5, 7.2, 3, color, 1)
@@ -3846,13 +4528,13 @@ struct EditorWorkspace {
   @Builder
   private buildToolbarToolButton(tool: ToolType): void {
     Stack({ alignContent: Alignment.Center }) {
-      this.buildEditorIcon(this.toolIconKind(tool), this.currentTool === tool ? '#FFFFFF' : '#344054', 18)
+      this.buildEditorIcon(this.toolIconKind(tool), this.currentTool === tool ? '#0B57D0' : '#9CA3AF', 18)
     }
     .width(FLOATING_TOOL_BUTTON_SIZE)
     .height(FLOATING_TOOL_BUTTON_SIZE)
-    .backgroundColor(this.currentTool === tool ? '#16324F' : '#FFFFFF')
-    .border({ width: 1, color: this.currentTool === tool ? '#16324F' : '#D8E0EA' })
-    .borderRadius(14)
+    .backgroundColor(this.currentTool === tool ? '#E8F0FE' : '#FFFFFF')
+    .border({ width: 1, color: this.currentTool === tool ? '#0B57D0' : '#E5E7EB' })
+    .borderRadius(12)
     .onClick(() => {
       this.setTool(tool);
     })
@@ -3861,16 +4543,435 @@ struct EditorWorkspace {
   @Builder
   private buildFingerWritingToggleButton(): void {
     Stack({ alignContent: Alignment.Center }) {
-      this.buildEditorIcon('fingerWriting', this.fingerWritingEnabled ? '#FFFFFF' : '#344054', 18)
+      this.buildEditorIcon('fingerWriting', this.fingerWritingEnabled ? '#0B57D0' : '#9CA3AF', 18)
     }
     .width(FLOATING_TOOL_BUTTON_SIZE)
     .height(FLOATING_TOOL_BUTTON_SIZE)
-    .backgroundColor(this.fingerWritingEnabled ? '#0F766E' : '#FFFFFF')
-    .border({ width: 1, color: this.fingerWritingEnabled ? '#0F766E' : '#D8E0EA' })
-    .borderRadius(14)
+    .backgroundColor(this.fingerWritingEnabled ? '#E8F0FE' : '#FFFFFF')
+    .border({ width: 1, color: this.fingerWritingEnabled ? '#0B57D0' : '#E5E7EB' })
+    .borderRadius(12)
     .onClick(() => {
       this.toggleFingerWritingMode();
     })
+  }
+
+  @Builder
+  private buildToolbarDragHandle(): void {
+    Stack({ alignContent: Alignment.Center }) {
+      this.buildEditorIcon('drag', '#9CA3AF', 16)
+    }
+    .width(this.toolbarUsesVerticalLayout() ? FLOATING_TOOL_BUTTON_SIZE : 46)
+    .height(FLOATING_TOOL_BUTTON_SIZE)
+    .backgroundColor('#F3F4F6')
+    .borderRadius(12)
+    .gesture(
+      PanGesture({ fingers: 1, distance: 0 })
+        .onActionStart(() => {
+          this.handleToolbarDragStart();
+        })
+        .onActionUpdate((event) => {
+          this.updateToolbarDrag(event as Object);
+        })
+        .onActionEnd(() => {
+          this.snapFloatingToolbarToNearestAnchor();
+        })
+    )
+  }
+
+  @Builder
+  private buildColorChip(color: string): void {
+    Stack({ alignContent: Alignment.Center }) {
+      Column() {}
+        .width(FLOATING_TOOLBAR_COLOR_CHIP_SIZE)
+        .height(FLOATING_TOOLBAR_COLOR_CHIP_SIZE)
+        .backgroundColor(color)
+        .borderRadius(999)
+      if (this.currentColor === color) {
+        Column() {}
+          .width(FLOATING_TOOLBAR_COLOR_CHIP_SIZE + 10)
+          .height(FLOATING_TOOLBAR_COLOR_CHIP_SIZE + 10)
+          .backgroundColor('#00000000')
+          .border({ width: 2, color: '#0B57D0' })
+          .borderRadius(999)
+      } else {
+        Column() {}
+          .width(FLOATING_TOOLBAR_COLOR_CHIP_SIZE + 10)
+          .height(FLOATING_TOOLBAR_COLOR_CHIP_SIZE + 10)
+          .backgroundColor('#00000000')
+          .border({ width: 1, color: '#E5E7EB' })
+          .borderRadius(999)
+      }
+    }
+    .width(FLOATING_TOOLBAR_COLOR_CHIP_SIZE + 12)
+    .height(FLOATING_TOOLBAR_COLOR_CHIP_SIZE + 12)
+    .onClick(() => {
+      this.applySelectedColor(color);
+    })
+  }
+
+  @Builder
+  private buildCustomColorTrigger(): void {
+    Stack({ alignContent: Alignment.Center }) {
+      Text('+')
+        .fontSize(18)
+        .fontWeight(FontWeight.Medium)
+        .fontColor('#5E6E82')
+    }
+    .width(FLOATING_TOOLBAR_COLOR_CHIP_SIZE + 12)
+    .height(FLOATING_TOOLBAR_COLOR_CHIP_SIZE + 12)
+    .backgroundColor('#FFFFFF')
+    .border({ width: 1, color: '#E5E7EB' })
+    .borderRadius(999)
+    .onClick(() => {
+      this.openSystemColorPicker();
+    })
+  }
+
+  @Builder
+  private buildRecentColorPalette(): void {
+    if (this.toolbarUsesVerticalLayout()) {
+      Column({ space: 4 }) {
+        Text('颜色')
+          .fontSize(11)
+          .fontWeight(FontWeight.Medium)
+          .fontColor('#374151')
+          .width('100%')
+        Row({ space: 4 }) {
+          ForEach(this.visibleRecentColors, (color: string) => {
+            this.buildColorChip(color)
+          }, (color: string): string => `toolbar-color-v-${color}`)
+          this.buildCustomColorTrigger()
+        }
+      }
+      .width('100%')
+      .alignItems(HorizontalAlign.Start)
+    } else {
+      Row({ space: 8 }) {
+        ForEach(this.visibleRecentColors, (color: string) => {
+          this.buildColorChip(color)
+        }, (color: string): string => `toolbar-color-${color}`)
+        this.buildCustomColorTrigger()
+      }
+    }
+  }
+
+  @Builder
+  private buildWidthPreviewCard(): void {
+    Row({ space: 10 }) {
+      Text(this.widthPreviewLabel())
+        .fontSize(12)
+        .fontWeight(FontWeight.Medium)
+        .fontColor('#374151')
+      Stack({ alignContent: Alignment.Start }) {
+        Column() {}
+          .width(92)
+          .height(14)
+          .backgroundColor('#F3F4F6')
+          .borderRadius(999)
+        Column() {}
+          .width(72)
+          .height(Math.max(2, Math.round(this.currentWidthValue * 1.8)))
+          .backgroundColor(this.currentColor)
+          .borderRadius(999)
+      }
+      .height(18)
+    }
+    .width('100%')
+  }
+
+  @Builder
+  private buildWidthSlider(): void {
+    Column({ space: 6 }) {
+      Row() {
+        Text('笔宽')
+          .fontSize(11)
+          .fontWeight(FontWeight.Medium)
+          .fontColor('#374151')
+        Blank()
+          .layoutWeight(1)
+        Text(this.widthPreviewLabel())
+          .fontSize(11)
+          .fontColor('#6B7280')
+      }
+      .width('100%')
+      Slider({
+        value: this.currentWidthValue,
+        min: BRUSH_WIDTH_MIN,
+        max: BRUSH_WIDTH_MAX,
+        step: BRUSH_WIDTH_STEP
+      })
+        .width('100%')
+        .onChange((value: number) => {
+          this.updateCurrentWidthValue(value);
+        })
+    }
+    .width('100%')
+  }
+
+  @Builder
+  private buildWidthSlotButton(slot: LineWidthPreset): void {
+    Row({ space: 8 }) {
+      Column({ space: 0 }) {
+        Text(slot.title)
+          .fontSize(11)
+          .fontWeight(FontWeight.Medium)
+          .fontColor(this.selectedWidthSlotId === slot.id ? '#FFFFFF' : '#374151')
+        Text(`${slot.width.toFixed(1)}`)
+          .fontSize(10)
+          .fontColor(this.selectedWidthSlotId === slot.id ? '#E8F0FE' : '#6B7280')
+      }
+      .alignItems(HorizontalAlign.Start)
+      Blank()
+        .layoutWeight(1)
+    }
+    .width(this.toolbarUsesVerticalLayout() ? '100%' : 64)
+    .padding({ top: 6, bottom: 6, left: 10, right: 10 })
+    .backgroundColor(this.selectedWidthSlotId === slot.id ? '#0B57D0' : '#FFFFFF')
+    .border({ width: 1, color: this.selectedWidthSlotId === slot.id ? '#0B57D0' : '#E5E7EB' })
+    .borderRadius(10)
+    .onClick(() => {
+      this.selectWidthSlot(slot.id);
+    })
+  }
+
+  @Builder
+  private buildWidthSlotControls(): void {
+    if (this.toolbarUsesVerticalLayout()) {
+      Column({ space: 6 }) {
+        Text('收藏')
+          .fontSize(11)
+          .fontWeight(FontWeight.Medium)
+          .fontColor('#374151')
+          .width('100%')
+        ForEach(this.brushWidthSlots(), (slot: LineWidthPreset) => {
+          this.buildWidthSlotButton(slot)
+        }, (slot: LineWidthPreset): string => `width-slot-${slot.id}`)
+        Button('保存到档位')
+          .width('100%')
+          .height(32)
+          .enabled(this.widthSaveButtonEnabled())
+          .backgroundColor('#0B57D0')
+          .fontColor('#FFFFFF')
+          .fontSize(11)
+          .borderRadius(10)
+          .onClick(() => {
+            this.saveCurrentWidthToSelectedSlot();
+          })
+      }
+      .width('100%')
+    } else {
+      Row({ space: 8 }) {
+        ForEach(this.brushWidthSlots(), (slot: LineWidthPreset) => {
+          this.buildWidthSlotButton(slot)
+        }, (slot: LineWidthPreset): string => `width-slot-${slot.id}`)
+        Blank()
+          .layoutWeight(1)
+        Button('保存到档位')
+          .height(36)
+          .enabled(this.widthSaveButtonEnabled())
+          .backgroundColor('#0B57D0')
+          .fontColor('#FFFFFF')
+          .fontSize(12)
+          .padding({ left: 14, right: 14 })
+          .borderRadius(12)
+          .onClick(() => {
+            this.saveCurrentWidthToSelectedSlot();
+          })
+      }
+      .width('100%')
+    }
+  }
+
+  @Builder
+  private buildBrushPropertyPanel(): void {
+    if (this.toolbarUsesVerticalLayout()) {
+      Scroll() {
+        Column({ space: 12 }) {
+          Text(this.secondaryToolbarAssistText())
+            .width('100%')
+            .fontSize(12)
+            .fontWeight(FontWeight.Medium)
+            .fontColor('#374151')
+          this.buildRecentColorPalette()
+          this.buildWidthSlider()
+          this.buildWidthPreviewCard()
+          this.buildWidthSlotControls()
+          Text(this.secondaryToolbarHintText())
+            .width('100%')
+            .fontSize(10)
+            .fontColor('#6B7280')
+        }
+        .width('100%')
+      }
+      .width('100%')
+      .height(280)
+      .scrollBar(BarState.Off)
+      .padding(12)
+      .backgroundColor('#F9FAFB')
+      .border({ width: 1, color: '#E5E7EB' })
+      .borderRadius(12)
+    } else {
+      Scroll() {
+        Row({ space: 12 }) {
+          Column({ space: 6 }) {
+            Text('颜色')
+              .fontSize(11)
+              .fontWeight(FontWeight.Medium)
+              .fontColor('#374151')
+            this.buildRecentColorPalette()
+          }
+          .alignItems(HorizontalAlign.Start)
+          Column({ space: 6 }) {
+            Row({ space: 8 }) {
+              Text('笔宽')
+                .fontSize(11)
+                .fontWeight(FontWeight.Medium)
+                .fontColor('#374151')
+              Text(this.widthPreviewLabel())
+                .fontSize(11)
+                .fontColor('#6B7280')
+              Slider({
+                value: this.currentWidthValue,
+                min: BRUSH_WIDTH_MIN,
+                max: BRUSH_WIDTH_MAX,
+                step: BRUSH_WIDTH_STEP
+              })
+                .width(100)
+                .layoutWeight(1)
+                .onChange((value: number) => {
+                  this.updateCurrentWidthValue(value);
+                })
+            }
+            .width('100%')
+            .alignItems(VerticalAlign.Center)
+          }
+          .width(200)
+          .alignItems(HorizontalAlign.Start)
+          Column({ space: 6 }) {
+            Text('收藏')
+              .fontSize(11)
+              .fontWeight(FontWeight.Medium)
+              .fontColor('#374151')
+            this.buildWidthSlotControls()
+          }
+          .alignItems(HorizontalAlign.Start)
+        }
+      }
+      .scrollable(ScrollDirection.Horizontal)
+      .scrollBar(BarState.Off)
+      .width('100%')
+    }
+  }
+
+  @Builder
+  private buildContextActionPanel(): void {
+    if (this.toolUsesContextActions() && this.toolbarUsesVerticalLayout()) {
+      Column({ space: 8 }) {
+        Text(this.secondaryToolbarAssistText())
+          .width('100%')
+          .fontSize(12)
+          .fontWeight(FontWeight.Medium)
+          .fontColor('#0B57D0')
+        Button(this.embedPlacementArmed ? '取消放置' : '插入图文')
+          .width('100%')
+          .height(36)
+          .padding({ left: 10, right: 10 })
+          .backgroundColor(this.embedPlacementArmed ? '#FEE4E2' : '#0B57D0')
+          .fontColor(this.embedPlacementArmed ? '#B42318' : '#FFFFFF')
+          .fontSize(12)
+          .borderRadius(12)
+          .onClick(() => {
+            if (this.embedPlacementArmed) {
+              this.clearEmbeddedPlacement();
+            } else {
+              this.armEmbeddedPlacement();
+            }
+          })
+        Button('预览')
+          .width('100%')
+          .height(34)
+          .backgroundColor('#FFFFFF')
+          .fontColor('#0B57D0')
+          .fontSize(12)
+          .border({ width: 1, color: '#E5E7EB' })
+          .borderRadius(12)
+          .onClick(() => {
+            this.previewMode = 'preview';
+            this.showInspectorDrawer = true;
+          })
+        Button('源码')
+          .width('100%')
+          .height(34)
+          .backgroundColor('#FFFFFF')
+          .fontColor('#0B57D0')
+          .fontSize(12)
+          .border({ width: 1, color: '#E5E7EB' })
+          .borderRadius(12)
+          .onClick(() => {
+            this.previewMode = 'source';
+            this.showInspectorDrawer = true;
+          })
+        Text(this.secondaryToolbarHintText())
+          .width('100%')
+          .fontSize(10)
+          .fontColor('#667085')
+      }
+      .width('100%')
+      .padding(12)
+      .backgroundColor('#F8FAFC')
+      .borderRadius(16)
+    } else if (this.toolUsesContextActions()) {
+      Row({ space: 8 }) {
+        Text(this.secondaryToolbarAssistText())
+          .fontSize(11)
+          .fontWeight(FontWeight.Medium)
+          .fontColor('#374151')
+        Button(this.embedPlacementArmed ? '取消放置' : '插入图文')
+          .height(36)
+          .padding({ left: 14, right: 14 })
+          .backgroundColor(this.embedPlacementArmed ? '#FEE4E2' : '#0B57D0')
+          .fontColor(this.embedPlacementArmed ? '#B42318' : '#FFFFFF')
+          .fontSize(12)
+          .borderRadius(12)
+          .onClick(() => {
+            if (this.embedPlacementArmed) {
+              this.clearEmbeddedPlacement();
+            } else {
+              this.armEmbeddedPlacement();
+            }
+          })
+        Button('预览')
+          .height(36)
+          .padding({ left: 14, right: 14 })
+          .backgroundColor('#FFFFFF')
+          .fontColor('#0B57D0')
+          .fontSize(12)
+          .border({ width: 1, color: '#E5E7EB' })
+          .borderRadius(12)
+          .onClick(() => {
+            this.previewMode = 'preview';
+            this.showInspectorDrawer = true;
+          })
+        Button('源码')
+          .height(36)
+          .padding({ left: 14, right: 14 })
+          .backgroundColor('#FFFFFF')
+          .fontColor('#0B57D0')
+          .fontSize(12)
+          .border({ width: 1, color: '#E5E7EB' })
+          .borderRadius(12)
+          .onClick(() => {
+            this.previewMode = 'source';
+            this.showInspectorDrawer = true;
+          })
+        Blank()
+          .layoutWeight(1)
+        Text(this.secondaryToolbarHintText())
+          .fontSize(11)
+          .fontColor('#667085')
+      }
+      .width('100%')
+    }
   }
 
   @Builder
@@ -3887,7 +4988,7 @@ struct EditorWorkspace {
               Text(block.text)
                 .fontSize(block.level <= 1 ? 22 : 18)
                 .fontWeight(FontWeight.Bold)
-                .fontColor('#162033')
+                .fontColor('#0B57D0')
                 .width('100%')
             } else if (block.type === 'formula') {
               Text(block.text)
@@ -3896,19 +4997,19 @@ struct EditorWorkspace {
                 .padding(12)
                 .width('100%')
                 .backgroundColor('#EEF4FF')
-                .borderRadius(14)
+                .borderRadius(12)
             } else if (block.type === 'code') {
               Text(block.text)
                 .fontSize(12)
                 .fontColor('#E2E8F0')
                 .padding(12)
                 .width('100%')
-                .backgroundColor('#162033')
-                .borderRadius(14)
+                .backgroundColor('#0B57D0')
+                .borderRadius(12)
             } else {
               Text(block.type === 'list' ? `- ${block.text}` : block.text)
                 .fontSize(14)
-                .fontColor('#344054')
+                .fontColor('#374151')
                 .width('100%')
                 .lineHeight(22)
             }
@@ -3928,12 +5029,12 @@ struct EditorWorkspace {
   private buildFloatingBackButton(): void {
     Row() {
       Stack({ alignContent: Alignment.Center }) {
-        this.buildEditorIcon('back', '#162033', 18)
+        this.buildEditorIcon('back', '#1A1A1A', 18)
       }
         .width(42)
         .height(42)
         .backgroundColor('#FFFFFF')
-        .border({ width: 1, color: '#D8E0EA' })
+        .border({ width: 1, color: '#E5E7EB' })
         .borderRadius(16)
         .onClick(() => {
           this.goBack();
@@ -3943,28 +5044,25 @@ struct EditorWorkspace {
   }
 
   @Builder
+  private buildToolbarMoreButton(): void {
+    Stack({ alignContent: Alignment.Center }) {
+      this.buildEditorIcon('more', this.toolbarExpanded ? '#0B57D0' : '#9CA3AF', 16)
+    }
+    .width(FLOATING_TOOL_BUTTON_SIZE)
+    .height(FLOATING_TOOL_BUTTON_SIZE)
+    .backgroundColor(this.toolbarExpanded ? '#E8F0FE' : '#FFFFFF')
+    .border({ width: 1, color: this.toolbarExpanded ? '#0B57D0' : '#E5E7EB' })
+    .borderRadius(12)
+    .onClick(() => {
+      this.toggleToolbarExpanded();
+    })
+  }
+
+  @Builder
   private buildToolbarPrimaryRow(): void {
     if (this.toolbarUsesVerticalLayout()) {
       Column({ space: 6 }) {
-        Stack({ alignContent: Alignment.Center }) {
-          this.buildEditorIcon('drag', '#667085', 16)
-        }
-        .width('100%')
-        .height(FLOATING_TOOL_BUTTON_SIZE - 2)
-        .backgroundColor('#EEF2F6')
-        .borderRadius(12)
-        .gesture(
-          PanGesture({ fingers: 1, distance: 0 })
-            .onActionStart(() => {
-              this.handleToolbarDragStart();
-            })
-            .onActionUpdate((event) => {
-              this.updateToolbarDrag(event as Object);
-            })
-            .onActionEnd(() => {
-              this.snapFloatingToolbarToNearestAnchor();
-            })
-        )
+        this.buildToolbarDragHandle()
         ForEach([
           ToolType.PEN,
           ToolType.PENCIL,
@@ -3977,312 +5075,191 @@ struct EditorWorkspace {
         }, (tool: ToolType): string => `toolbar-${tool}`)
         this.buildFingerWritingToggleButton()
       }
-      .width('100%')
+      .width(FLOATING_TOOL_BUTTON_SIZE)
     } else {
-      Row({ space: 4 }) {
-        Stack({ alignContent: Alignment.Center }) {
-          this.buildEditorIcon('drag', '#667085', 16)
-        }
-        .height(FLOATING_TOOL_BUTTON_SIZE - 2)
-        .padding({ left: 8, right: 8 })
-        .backgroundColor('#EEF2F6')
-        .borderRadius(12)
-        .gesture(
-          PanGesture({ fingers: 1, distance: 0 })
-            .onActionStart(() => {
-              this.handleToolbarDragStart();
-            })
-            .onActionUpdate((event) => {
-              this.updateToolbarDrag(event as Object);
-            })
-            .onActionEnd(() => {
-              this.snapFloatingToolbarToNearestAnchor();
-            })
-        )
+      Row({ space: 8 }) {
+        this.buildToolbarDragHandle()
         ForEach([
           ToolType.PEN,
-          ToolType.PENCIL,
           ToolType.ERASER,
-          ToolType.TEXT,
-          ToolType.LASSO,
           ToolType.HIGHLIGHTER
         ], (tool: ToolType) => {
           this.buildToolbarToolButton(tool)
         }, (tool: ToolType): string => `toolbar-${tool}`)
+        this.buildToolbarMoreButton()
+        if (this.toolbarExpanded) {
+          ForEach([
+            ToolType.PENCIL,
+            ToolType.TEXT,
+            ToolType.LASSO
+          ], (tool: ToolType) => {
+            this.buildToolbarToolButton(tool)
+          }, (tool: ToolType): string => `toolbar-expanded-${tool}`)
+        }
         this.buildFingerWritingToggleButton()
-        Blank()
-          .layoutWeight(1)
       }
-      .width('100%')
     }
   }
 
   @Builder
   private buildToolbarSecondaryRow(): void {
-    if (this.toolUsesColorPalette() && this.toolbarUsesVerticalLayout()) {
-      Column({ space: 8 }) {
-        Text(this.secondaryToolbarAssistText())
-          .width('100%')
-          .fontSize(11)
-          .fontWeight(FontWeight.Medium)
-          .fontColor('#344054')
-          .textAlign(TextAlign.Center)
-        Column({ space: 6 }) {
-          ForEach(PALETTE_COLORS, (color: string) => {
-            Blank()
-              .width(FLOATING_TOOLBAR_COLOR_CHIP_SIZE + 10)
-              .height(FLOATING_TOOLBAR_COLOR_CHIP_SIZE + 10)
-              .backgroundColor(color)
-              .border({
-                width: this.currentColor === color ? 3 : 1,
-                color: this.currentColor === color ? '#16324F' : '#D0D5DD'
-              })
-              .borderRadius(999)
-              .onClick(() => {
-                this.currentColor = color;
-                if (this.engineId.length > 0) {
-                  this.nativeEngine.setBrushColor(this.engineId, color);
-                  this.refreshDebugState();
-                }
-              })
-          }, (color: string): string => `toolbar-color-${color}`)
-        }
-        .width('100%')
-        .alignItems(HorizontalAlign.Center)
-        Text(this.secondaryToolbarHintText())
-          .width('100%')
-          .fontSize(10)
-          .fontColor('#667085')
-          .textAlign(TextAlign.Center)
-      }
-      .width('100%')
-    } else if (this.toolUsesColorPalette()) {
-      Row({ space: 8 }) {
-        Text(this.secondaryToolbarAssistText())
-          .fontSize(11)
-          .fontWeight(FontWeight.Medium)
-          .fontColor('#344054')
-        ForEach(PALETTE_COLORS, (color: string) => {
-          Blank()
-            .width(FLOATING_TOOLBAR_COLOR_CHIP_SIZE)
-            .height(FLOATING_TOOLBAR_COLOR_CHIP_SIZE)
-            .backgroundColor(color)
-            .border({
-              width: this.currentColor === color ? 3 : 1,
-              color: this.currentColor === color ? '#16324F' : '#D0D5DD'
-            })
-            .borderRadius(999)
-            .onClick(() => {
-              this.currentColor = color;
-              if (this.engineId.length > 0) {
-                this.nativeEngine.setBrushColor(this.engineId, color);
-                this.refreshDebugState();
-              }
-            })
-        }, (color: string): string => `toolbar-color-${color}`)
-        Blank()
-          .layoutWeight(1)
-        Text(this.secondaryToolbarHintText())
-          .fontSize(11)
-          .fontColor('#667085')
-      }
-      .width('100%')
-    } else if (this.toolUsesContextActions() && this.toolbarUsesVerticalLayout()) {
-      Column({ space: 8 }) {
-        Text(this.secondaryToolbarAssistText())
-          .width('100%')
-          .fontSize(11)
-          .fontWeight(FontWeight.Medium)
-          .fontColor('#344054')
-          .textAlign(TextAlign.Center)
-        Button(this.embedPlacementArmed ? '取消放置' : '插入图文')
-          .width('100%')
-          .height(34)
-          .padding({ left: 10, right: 10 })
-          .backgroundColor(this.embedPlacementArmed ? '#FEE4E2' : '#162033')
-          .fontColor(this.embedPlacementArmed ? '#B42318' : '#FFFFFF')
-          .fontSize(11)
-          .borderRadius(12)
-          .onClick(() => {
-            if (this.embedPlacementArmed) {
-              this.clearEmbeddedPlacement();
-            } else {
-              this.armEmbeddedPlacement();
-            }
-          })
-        Button('预览')
-          .width('100%')
-          .height(32)
-          .backgroundColor('#FFFFFF')
-          .fontColor('#162033')
-          .fontSize(11)
-          .border({ width: 1, color: '#D8E0EA' })
-          .borderRadius(12)
-          .onClick(() => {
-            this.previewMode = 'preview';
-            this.showInspectorDrawer = true;
-          })
-        Button('源码')
-          .width('100%')
-          .height(32)
-          .backgroundColor('#FFFFFF')
-          .fontColor('#162033')
-          .fontSize(11)
-          .border({ width: 1, color: '#D8E0EA' })
-          .borderRadius(12)
-          .onClick(() => {
-            this.previewMode = 'source';
-            this.showInspectorDrawer = true;
-          })
-        Text(this.secondaryToolbarHintText())
-          .width('100%')
-          .fontSize(10)
-          .fontColor('#667085')
-          .textAlign(TextAlign.Center)
-      }
-      .width('100%')
+    if (this.toolUsesBrushControls()) {
+      this.buildBrushPropertyPanel()
     } else if (this.toolUsesContextActions()) {
-      Row({ space: 8 }) {
-        Text(this.secondaryToolbarAssistText())
-          .fontSize(11)
-          .fontWeight(FontWeight.Medium)
-          .fontColor('#344054')
-        Button(this.embedPlacementArmed ? '取消放置' : '插入图文')
-          .height(34)
-          .padding({ left: 12, right: 12 })
-          .backgroundColor(this.embedPlacementArmed ? '#FEE4E2' : '#162033')
-          .fontColor(this.embedPlacementArmed ? '#B42318' : '#FFFFFF')
-          .fontSize(12)
-          .borderRadius(12)
-          .onClick(() => {
-            if (this.embedPlacementArmed) {
-              this.clearEmbeddedPlacement();
-            } else {
-              this.armEmbeddedPlacement();
-            }
-          })
-        Button('预览')
-          .height(34)
-          .padding({ left: 12, right: 12 })
-          .backgroundColor('#FFFFFF')
-          .fontColor('#162033')
-          .fontSize(12)
-          .border({ width: 1, color: '#D8E0EA' })
-          .borderRadius(12)
-          .onClick(() => {
-            this.previewMode = 'preview';
-            this.showInspectorDrawer = true;
-          })
-        Button('源码')
-          .height(34)
-          .padding({ left: 12, right: 12 })
-          .backgroundColor('#FFFFFF')
-          .fontColor('#162033')
-          .fontSize(12)
-          .border({ width: 1, color: '#D8E0EA' })
-          .borderRadius(12)
-          .onClick(() => {
-            this.previewMode = 'source';
-            this.showInspectorDrawer = true;
-          })
-        Blank()
-          .layoutWeight(1)
-        Text(this.secondaryToolbarHintText())
-          .fontSize(11)
-          .fontColor('#667085')
-          .maxLines(2)
-      }
-      .width('100%')
+      this.buildContextActionPanel()
     }
   }
 
   @Builder
   private buildFloatingToolbarChrome(): void {
-    Column({ space: 8 }) {
-      this.buildToolbarPrimaryRow()
-      if (this.shouldShowSecondaryToolbar()) {
-        this.buildToolbarSecondaryRow()
+    if (this.toolbarUsesVerticalLayout()) {
+      Row({ space: 12 }) {
+        this.buildToolbarPrimaryRow()
+        if (this.shouldShowSecondaryToolbar()) {
+          this.buildToolbarSecondaryRow()
+        }
       }
+      .width(this.floatingToolbarChromeWidth())
+      .alignItems(VerticalAlign.Top)
+      .padding(12)
+      .backgroundColor('#FFFFFF')
+      .border({ width: 1, color: '#DCE5EE' })
+      .borderRadius(20)
+      .position({
+        x: this.floatingToolbarPositionX(),
+        y: this.floatingToolbarPositionY()
+      })
+    } else {
+      Column({ space: 10 }) {
+        this.buildToolbarPrimaryRow()
+        if (this.shouldShowSecondaryToolbar()) {
+          this.buildToolbarSecondaryRow()
+        }
+      }
+      .width(this.floatingToolbarChromeWidth())
+      .padding(12)
+      .backgroundColor('#FFFFFF')
+      .border({ width: 1, color: '#DCE5EE' })
+      .borderRadius(20)
+      .position({
+        x: this.floatingToolbarPositionX(),
+        y: this.floatingToolbarPositionY()
+      })
     }
-    .width(this.floatingToolbarChromeWidth())
-    .padding(10)
-    .backgroundColor('#FFFFFFF2')
-    .border({ width: 1, color: '#DCE5EE' })
-    .borderRadius(18)
-    .position({
-      x: this.floatingToolbarPositionX(),
-      y: this.floatingToolbarPositionY()
+  }
+
+  @Builder
+  private buildActionIconButton(icon: EditorUiIcon, onClickHandler: () => void): void {
+    Stack({ alignContent: Alignment.Center }) {
+      this.buildEditorIcon(icon, '#6B7280', 14)
+    }
+    .width(32)
+    .height(32)
+    .backgroundColor('#F9FAFB')
+    .border({ width: 1, color: '#E5E7EB' })
+    .borderRadius(16)
+    .onClick(() => {
+      onClickHandler();
     })
   }
 
   @Builder
   private buildRailActionStrip(): void {
-    Row({ space: 6 }) {
-      Stack({ alignContent: Alignment.Center }) {
-        this.buildEditorIcon('undo', '#344054', 15)
-      }
-      .width(38)
-      .height(38)
-      .backgroundColor('#FFFFFF')
-      .border({ width: 1, color: '#D8E0EA' })
-      .borderRadius(14)
-      .onClick(() => {
+    Row({ space: 12 }) {
+      this.buildActionIconButton('undo', () => {
         this.undoStroke();
       })
-      Stack({ alignContent: Alignment.Center }) {
-        this.buildEditorIcon('redo', '#344054', 15)
-      }
-      .width(38)
-      .height(38)
-      .backgroundColor('#FFFFFF')
-      .border({ width: 1, color: '#D8E0EA' })
-      .borderRadius(14)
-      .onClick(() => {
+      this.buildActionIconButton('redo', () => {
         this.redoStroke();
       })
-      Blank()
-        .layoutWeight(1)
-      Stack({ alignContent: Alignment.Center }) {
-        this.buildEditorIcon('more', '#344054', 15)
-      }
-      .width(38)
-      .height(38)
-      .backgroundColor('#FFFFFF')
-      .border({ width: 1, color: '#D8E0EA' })
-      .borderRadius(14)
-      .onClick(() => {
+      this.buildActionIconButton('more', () => {
         this.toggleRailMenu();
       })
-      Stack({ alignContent: Alignment.Center }) {
-        this.buildEditorIcon(this.railToggleIconKind(), '#162033', 15)
-      }
-      .width(38)
-      .height(38)
-      .backgroundColor('#FFFFFF')
-      .border({ width: 1, color: '#D8E0EA' })
-      .borderRadius(14)
-      .onClick(() => {
+      this.buildActionIconButton(this.railToggleIconKind(), () => {
         this.setRailCollapsed(!this.railCollapsed);
       })
     }
-    .width('100%')
-    .padding(6)
-    .backgroundColor('#FFFFFF')
-    .border({ width: 1, color: '#DCE5EE' })
-    .borderRadius(18)
+    .padding({ top: 8, bottom: 8, left: 12, right: 12 })
+    .backgroundColor('#F3F4F6')
+    .border({ width: 1, color: '#E5E7EB' })
+    .borderRadius(16)
   }
 
   @Builder
   private buildCanvasActionGroup(): void {
-    if (this.railCollapsed) {
-      Column({ space: 10 }) {
-        this.buildRailActionStrip()
-        if (this.showRailMenu) {
-          this.buildRailMenu()
-        }
+    Column({ space: 10 }) {
+      this.buildRailActionStrip()
+      if (this.showRailMenu) {
+        this.buildRailMenu()
       }
-      .width(172)
-      .position({ x: Math.max(18, this.writingViewportWidth - 188), y: 18 })
+    }
+    .width(216)
+    .position({
+      x: this.writingViewportWidth - 224,
+      y: 12
+    })
+  }
+
+  @Builder
+  private buildCustomColorDialog(): void {
+    if (this.showCustomColorDialog) {
+      Stack({ alignContent: Alignment.Center }) {
+        Column() {}
+          .width('100%')
+          .height('100%')
+          .backgroundColor('#660B1F33')
+        Column({ space: 14 }) {
+          Text('自定义颜色')
+            .fontSize(18)
+            .fontWeight(FontWeight.Bold)
+            .fontColor('#0B57D0')
+            .width('100%')
+          Row({ space: 12 }) {
+            Blank()
+              .width(44)
+              .height(44)
+              .backgroundColor(this.sanitizeColorString(this.customColorDraft))
+              .border({ width: 1, color: '#D0D5DD' })
+              .borderRadius(12)
+            TextInput({ text: this.customColorDraft, placeholder: '#RRGGBB' })
+              .layoutWeight(1)
+              .height(44)
+              .backgroundColor('#FFFFFF')
+              .borderRadius(12)
+              .onChange((value: string) => {
+                this.updateCustomColorDraft(value);
+              })
+          }
+          this.buildRecentColorPalette()
+          Row({ space: 10 }) {
+            Button('取消')
+              .layoutWeight(1)
+              .height(40)
+              .backgroundColor('#FFFFFF')
+              .fontColor('#374151')
+              .border({ width: 1, color: '#D0D5DD' })
+              .borderRadius(12)
+              .onClick(() => {
+                this.closeCustomColorDialog();
+              })
+            Button('应用')
+              .layoutWeight(1)
+              .height(40)
+              .backgroundColor('#0B57D0')
+              .fontColor('#FFFFFF')
+              .borderRadius(12)
+              .onClick(() => {
+                this.confirmCustomColorDialog();
+              })
+          }
+        }
+        .width(320)
+        .padding(20)
+        .backgroundColor('#F8FAFC')
+        .borderRadius(24)
+      }
+      .width('100%')
+      .height('100%')
     }
   }
 
@@ -4304,7 +5281,7 @@ struct EditorWorkspace {
             Button('前往')
               .height(36)
               .enabled(this.pageJumpTargetIndex() >= 0)
-              .backgroundColor('#162033')
+              .backgroundColor('#0B57D0')
               .fontColor('#FFFFFF')
               .fontSize(11)
               .padding({ left: 12, right: 12 })
@@ -4318,18 +5295,18 @@ struct EditorWorkspace {
             .height(38)
             .padding({ left: 14, right: 14 })
             .backgroundColor('#FFFFFF')
-            .fontColor('#162033')
+            .fontColor('#374151')
             .fontSize(12)
-            .borderRadius(14)
+            .borderRadius(12)
             .onClick(() => {
               this.openPageJumpInput();
             })
         }
       }
       .padding(8)
-      .backgroundColor('#FFFFFFE8')
-      .border({ width: 1, color: '#DCE5EE' })
-      .borderRadius(18)
+      .backgroundColor('#FFFFFF')
+      .border({ width: 1, color: '#D0D5DD' })
+      .borderRadius(16)
       .position({
         x: Math.max(20, this.writingViewportWidth - (this.showPageJumpInput ? 168 : 132) - 20),
         y: Math.max(92, this.writingViewportHeight - 86)
@@ -4347,7 +5324,7 @@ struct EditorWorkspace {
           .fontColor('#0F172A')
         Text(this.embeddedBlockPlainText(block))
           .fontSize(12)
-          .fontColor('#344054')
+          .fontColor('#374151')
           .lineHeight(18)
           .maxLines(4)
           .textOverflow({ overflow: TextOverflow.Ellipsis })
@@ -4393,7 +5370,7 @@ struct EditorWorkspace {
             .height(this.embedSelectionHeight)
             .border({ width: 2, color: '#0F766E' })
             .backgroundColor('#160F766E')
-            .borderRadius(14)
+            .borderRadius(12)
             .position({ x: this.embedSelectionX, y: this.embedSelectionY })
           Text('Drag a rectangle on the active page.')
             .fontSize(12)
@@ -4401,7 +5378,7 @@ struct EditorWorkspace {
             .padding({ left: 12, right: 12, top: 8, bottom: 8 })
             .backgroundColor('#FFFFFF')
             .border({ width: 1, color: '#CFE7DF' })
-            .borderRadius(14)
+            .borderRadius(12)
             .position({ x: 18, y: 18 })
         }
       }
@@ -4414,18 +5391,26 @@ struct EditorWorkspace {
   private buildWritingPageFallback(pageIndex: number): void {
     Stack({ alignContent: Alignment.TopStart }) {
       if (this.pagePreviewSnapshotAt(pageIndex) !== undefined) {
-        PreviewThumbnail({
-          previewSnapshot: this.pagePreviewSnapshotAt(pageIndex) as DocumentPreviewSnapshot,
-          fallbackSummary: '',
-          thumbnailWidth: this.renderedWritingPageWidth(pageIndex),
-          thumbnailHeight: this.renderedWritingPageHeight(pageIndex)
-        })
+        ForEach([
+          this.previewThumbnailRenderKey(
+            'writing-page',
+            this.pagePreviewSnapshotAt(pageIndex) as DocumentPreviewSnapshot,
+            pageIndex
+          )
+        ], (_: string) => {
+          PreviewThumbnail({
+            previewSnapshot: this.pagePreviewSnapshotAt(pageIndex) as DocumentPreviewSnapshot,
+            fallbackSummary: '',
+            thumbnailWidth: this.renderedWritingPageWidth(pageIndex),
+            thumbnailHeight: this.renderedWritingPageHeight(pageIndex)
+          })
+        }, (key: string): string => key)
       } else {
         Column({ space: 8 }) {
           Text(this.pagePlaceholderTitle(pageIndex))
             .fontSize(16)
             .fontWeight(FontWeight.Medium)
-            .fontColor('#162033')
+            .fontColor('#0B57D0')
             .margin({ top: 18, left: 18, right: 18 })
             .width('100%')
           Text(this.pagePlaceholderDetail(pageIndex))
@@ -4438,7 +5423,7 @@ struct EditorWorkspace {
               Text(block.type === 'list' ? `- ${block.text}` : block.text)
                 .fontSize(block.type === 'heading' ? 15 : 13)
                 .fontWeight(block.type === 'heading' ? FontWeight.Medium : FontWeight.Normal)
-                .fontColor(block.type === 'heading' ? '#162033' : '#475467')
+                .fontColor(block.type === 'heading' ? '#0B57D0' : '#475467')
                 .lineHeight(block.type === 'heading' ? 22 : 20)
                 .maxLines(blockIndex === 0 ? 4 : 3)
                 .textOverflow({ overflow: TextOverflow.Ellipsis })
@@ -4454,6 +5439,11 @@ struct EditorWorkspace {
         .height('100%')
         .backgroundColor('#FFFDF8')
         .alignItems(HorizontalAlign.Start)
+      }
+      if (this.shouldOverlayPageSceneObjects(pageIndex)) {
+        ForEach(this.pageSceneObjectsAt(pageIndex), (object: NativeSceneObject) => {
+          this.buildWritingPageSceneObject(pageIndex, object)
+        }, (object: NativeSceneObject): string => `page-fallback-overlay-object-${pageIndex}-${object.id}`)
       }
       this.buildPageEmbeddedOverlayLayer(pageIndex)
     }
@@ -4577,13 +5567,13 @@ struct EditorWorkspace {
           Text(this.previewMode === 'preview' ? '页面预览' : '源码')
             .fontSize(18)
             .fontWeight(FontWeight.Bold)
-            .fontColor('#162033')
+            .fontColor('#0B57D0')
           Blank()
             .layoutWeight(1)
           Button('预览')
             .height(34)
-            .backgroundColor(this.previewMode === 'preview' ? '#162033' : '#FFFFFF')
-            .fontColor(this.previewMode === 'preview' ? '#FFFFFF' : '#162033')
+            .backgroundColor(this.previewMode === 'preview' ? '#0B57D0' : '#FFFFFF')
+            .fontColor(this.previewMode === 'preview' ? '#FFFFFF' : '#0B57D0')
             .fontSize(12)
             .borderRadius(12)
             .onClick(() => {
@@ -4591,8 +5581,8 @@ struct EditorWorkspace {
             })
           Button('源码')
             .height(34)
-            .backgroundColor(this.previewMode === 'source' ? '#162033' : '#FFFFFF')
-            .fontColor(this.previewMode === 'source' ? '#FFFFFF' : '#162033')
+            .backgroundColor(this.previewMode === 'source' ? '#0B57D0' : '#FFFFFF')
+            .fontColor(this.previewMode === 'source' ? '#FFFFFF' : '#0B57D0')
             .fontSize(12)
             .borderRadius(12)
             .onClick(() => {
@@ -4601,7 +5591,7 @@ struct EditorWorkspace {
           Button('关闭')
             .height(34)
             .backgroundColor('#F3F6FB')
-            .fontColor('#162033')
+            .fontColor('#0B57D0')
             .fontSize(12)
             .borderRadius(12)
             .onClick(() => {
@@ -4637,7 +5627,7 @@ struct EditorWorkspace {
             Text('插入图文 / 公式')
               .fontSize(20)
               .fontWeight(FontWeight.Bold)
-              .fontColor('#162033')
+              .fontColor('#0B57D0')
             Text('左侧输入，右侧实时预览。')
               .fontSize(12)
               .fontColor('#667085')
@@ -4647,7 +5637,7 @@ struct EditorWorkspace {
             .height(36)
             .padding({ left: 14, right: 14 })
             .backgroundColor('#FFFFFF')
-            .fontColor('#344054')
+            .fontColor('#374151')
             .fontSize(12)
             .border({ width: 1, color: '#D0D5DD' })
             .borderRadius(12)
@@ -4657,14 +5647,14 @@ struct EditorWorkspace {
           Text('预览')
             .fontSize(12)
             .fontWeight(FontWeight.Medium)
-            .fontColor('#162033')
+            .fontColor('#0B57D0')
             .padding({ left: 14, right: 14, top: 10, bottom: 10 })
             .backgroundColor('#EEF2F6')
             .borderRadius(12)
           Button('完成')
             .height(36)
             .padding({ left: 14, right: 14 })
-            .backgroundColor('#162033')
+            .backgroundColor('#0B57D0')
             .fontColor('#FFFFFF')
             .fontSize(12)
             .borderRadius(12)
@@ -4679,7 +5669,7 @@ struct EditorWorkspace {
               Text('输入')
                 .fontSize(13)
                 .fontWeight(FontWeight.Medium)
-                .fontColor('#162033')
+                .fontColor('#0B57D0')
                 .width('100%')
               TextArea({
                 text: this.embeddedComposerText,
@@ -4704,7 +5694,7 @@ struct EditorWorkspace {
               Text('实时预览')
                 .fontSize(13)
                 .fontWeight(FontWeight.Medium)
-                .fontColor('#162033')
+                .fontColor('#0B57D0')
                 .width('100%')
               this.buildEmbeddedComposerPreview()
             }
@@ -4722,7 +5712,7 @@ struct EditorWorkspace {
               Text('输入')
                 .fontSize(13)
                 .fontWeight(FontWeight.Medium)
-                .fontColor('#162033')
+                .fontColor('#0B57D0')
                 .width('100%')
               TextArea({
                 text: this.embeddedComposerText,
@@ -4746,7 +5736,7 @@ struct EditorWorkspace {
               Text('实时预览')
                 .fontSize(13)
                 .fontWeight(FontWeight.Medium)
-                .fontColor('#162033')
+                .fontColor('#0B57D0')
                 .width('100%')
               this.buildEmbeddedComposerPreview()
             }
@@ -4776,26 +5766,26 @@ struct EditorWorkspace {
       Stack({ alignContent: Alignment.TopStart }) {
         this.buildPageRailPreviewCard(pageIndex)
         Stack({ alignContent: Alignment.Center }) {
-          this.buildEditorIcon('bookmark', this.isPageBookmarked(pageIndex) ? '#FFFFFF' : '#344054', 14)
+          this.buildEditorIcon('bookmark', this.isPageBookmarked(pageIndex) ? '#FFFFFF' : '#374151', 14)
         }
-          .height(28)
-          .width(28)
-          .backgroundColor(this.isPageBookmarked(pageIndex) ? '#16324F' : '#FFFFFF')
-          .border({ width: 1, color: this.isPageBookmarked(pageIndex) ? '#16324F' : '#D8E0EA' })
-          .borderRadius(10)
-          .position({ x: PAGE_RAIL_THUMBNAIL_WIDTH - 36, y: 8 })
+          .height(PAGE_RAIL_ACTION_BUTTON_SIZE)
+          .width(PAGE_RAIL_ACTION_BUTTON_SIZE)
+          .backgroundColor(this.isPageBookmarked(pageIndex) ? '#0B57D0' : '#FFFFFF')
+          .border({ width: 1, color: this.isPageBookmarked(pageIndex) ? '#0B57D0' : '#E5E7EB' })
+          .borderRadius(12)
+          .position({ x: PAGE_RAIL_THUMBNAIL_WIDTH - PAGE_RAIL_ACTION_BUTTON_SIZE - 10, y: 10 })
           .onClick(async () => {
             await this.toggleBookmarkForPage(pageIndex);
           })
         Stack({ alignContent: Alignment.Center }) {
           this.buildEditorIcon('more', '#475467', 15)
         }
-          .width(28)
-          .height(28)
+          .width(PAGE_RAIL_PAGE_MENU_BUTTON_SIZE)
+          .height(PAGE_RAIL_PAGE_MENU_BUTTON_SIZE)
           .backgroundColor('#FFFFFF')
-          .border({ width: 1, color: '#D8E0EA' })
-          .borderRadius(10)
-          .position({ x: 8, y: PAGE_RAIL_THUMBNAIL_HEIGHT - 36 })
+          .border({ width: 1, color: '#E5E7EB' })
+          .borderRadius(12)
+          .position({ x: 10, y: PAGE_RAIL_THUMBNAIL_HEIGHT - PAGE_RAIL_PAGE_MENU_BUTTON_SIZE - 10 })
           .onClick(async () => {
             await this.togglePageMenu(pageIndex);
           })
@@ -4831,54 +5821,70 @@ struct EditorWorkspace {
     if (!this.railCollapsed) {
       Stack({ alignContent: Alignment.TopEnd }) {
         Column({ space: 10 }) {
-          this.buildRailActionStrip()
-          if (this.showRailMenu) {
-            this.buildRailMenu()
-          }
-          TextInput({ text: this.pageSearchText, placeholder: '搜索页面' })
+          Text('所有页面')
+            .fontSize(11)
+            .fontColor('#6B7280')
             .width('100%')
-            .height(34)
-            .backgroundColor('#FFFFFF')
-            .fontSize(12)
-            .borderRadius(12)
-            .onChange((value: string) => {
-              this.pageSearchText = value;
-            })
-          Column({ space: 6 }) {
+          Row({ space: 8 }) {
+            TextInput({ text: this.pageSearchText, placeholder: '搜索页面' })
+              .layoutWeight(1)
+              .height(38)
+              .backgroundColor('#FFFFFF')
+              .fontSize(13)
+              .borderRadius(12)
+              .onChange((value: string) => {
+                this.pageSearchText = value;
+              })
             Button(this.pageRailFilterLabel())
-              .height(32)
-              .width('100%')
+              .height(38)
               .padding({ left: 12, right: 12 })
               .backgroundColor('#FFFFFF')
-              .fontColor('#344054')
-              .fontSize(11)
+              .fontColor('#374151')
+              .fontSize(12)
               .borderRadius(12)
               .onClick(() => {
                 this.toggleRailFilterMenu();
               })
-            if (this.showRailFilterMenu) {
-              Column({ space: 4 }) {
-                ForEach(PAGE_RAIL_FILTER_OPTIONS, (filter: PageRailFilter) => {
-                  Button(this.pageRailFilterLabel(filter))
-                    .width('100%')
-                    .height(30)
-                    .backgroundColor(this.pageRailFilter === filter ? '#162033' : '#FFFFFF')
-                    .fontColor(this.pageRailFilter === filter ? '#FFFFFF' : '#344054')
-                    .fontSize(11)
-                    .borderRadius(10)
-                    .onClick(() => {
-                      this.applyRailFilter(filter);
-                    })
-                }, (filter: PageRailFilter): string => `rail-filter-${filter}`)
-              }
-              .width('100%')
-              .padding(6)
-              .backgroundColor('#FFFFFFF6')
-              .border({ width: 1, color: '#D8E0EA' })
-              .borderRadius(14)
+          }
+          .width('100%')
+          Row({ space: 8 }) {
+            Blank()
+              .layoutWeight(1)
+            if (this.canAddRealPages()) {
+              Button('多选')
+                .height(36)
+                .padding({ left: 12, right: 12 })
+                .backgroundColor('#0B57D0')
+                .fontColor('#FFFFFF')
+                .fontSize(12)
+                .borderRadius(12)
+                .onClick(() => {
+                  this.noteUnsupportedMenuAction('多选');
+                })
             }
           }
           .width('100%')
+          if (this.showRailFilterMenu) {
+            Column({ space: 4 }) {
+              ForEach(PAGE_RAIL_FILTER_OPTIONS, (filter: PageRailFilter) => {
+                Button(this.pageRailFilterLabel(filter))
+                  .width('100%')
+                  .height(34)
+                  .backgroundColor(this.pageRailFilter === filter ? '#0B57D0' : '#FFFFFF')
+                  .fontColor(this.pageRailFilter === filter ? '#FFFFFF' : '#374151')
+                  .fontSize(12)
+                  .borderRadius(12)
+                  .onClick(() => {
+                    this.applyRailFilter(filter);
+                  })
+              }, (filter: PageRailFilter): string => `rail-filter-${filter}`)
+            }
+            .width('100%')
+            .padding(6)
+            .backgroundColor('#FFFFFFF6')
+            .border({ width: 1, color: '#E5E7EB' })
+            .borderRadius(12)
+          }
           Scroll() {
             Column({ space: 6 }) {
               ForEach(this.filteredPageIndexes(), (pageIndex: number) => {
@@ -4892,23 +5898,10 @@ struct EditorWorkspace {
         }
         .width(EDITOR_PAGE_RAIL_WIDTH)
         .height('100%')
-        .padding({ top: 12, right: 10, bottom: 10, left: 10 })
+        .padding({ top: 14, right: 12, bottom: 12, left: 12 })
         .backgroundColor('#FFFFFF')
-        .border({ width: 1, color: '#D8E0EA' })
-        .borderRadius(18)
-        if (this.canAddRealPages()) {
-          Button('多选')
-            .height(30)
-            .padding({ left: 10, right: 10 })
-            .backgroundColor('#162033')
-            .fontColor('#FFFFFF')
-            .fontSize(10)
-            .borderRadius(12)
-            .position({ x: EDITOR_PAGE_RAIL_WIDTH - 58, y: -8 })
-            .onClick(() => {
-              this.noteUnsupportedMenuAction('多选');
-            })
-        }
+        .border({ width: 1, color: '#E5E7EB' })
+        .borderRadius(22)
       }
     }
   }
@@ -4934,14 +5927,14 @@ struct EditorWorkspace {
           Text(EDITOR_WORKSPACE_COPY.openDocumentFailed)
             .fontSize(22)
             .fontWeight(FontWeight.Bold)
-            .fontColor('#162033')
+            .fontColor('#0B57D0')
           Text(this.errorMessage.length > 0 ? this.errorMessage : EDITOR_WORKSPACE_COPY.documentNotFound)
             .fontSize(13)
             .fontColor('#B42318')
             .margin({ top: 10, bottom: 18 })
           Button(EDITOR_WORKSPACE_COPY.returnLibrary)
             .height(40)
-            .backgroundColor('#162033')
+            .backgroundColor('#0B57D0')
             .fontColor('#FFFFFF')
             .onClick(() => {
               this.goBack();
@@ -4959,6 +5952,7 @@ struct EditorWorkspace {
             this.buildFloatingToolbarChrome()
             this.buildCanvasActionGroup()
             this.buildPageHud()
+            this.buildCustomColorDialog()
             if (this.showInspectorDrawer) {
               this.buildInspectorModal()
             }

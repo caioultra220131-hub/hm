@@ -241,6 +241,15 @@ static napi_value SetBrushColor(napi_env env, napi_callback_info info)
     return CreateBoolean(env, ok);
 }
 
+static napi_value SetBrushWidth(napi_env env, napi_callback_info info)
+{
+    size_t argc = 2;
+    napi_value args[2] = { nullptr };
+    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
+    bool ok = argc == 2 && GetNoteEngineRuntime().SetBrushWidth(GetStringArg(env, args[0]), GetDoubleArg(env, args[1]));
+    return CreateBoolean(env, ok);
+}
+
 static napi_value Undo(napi_env env, napi_callback_info info)
 {
     size_t argc = 1;
@@ -342,6 +351,7 @@ static napi_value Init(napi_env env, napi_value exports)
         { "setBackend", nullptr, SetBackend, nullptr, nullptr, nullptr, napi_default, nullptr },
         { "setDocumentMode", nullptr, SetDocumentMode, nullptr, nullptr, nullptr, napi_default, nullptr },
         { "setBrushColor", nullptr, SetBrushColor, nullptr, nullptr, nullptr, napi_default, nullptr },
+        { "setBrushWidth", nullptr, SetBrushWidth, nullptr, nullptr, nullptr, napi_default, nullptr },
         { "undo", nullptr, Undo, nullptr, nullptr, nullptr, napi_default, nullptr },
         { "redo", nullptr, Redo, nullptr, nullptr, nullptr, napi_default, nullptr },
         { "startInputTraceRecording", nullptr, StartInputTraceRecording, nullptr, nullptr, nullptr, napi_default, nullptr },

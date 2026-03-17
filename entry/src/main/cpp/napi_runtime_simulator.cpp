@@ -6,7 +6,9 @@
 #include <chrono>
 #include <cctype>
 #include <cstdint>
+#include <cmath>
 #include <fstream>
+#include <limits>
 #include <mutex>
 #include <sstream>
 #include <string>
@@ -27,10 +29,14 @@ constexpr const char* kPdfPageNodeIdPrefix = "pdf-page-";
 constexpr const char* kPdfFragmentNodeIdPrefix = "pdf-fragment-";
 constexpr int kPreviewSchemaVersion = 0;
 constexpr int kPrimaryPageIndex = 0;
+constexpr double kPi = 3.14159265358979323846;
+constexpr double kDefaultBrushWidth = 3.2;
 constexpr double kFallbackPageWidthPt = 612.0;
 constexpr double kFallbackPageHeightPt = 792.0;
 constexpr double kMinSyntheticStrokeWidthPt = 96.0;
 constexpr double kMinSyntheticStrokeHeightPt = 42.0;
+constexpr const char* kSimulatorStrokeStateFileName = "simulator-strokes.json";
+constexpr const char* kPngPreviewMimeType = "image/png";
 
 struct SimulatorPageContractDescriptor {
     double widthPt = 0.0;
@@ -48,6 +54,11 @@ struct SimulatorPageDescriptor {
     SimulatorPageContractDescriptor contract;
 };
 
+struct SimulatorStrokePoint {
+    double x = 0.0;
+    double y = 0.0;
+};
+
 struct SimulatorSyntheticObject {
     std::string id;
     std::string pageId;
@@ -55,12 +66,14 @@ struct SimulatorSyntheticObject {
     std::string shapeType = "freehand";
     std::string tool = "pen";
     std::string colorHex = "#1D2736";
+    double strokeWidth = kDefaultBrushWidth;
     bool closed = false;
     size_t pointCount = 0;
     double minX = 0.0;
     double minY = 0.0;
     double maxX = 0.0;
     double maxY = 0.0;
+    std::vector<SimulatorStrokePoint> strokePoints;
 };
 
 struct SimulatorSyntheticEdit {
@@ -73,6 +86,7 @@ struct SimulatorDocumentSession {
     std::string packagePath;
     std::string openConfigJson;
     int checkpointCount = 0;
+    bool hasUnpersistedSyntheticMutation = false;
     bool pageAware = false;
     std::vector<std::string> pages;
     std::vector<SimulatorPageDescriptor> pageDescriptors;
@@ -91,6 +105,7 @@ struct SimulatorEngineState {
     std::string activeBackend = "opengles";
     std::string activeMode = "paged";
     std::string activeColor = "#1D2736";
+    double activeBrushWidth = kDefaultBrushWidth;
     bool fingerWritingEnabled = false;
     std::string lastInkTool = "pen";
     std::string xComponentId;
@@ -134,6 +149,7 @@ struct SimulatorEngineState {
     double simulatorFingerStrokeStartYRatio = 0.5;
     double simulatorFingerStrokeLastXRatio = 0.5;
     double simulatorFingerStrokeLastYRatio = 0.5;
+    std::vector<SimulatorStrokePoint> simulatorFingerStrokeRatios;
     std::unordered_map<std::string, SimulatorDocumentSession> documents;
 };
 
@@ -152,6 +168,11 @@ double ClampUnitRatio(double value)
         return 1.0;
     }
     return value == value ? value : 0.5;
+}
+
+double NormalizeBrushWidth(double width)
+{
+    return std::isfinite(width) && width > 0.0 ? width : kDefaultBrushWidth;
 }
 
 std::string EscapeJsonString(const std::string& input)
@@ -324,6 +345,8 @@ std::string ExtractJsonObjectText(const std::string& text, const std::string& ke
 
 std::vector<SimulatorPageDescriptor> DeserializePageDescriptorsFromOpenConfig(const std::string& configJson);
 std::vector<std::string> BuildPageIdsFromDescriptors(const std::vector<SimulatorPageDescriptor>& descriptors);
+const std::vector<SimulatorSyntheticObject>* FindCommittedObjectsForPage(
+    const SimulatorDocumentSession& session, const std::string& pageId);
 
 std::string ResolveCompatPageIdFromOpenConfig(const std::string& configJson)
 {
@@ -542,6 +565,8 @@ bool SupportsPageAwareEditing(const SimulatorEngineState& engine, const Simulato
     return engine.activeMode == "paged" && session.pageAware && !session.pages.empty();
 }
 
+std::string ReadBinaryFile(const std::string& path, std::string& contents);
+
 bool SupportsBlankPageMutation(const SimulatorEngineState& engine, const SimulatorDocumentSession& session)
 {
     if (!SupportsPageAwareEditing(engine, session) || session.pageDescriptors.empty()) {
@@ -658,6 +683,516 @@ size_t ResolveSyntheticPointCount(const std::string& tool, int ordinal)
     return static_cast<size_t>(16 + (ordinal % 4) * 3);
 }
 
+double ResolveSyntheticBrushScale(const SimulatorEngineState& engine)
+{
+    return std::clamp(NormalizeBrushWidth(engine.activeBrushWidth) / kDefaultBrushWidth, 0.35, 4.0);
+}
+
+double LerpDouble(double start, double end, double t)
+{
+    return start + (end - start) * t;
+}
+
+std::vector<SimulatorStrokePoint> BuildSyntheticStrokePointsFromBounds(
+    double minX, double minY, double maxX, double maxY, size_t pointCount, int ordinal)
+{
+    const size_t resolvedPointCount = std::max<size_t>(4, pointCount);
+    const double width = std::max(1.0, maxX - minX);
+    const double height = std::max(1.0, maxY - minY);
+    const double centerY = minY + height * 0.5;
+    const double primaryAmplitude = std::max(2.0, height * 0.28);
+    const double secondaryAmplitude = std::max(1.0, height * 0.10);
+    std::vector<SimulatorStrokePoint> points;
+    points.reserve(resolvedPointCount);
+    for (size_t index = 0; index < resolvedPointCount; ++index) {
+        const double t = resolvedPointCount <= 1 ? 0.0 : static_cast<double>(index) / static_cast<double>(resolvedPointCount - 1);
+        const double x = minX + width * t;
+        const double wave = std::sin((t * 1.4 + ordinal * 0.11) * kPi);
+        const double bend = std::sin((t * 2.2 + ordinal * 0.07) * kPi);
+        const double y = std::clamp(
+            centerY + wave * primaryAmplitude + bend * secondaryAmplitude,
+            minY,
+            maxY);
+        points.push_back({ x, y });
+    }
+    return points;
+}
+
+std::vector<SimulatorStrokePoint> BuildHighlighterStrokePointsFromBounds(
+    double minX, double minY, double maxX, double maxY, int ordinal)
+{
+    const double height = std::max(1.0, maxY - minY);
+    const double centerY = minY + height * 0.5 + std::sin(ordinal * 0.17) * height * 0.08;
+    return {
+        { minX, centerY - height * 0.08 },
+        { LerpDouble(minX, maxX, 0.32), centerY + height * 0.06 },
+        { LerpDouble(minX, maxX, 0.68), centerY - height * 0.04 },
+        { maxX, centerY + height * 0.05 }
+    };
+}
+
+std::vector<SimulatorStrokePoint> BuildTextBoxStrokePointsFromBounds(
+    double minX, double minY, double maxX, double maxY)
+{
+    return {
+        { minX, minY },
+        { maxX, minY },
+        { maxX, maxY },
+        { minX, maxY },
+        { minX, minY }
+    };
+}
+
+std::vector<SimulatorStrokePoint> BuildGestureStrokePoints(
+    double startX, double startY, double endX, double endY, size_t pointCount, int ordinal)
+{
+    const size_t resolvedPointCount = std::max<size_t>(4, pointCount);
+    const double deltaX = endX - startX;
+    const double deltaY = endY - startY;
+    const double length = std::hypot(deltaX, deltaY);
+    const double normalX = length > 0.001 ? -deltaY / length : 0.0;
+    const double normalY = length > 0.001 ? deltaX / length : 1.0;
+    const double arc = std::max(6.0, length * 0.08) * ((ordinal % 2 == 0) ? 1.0 : -1.0);
+    std::vector<SimulatorStrokePoint> points;
+    points.reserve(resolvedPointCount);
+    for (size_t index = 0; index < resolvedPointCount; ++index) {
+        const double t = resolvedPointCount <= 1 ? 0.0 : static_cast<double>(index) / static_cast<double>(resolvedPointCount - 1);
+        const double influence = std::sin(t * kPi);
+        points.push_back({
+            LerpDouble(startX, endX, t) + normalX * arc * influence,
+            LerpDouble(startY, endY, t) + normalY * arc * influence
+        });
+    }
+    return points;
+}
+
+void UpdateSyntheticBoundsFromStrokePoints(SimulatorSyntheticObject& object,
+    const SimulatorPageDescriptor* descriptor, double brushWidth)
+{
+    if (object.strokePoints.empty()) {
+        return;
+    }
+    const double pageWidth = ResolvePageWidth(descriptor);
+    const double pageHeight = ResolvePageHeight(descriptor);
+    double minX = object.strokePoints.front().x;
+    double minY = object.strokePoints.front().y;
+    double maxX = object.strokePoints.front().x;
+    double maxY = object.strokePoints.front().y;
+    for (const SimulatorStrokePoint& point : object.strokePoints) {
+        minX = std::min(minX, point.x);
+        minY = std::min(minY, point.y);
+        maxX = std::max(maxX, point.x);
+        maxY = std::max(maxY, point.y);
+    }
+    const double padding = std::max(brushWidth * 0.75, 1.5);
+    object.minX = std::clamp(minX - padding, 0.0, pageWidth);
+    object.minY = std::clamp(minY - padding, 0.0, pageHeight);
+    object.maxX = std::clamp(maxX + padding, 0.0, pageWidth);
+    object.maxY = std::clamp(maxY + padding, 0.0, pageHeight);
+}
+
+std::string EncodeBase64(const std::string& value)
+{
+    static constexpr char kAlphabet[] =
+        "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    std::string encoded;
+    encoded.reserve(((value.size() + 2) / 3) * 4);
+    size_t index = 0;
+    while (index + 3 <= value.size()) {
+        const unsigned int chunk =
+            (static_cast<unsigned char>(value[index]) << 16) |
+            (static_cast<unsigned char>(value[index + 1]) << 8) |
+            static_cast<unsigned char>(value[index + 2]);
+        encoded.push_back(kAlphabet[(chunk >> 18) & 0x3F]);
+        encoded.push_back(kAlphabet[(chunk >> 12) & 0x3F]);
+        encoded.push_back(kAlphabet[(chunk >> 6) & 0x3F]);
+        encoded.push_back(kAlphabet[chunk & 0x3F]);
+        index += 3;
+    }
+    const size_t remaining = value.size() - index;
+    if (remaining == 1) {
+        const unsigned int chunk = static_cast<unsigned char>(value[index]) << 16;
+        encoded.push_back(kAlphabet[(chunk >> 18) & 0x3F]);
+        encoded.push_back(kAlphabet[(chunk >> 12) & 0x3F]);
+        encoded.push_back('=');
+        encoded.push_back('=');
+    } else if (remaining == 2) {
+        const unsigned int chunk =
+            (static_cast<unsigned char>(value[index]) << 16) |
+            (static_cast<unsigned char>(value[index + 1]) << 8);
+        encoded.push_back(kAlphabet[(chunk >> 18) & 0x3F]);
+        encoded.push_back(kAlphabet[(chunk >> 12) & 0x3F]);
+        encoded.push_back(kAlphabet[(chunk >> 6) & 0x3F]);
+        encoded.push_back('=');
+    }
+    return encoded;
+}
+
+double ResolvePreviewStrokeOpacity(const SimulatorSyntheticObject& object)
+{
+    if (object.tool == "highlighter") {
+        return 0.24;
+    }
+    if (object.tool == "pencil") {
+        return 0.88;
+    }
+    return 1.0;
+}
+
+struct PreviewRasterColor {
+    uint8_t r = 0;
+    uint8_t g = 0;
+    uint8_t b = 0;
+    uint8_t a = 255;
+};
+
+int ParseHexNibble(char value)
+{
+    if (value >= '0' && value <= '9') {
+        return value - '0';
+    }
+    if (value >= 'a' && value <= 'f') {
+        return 10 + (value - 'a');
+    }
+    if (value >= 'A' && value <= 'F') {
+        return 10 + (value - 'A');
+    }
+    return -1;
+}
+
+PreviewRasterColor ParsePreviewColor(const std::string& colorHex, uint8_t alpha = 255)
+{
+    PreviewRasterColor fallback { 0x1D, 0x27, 0x36, alpha };
+    size_t start = 0;
+    if (!colorHex.empty() && colorHex.front() == '#') {
+        start = 1;
+    }
+    if (colorHex.size() - start < 6) {
+        return fallback;
+    }
+    const int r1 = ParseHexNibble(colorHex[start]);
+    const int r2 = ParseHexNibble(colorHex[start + 1]);
+    const int g1 = ParseHexNibble(colorHex[start + 2]);
+    const int g2 = ParseHexNibble(colorHex[start + 3]);
+    const int b1 = ParseHexNibble(colorHex[start + 4]);
+    const int b2 = ParseHexNibble(colorHex[start + 5]);
+    if (r1 < 0 || r2 < 0 || g1 < 0 || g2 < 0 || b1 < 0 || b2 < 0) {
+        return fallback;
+    }
+    return PreviewRasterColor {
+        static_cast<uint8_t>((r1 << 4) | r2),
+        static_cast<uint8_t>((g1 << 4) | g2),
+        static_cast<uint8_t>((b1 << 4) | b2),
+        alpha
+    };
+}
+
+int ScalePreviewCoordinate(double value, double maxValue, int rasterSize)
+{
+    if (rasterSize <= 1 || maxValue <= 0.0) {
+        return 0;
+    }
+    const double ratio = std::clamp(value / maxValue, 0.0, 1.0);
+    return static_cast<int>(std::lround(ratio * static_cast<double>(rasterSize - 1)));
+}
+
+void BlendPreviewPixel(std::vector<uint8_t>& pixels, int rasterWidth, int rasterHeight,
+    int x, int y, const PreviewRasterColor& color, double opacity)
+{
+    if (x < 0 || y < 0 || x >= rasterWidth || y >= rasterHeight) {
+        return;
+    }
+    const double alpha = std::clamp(opacity, 0.0, 1.0) * (static_cast<double>(color.a) / 255.0);
+    if (alpha <= 0.0) {
+        return;
+    }
+    const size_t offset = (static_cast<size_t>(y) * static_cast<size_t>(rasterWidth) + static_cast<size_t>(x)) * 4;
+    pixels[offset] = static_cast<uint8_t>(std::clamp(
+        std::lround(static_cast<double>(color.r) * alpha + static_cast<double>(pixels[offset]) * (1.0 - alpha)),
+        0l, 255l));
+    pixels[offset + 1] = static_cast<uint8_t>(std::clamp(
+        std::lround(static_cast<double>(color.g) * alpha + static_cast<double>(pixels[offset + 1]) * (1.0 - alpha)),
+        0l, 255l));
+    pixels[offset + 2] = static_cast<uint8_t>(std::clamp(
+        std::lround(static_cast<double>(color.b) * alpha + static_cast<double>(pixels[offset + 2]) * (1.0 - alpha)),
+        0l, 255l));
+    pixels[offset + 3] = 255;
+}
+
+void FillPreviewRect(std::vector<uint8_t>& pixels, int rasterWidth, int rasterHeight,
+    int minX, int minY, int maxX, int maxY, const PreviewRasterColor& color, double opacity)
+{
+    const int clampedMinX = std::clamp(std::min(minX, maxX), 0, rasterWidth);
+    const int clampedMaxX = std::clamp(std::max(minX, maxX), 0, rasterWidth);
+    const int clampedMinY = std::clamp(std::min(minY, maxY), 0, rasterHeight);
+    const int clampedMaxY = std::clamp(std::max(minY, maxY), 0, rasterHeight);
+    for (int y = clampedMinY; y < clampedMaxY; ++y) {
+        for (int x = clampedMinX; x < clampedMaxX; ++x) {
+            BlendPreviewPixel(pixels, rasterWidth, rasterHeight, x, y, color, opacity);
+        }
+    }
+}
+
+void DrawPreviewDisc(std::vector<uint8_t>& pixels, int rasterWidth, int rasterHeight,
+    double centerX, double centerY, double radius, const PreviewRasterColor& color, double opacity)
+{
+    const int minX = static_cast<int>(std::floor(centerX - radius));
+    const int maxX = static_cast<int>(std::ceil(centerX + radius));
+    const int minY = static_cast<int>(std::floor(centerY - radius));
+    const int maxY = static_cast<int>(std::ceil(centerY + radius));
+    const double radiusSquared = radius * radius;
+    for (int y = minY; y <= maxY; ++y) {
+        for (int x = minX; x <= maxX; ++x) {
+            const double deltaX = (static_cast<double>(x) + 0.5) - centerX;
+            const double deltaY = (static_cast<double>(y) + 0.5) - centerY;
+            if ((deltaX * deltaX) + (deltaY * deltaY) <= radiusSquared) {
+                BlendPreviewPixel(pixels, rasterWidth, rasterHeight, x, y, color, opacity);
+            }
+        }
+    }
+}
+
+void DrawPreviewSegment(std::vector<uint8_t>& pixels, int rasterWidth, int rasterHeight,
+    double startX, double startY, double endX, double endY, double radius,
+    const PreviewRasterColor& color, double opacity)
+{
+    const double deltaX = endX - startX;
+    const double deltaY = endY - startY;
+    const int steps = std::max(1, static_cast<int>(std::ceil(std::max(std::abs(deltaX), std::abs(deltaY)) * 1.5)));
+    for (int step = 0; step <= steps; ++step) {
+        const double t = steps <= 0 ? 0.0 : static_cast<double>(step) / static_cast<double>(steps);
+        DrawPreviewDisc(
+            pixels,
+            rasterWidth,
+            rasterHeight,
+            LerpDouble(startX, endX, t),
+            LerpDouble(startY, endY, t),
+            radius,
+            color,
+            opacity);
+    }
+}
+
+void DrawPreviewRectOutline(std::vector<uint8_t>& pixels, int rasterWidth, int rasterHeight,
+    int minX, int minY, int maxX, int maxY, int thickness,
+    const PreviewRasterColor& color, double opacity)
+{
+    const int resolvedThickness = std::max(1, thickness);
+    FillPreviewRect(pixels, rasterWidth, rasterHeight, minX, minY, maxX, minY + resolvedThickness, color, opacity);
+    FillPreviewRect(pixels, rasterWidth, rasterHeight, minX, maxY - resolvedThickness, maxX, maxY, color, opacity);
+    FillPreviewRect(pixels, rasterWidth, rasterHeight, minX, minY, minX + resolvedThickness, maxY, color, opacity);
+    FillPreviewRect(pixels, rasterWidth, rasterHeight, maxX - resolvedThickness, minY, maxX, maxY, color, opacity);
+}
+
+void RasterizePreviewObject(std::vector<uint8_t>& pixels, int rasterWidth, int rasterHeight,
+    double pageWidth, double pageHeight, const SimulatorSyntheticObject& object)
+{
+    const double scaleX = pageWidth > 0.0 ? static_cast<double>(rasterWidth) / pageWidth : 1.0;
+    const double scaleY = pageHeight > 0.0 ? static_cast<double>(rasterHeight) / pageHeight : 1.0;
+    const double strokeScale = std::max(0.5, (scaleX + scaleY) * 0.5);
+    const double radius = std::max(0.75, NormalizeBrushWidth(object.strokeWidth) * strokeScale * 0.5);
+    const PreviewRasterColor color = ParsePreviewColor(object.colorHex);
+    const double opacity = ResolvePreviewStrokeOpacity(object);
+
+    if (object.tool == "text") {
+        const int minX = ScalePreviewCoordinate(object.minX, pageWidth, rasterWidth);
+        const int minY = ScalePreviewCoordinate(object.minY, pageHeight, rasterHeight);
+        const int maxX = ScalePreviewCoordinate(object.maxX, pageWidth, rasterWidth) + 1;
+        const int maxY = ScalePreviewCoordinate(object.maxY, pageHeight, rasterHeight) + 1;
+        DrawPreviewRectOutline(
+            pixels,
+            rasterWidth,
+            rasterHeight,
+            minX,
+            minY,
+            maxX,
+            maxY,
+            std::max(1, static_cast<int>(std::lround(radius))),
+            color,
+            opacity);
+        return;
+    }
+
+    if (object.strokePoints.empty()) {
+        DrawPreviewDisc(
+            pixels,
+            rasterWidth,
+            rasterHeight,
+            static_cast<double>(ScalePreviewCoordinate((object.minX + object.maxX) * 0.5, pageWidth, rasterWidth)),
+            static_cast<double>(ScalePreviewCoordinate((object.minY + object.maxY) * 0.5, pageHeight, rasterHeight)),
+            radius,
+            color,
+            opacity);
+        return;
+    }
+
+    for (size_t index = 1; index < object.strokePoints.size(); ++index) {
+        DrawPreviewSegment(
+            pixels,
+            rasterWidth,
+            rasterHeight,
+            static_cast<double>(ScalePreviewCoordinate(object.strokePoints[index - 1].x, pageWidth, rasterWidth)),
+            static_cast<double>(ScalePreviewCoordinate(object.strokePoints[index - 1].y, pageHeight, rasterHeight)),
+            static_cast<double>(ScalePreviewCoordinate(object.strokePoints[index].x, pageWidth, rasterWidth)),
+            static_cast<double>(ScalePreviewCoordinate(object.strokePoints[index].y, pageHeight, rasterHeight)),
+            radius,
+            color,
+            opacity);
+    }
+    if (object.strokePoints.size() == 1) {
+        DrawPreviewDisc(
+            pixels,
+            rasterWidth,
+            rasterHeight,
+            static_cast<double>(ScalePreviewCoordinate(object.strokePoints.front().x, pageWidth, rasterWidth)),
+            static_cast<double>(ScalePreviewCoordinate(object.strokePoints.front().y, pageHeight, rasterHeight)),
+            radius,
+            color,
+            opacity);
+    } else if (object.closed) {
+        DrawPreviewSegment(
+            pixels,
+            rasterWidth,
+            rasterHeight,
+            static_cast<double>(ScalePreviewCoordinate(object.strokePoints.back().x, pageWidth, rasterWidth)),
+            static_cast<double>(ScalePreviewCoordinate(object.strokePoints.back().y, pageHeight, rasterHeight)),
+            static_cast<double>(ScalePreviewCoordinate(object.strokePoints.front().x, pageWidth, rasterWidth)),
+            static_cast<double>(ScalePreviewCoordinate(object.strokePoints.front().y, pageHeight, rasterHeight)),
+            radius,
+            color,
+            opacity);
+    }
+}
+
+void AppendUInt32BigEndian(std::string& output, uint32_t value)
+{
+    output.push_back(static_cast<char>((value >> 24) & 0xFF));
+    output.push_back(static_cast<char>((value >> 16) & 0xFF));
+    output.push_back(static_cast<char>((value >> 8) & 0xFF));
+    output.push_back(static_cast<char>(value & 0xFF));
+}
+
+uint32_t ComputeCrc32(const uint8_t* data, size_t length)
+{
+    static bool initialized = false;
+    static uint32_t table[256];
+    if (!initialized) {
+        for (uint32_t index = 0; index < 256; ++index) {
+            uint32_t value = index;
+            for (int bit = 0; bit < 8; ++bit) {
+                value = (value & 1u) != 0u ? (0xEDB88320u ^ (value >> 1u)) : (value >> 1u);
+            }
+            table[index] = value;
+        }
+        initialized = true;
+    }
+    uint32_t crc = 0xFFFFFFFFu;
+    for (size_t index = 0; index < length; ++index) {
+        crc = table[(crc ^ data[index]) & 0xFFu] ^ (crc >> 8u);
+    }
+    return crc ^ 0xFFFFFFFFu;
+}
+
+uint32_t ComputeAdler32(const uint8_t* data, size_t length)
+{
+    constexpr uint32_t kAdlerMod = 65521u;
+    uint32_t a = 1u;
+    uint32_t b = 0u;
+    for (size_t index = 0; index < length; ++index) {
+        a = (a + data[index]) % kAdlerMod;
+        b = (b + a) % kAdlerMod;
+    }
+    return (b << 16u) | a;
+}
+
+void AppendPngChunk(std::string& png, const char type[4], const std::string& data)
+{
+    AppendUInt32BigEndian(png, static_cast<uint32_t>(data.size()));
+    png.append(type, 4);
+    png.append(data);
+    std::string crcInput(type, 4);
+    crcInput.append(data);
+    AppendUInt32BigEndian(
+        png,
+        ComputeCrc32(reinterpret_cast<const uint8_t*>(crcInput.data()), crcInput.size()));
+}
+
+bool ShouldEmitPreviewRaster(const SimulatorPageDescriptor* descriptor, size_t syntheticObjectCount)
+{
+    return syntheticObjectCount > 0 || (descriptor != nullptr && IsPdfPageKind(descriptor->pageKind));
+}
+
+std::string BuildPreviewPng(const SimulatorDocumentSession& session, const std::string& pageId,
+    const SimulatorPageDescriptor* descriptor, int width, int height)
+{
+    const double pageWidth = ResolvePageWidth(descriptor);
+    const double pageHeight = ResolvePageHeight(descriptor);
+    const int rasterWidth = std::max(1, width > 0 ? width : static_cast<int>(std::lround(pageWidth)));
+    const int rasterHeight = std::max(1, height > 0 ? height : static_cast<int>(std::lround(pageHeight)));
+    std::vector<uint8_t> pixels(static_cast<size_t>(rasterWidth) * static_cast<size_t>(rasterHeight) * 4u, 255u);
+    if (descriptor != nullptr && IsPdfPageKind(descriptor->pageKind)) {
+        const PreviewRasterColor borderColor = ParsePreviewColor("#CBD5E1");
+        FillPreviewRect(pixels, rasterWidth, rasterHeight, 0, 0, rasterWidth, 1, borderColor, 1.0);
+        FillPreviewRect(pixels, rasterWidth, rasterHeight, 0, rasterHeight - 1, rasterWidth, rasterHeight, borderColor, 1.0);
+        FillPreviewRect(pixels, rasterWidth, rasterHeight, 0, 0, 1, rasterHeight, borderColor, 1.0);
+        FillPreviewRect(pixels, rasterWidth, rasterHeight, rasterWidth - 1, 0, rasterWidth, rasterHeight, borderColor, 1.0);
+    }
+    const std::vector<SimulatorSyntheticObject>* objects = FindCommittedObjectsForPage(session, pageId);
+    if (objects != nullptr) {
+        for (const SimulatorSyntheticObject& object : *objects) {
+            RasterizePreviewObject(pixels, rasterWidth, rasterHeight, pageWidth, pageHeight, object);
+        }
+    }
+
+    std::string rawImage;
+    const size_t rowStride = static_cast<size_t>(rasterWidth) * 4u;
+    rawImage.reserve((rowStride + 1u) * static_cast<size_t>(rasterHeight));
+    for (int y = 0; y < rasterHeight; ++y) {
+        rawImage.push_back('\0');
+        rawImage.append(
+            reinterpret_cast<const char*>(pixels.data() + static_cast<size_t>(y) * rowStride),
+            rowStride);
+    }
+
+    std::string zlibStream;
+    zlibStream.push_back(static_cast<char>(0x78));
+    zlibStream.push_back(static_cast<char>(0x01));
+    size_t cursor = 0;
+    while (cursor < rawImage.size()) {
+        const uint16_t blockLength = static_cast<uint16_t>(std::min<size_t>(65535u, rawImage.size() - cursor));
+        const bool isFinalBlock = cursor + blockLength >= rawImage.size();
+        zlibStream.push_back(static_cast<char>(isFinalBlock ? 0x01 : 0x00));
+        zlibStream.push_back(static_cast<char>(blockLength & 0xFFu));
+        zlibStream.push_back(static_cast<char>((blockLength >> 8u) & 0xFFu));
+        const uint16_t invertedLength = static_cast<uint16_t>(~blockLength);
+        zlibStream.push_back(static_cast<char>(invertedLength & 0xFFu));
+        zlibStream.push_back(static_cast<char>((invertedLength >> 8u) & 0xFFu));
+        zlibStream.append(rawImage.data() + cursor, blockLength);
+        cursor += blockLength;
+    }
+    AppendUInt32BigEndian(
+        zlibStream,
+        ComputeAdler32(reinterpret_cast<const uint8_t*>(rawImage.data()), rawImage.size()));
+
+    std::string png;
+    static constexpr unsigned char kPngSignature[8] = {
+        0x89u, 0x50u, 0x4Eu, 0x47u, 0x0Du, 0x0Au, 0x1Au, 0x0Au
+    };
+    png.append(reinterpret_cast<const char*>(kPngSignature), sizeof(kPngSignature));
+    std::string ihdr;
+    AppendUInt32BigEndian(ihdr, static_cast<uint32_t>(rasterWidth));
+    AppendUInt32BigEndian(ihdr, static_cast<uint32_t>(rasterHeight));
+    ihdr.push_back(static_cast<char>(8));
+    ihdr.push_back(static_cast<char>(6));
+    ihdr.push_back(static_cast<char>(0));
+    ihdr.push_back(static_cast<char>(0));
+    ihdr.push_back(static_cast<char>(0));
+    AppendPngChunk(png, "IHDR", ihdr);
+    AppendPngChunk(png, "IDAT", zlibStream);
+    AppendPngChunk(png, "IEND", std::string());
+    return png;
+}
+
 std::vector<SimulatorSyntheticObject>& AccessCommittedObjectsForPage(
     SimulatorDocumentSession& session, const std::string& pageId)
 {
@@ -721,6 +1256,13 @@ void RefreshLastCommittedStrokeType(SimulatorEngineState& engine, const Simulato
         engine.lastCommittedStrokeType = session.undoStack.back().object.shapeType;
         return;
     }
+    for (const std::string& pageId : session.pages) {
+        const std::vector<SimulatorSyntheticObject>* objects = FindCommittedObjectsForPage(session, pageId);
+        if (objects != nullptr && !objects->empty()) {
+            engine.lastCommittedStrokeType = objects->back().shapeType;
+            return;
+        }
+    }
     engine.lastCommittedStrokeType = "none";
 }
 
@@ -732,10 +1274,14 @@ SimulatorSyntheticObject BuildSyntheticObject(
     const double pageHeight = ResolvePageHeight(descriptor);
     const std::string tool = ResolveSyntheticTool(engine);
     const int ordinal = session.nextSyntheticObjectId;
+    const double brushWidth = NormalizeBrushWidth(engine.activeBrushWidth);
+    const double brushScale = ResolveSyntheticBrushScale(engine);
 
-    const double width = std::min(pageWidth * 0.58, std::max(kMinSyntheticStrokeWidthPt, pageWidth * 0.28));
-    const double heightBase = tool == "highlighter" ? pageHeight * 0.055 : pageHeight * 0.10;
-    const double height = std::min(pageHeight * 0.22, std::max(kMinSyntheticStrokeHeightPt, heightBase));
+    const double width = std::min(
+        pageWidth * 0.66,
+        std::max(kMinSyntheticStrokeWidthPt * std::sqrt(brushScale), pageWidth * 0.28 * std::sqrt(brushScale)));
+    const double heightBase = (tool == "highlighter" ? pageHeight * 0.055 : pageHeight * 0.10) * brushScale;
+    const double height = std::min(pageHeight * 0.28, std::max(kMinSyntheticStrokeHeightPt * brushScale, heightBase));
     const double originX = std::min(
         std::max(18.0, pageWidth * (0.10 + 0.09 * ((ordinal - 1) % 5))),
         std::max(18.0, pageWidth - width - 18.0));
@@ -750,12 +1296,25 @@ SimulatorSyntheticObject BuildSyntheticObject(
     object.shapeType = ResolveSyntheticShapeType(tool);
     object.tool = tool;
     object.colorHex = engine.activeColor;
+    object.strokeWidth = brushWidth;
     object.closed = tool == "text";
     object.pointCount = ResolveSyntheticPointCount(tool, ordinal);
     object.minX = originX;
     object.minY = originY;
     object.maxX = std::min(pageWidth, originX + width);
     object.maxY = std::min(pageHeight, originY + height);
+    if (tool == "text") {
+        object.strokePoints = BuildTextBoxStrokePointsFromBounds(
+            object.minX, object.minY, object.maxX, object.maxY);
+    } else if (tool == "highlighter") {
+        object.strokePoints = BuildHighlighterStrokePointsFromBounds(
+            object.minX, object.minY, object.maxX, object.maxY, ordinal);
+    } else {
+        object.strokePoints = BuildSyntheticStrokePointsFromBounds(
+            object.minX, object.minY, object.maxX, object.maxY, object.pointCount, ordinal);
+    }
+    object.pointCount = object.strokePoints.size();
+    UpdateSyntheticBoundsFromStrokePoints(object, descriptor, brushWidth);
     return object;
 }
 
@@ -768,6 +1327,8 @@ SimulatorSyntheticObject BuildSyntheticObjectFromGesture(const SimulatorEngineSt
     const double pageHeight = ResolvePageHeight(descriptor);
     const std::string tool = ResolveSyntheticTool(engine);
     const int ordinal = session.nextSyntheticObjectId;
+    const double brushWidth = NormalizeBrushWidth(engine.activeBrushWidth);
+    const double brushScale = ResolveSyntheticBrushScale(engine);
     const double normalizedStartX = ClampUnitRatio(startXRatio);
     const double normalizedStartY = ClampUnitRatio(startYRatio);
     const double normalizedEndX = ClampUnitRatio(endXRatio);
@@ -776,12 +1337,18 @@ SimulatorSyntheticObject BuildSyntheticObjectFromGesture(const SimulatorEngineSt
     const double anchorMaxX = std::max(normalizedStartX, normalizedEndX) * pageWidth;
     const double anchorMinY = std::min(normalizedStartY, normalizedEndY) * pageHeight;
     const double anchorMaxY = std::max(normalizedStartY, normalizedEndY) * pageHeight;
-    const double widthBase = std::max(kMinSyntheticStrokeWidthPt,
-        tool == "highlighter" ? pageWidth * 0.20 : pageWidth * 0.16);
-    const double heightBase = std::max(kMinSyntheticStrokeHeightPt,
-        tool == "highlighter" ? pageHeight * 0.045 : pageHeight * 0.09);
-    const double width = std::min(pageWidth * 0.58, std::max(widthBase, anchorMaxX - anchorMinX));
-    const double height = std::min(pageHeight * 0.22, std::max(heightBase, anchorMaxY - anchorMinY));
+    const double widthBase = std::max(
+        kMinSyntheticStrokeWidthPt * std::sqrt(brushScale),
+        (tool == "highlighter" ? pageWidth * 0.20 : pageWidth * 0.16) * std::sqrt(brushScale));
+    const double heightBase = std::max(
+        kMinSyntheticStrokeHeightPt * brushScale,
+        (tool == "highlighter" ? pageHeight * 0.045 : pageHeight * 0.09) * brushScale);
+    const double width = std::min(
+        pageWidth * 0.66,
+        std::max(widthBase, (anchorMaxX - anchorMinX) + brushWidth * 4.0));
+    const double height = std::min(
+        pageHeight * 0.28,
+        std::max(heightBase, (anchorMaxY - anchorMinY) + brushWidth * 6.0));
     const double originX = std::clamp(anchorMinX, 18.0, std::max(18.0, pageWidth - width - 18.0));
     const double originY = std::clamp(anchorMinY, 24.0, std::max(24.0, pageHeight - height - 24.0));
 
@@ -792,12 +1359,31 @@ SimulatorSyntheticObject BuildSyntheticObjectFromGesture(const SimulatorEngineSt
     object.shapeType = ResolveSyntheticShapeType(tool);
     object.tool = tool;
     object.colorHex = engine.activeColor;
+    object.strokeWidth = brushWidth;
     object.closed = tool == "text";
     object.pointCount = ResolveSyntheticPointCount(tool, ordinal);
     object.minX = originX;
     object.minY = originY;
     object.maxX = std::min(pageWidth, originX + width);
     object.maxY = std::min(pageHeight, originY + height);
+    const double gestureEndX = std::clamp(anchorMaxX, 0.0, pageWidth);
+    const double gestureEndY = std::clamp(anchorMaxY, 0.0, pageHeight);
+    const double gestureStartX = std::clamp(anchorMinX, 0.0, pageWidth);
+    const double gestureStartY = std::clamp(anchorMinY, 0.0, pageHeight);
+    if (tool == "text") {
+        object.strokePoints = BuildTextBoxStrokePointsFromBounds(
+            gestureStartX, gestureStartY, gestureEndX, gestureEndY);
+    } else if (tool == "highlighter") {
+        object.strokePoints = BuildGestureStrokePoints(
+            gestureStartX, (gestureStartY + gestureEndY) * 0.5,
+            gestureEndX, (gestureStartY + gestureEndY) * 0.5,
+            std::max<size_t>(4, object.pointCount / 2), ordinal);
+    } else {
+        object.strokePoints = BuildGestureStrokePoints(
+            gestureStartX, gestureStartY, gestureEndX, gestureEndY, object.pointCount, ordinal);
+    }
+    object.pointCount = object.strokePoints.size();
+    UpdateSyntheticBoundsFromStrokePoints(object, descriptor, brushWidth);
     return object;
 }
 
@@ -811,12 +1397,28 @@ bool CommitSyntheticCheckpoint(SimulatorEngineState& engine, SimulatorDocumentSe
     AccessCommittedObjectsForPage(session, pageId).push_back(object);
     session.undoStack.push_back({ pageId, object });
     session.redoStack.clear();
+    session.hasUnpersistedSyntheticMutation = true;
     engine.lastCommittedStrokeType = object.shapeType;
     return true;
 }
 
+std::vector<SimulatorStrokePoint> BuildGesturePagePoints(const std::vector<SimulatorStrokePoint>& ratioPoints,
+    double pageWidth, double pageHeight)
+{
+    std::vector<SimulatorStrokePoint> pagePoints;
+    pagePoints.reserve(ratioPoints.size());
+    for (const SimulatorStrokePoint& point : ratioPoints) {
+        pagePoints.push_back({
+            ClampUnitRatio(point.x) * pageWidth,
+            ClampUnitRatio(point.y) * pageHeight
+        });
+    }
+    return pagePoints;
+}
+
 bool CommitSyntheticGestureStroke(SimulatorEngineState& engine, SimulatorDocumentSession& session,
-    double startXRatio, double startYRatio, double endXRatio, double endYRatio)
+    double startXRatio, double startYRatio, double endXRatio, double endYRatio,
+    const std::vector<SimulatorStrokePoint>* gesturePoints)
 {
     const std::string pageId = ResolveSessionActivePageId(session);
     if (pageId.empty()) {
@@ -824,9 +1426,19 @@ bool CommitSyntheticGestureStroke(SimulatorEngineState& engine, SimulatorDocumen
     }
     SimulatorSyntheticObject object = BuildSyntheticObjectFromGesture(
         engine, session, pageId, startXRatio, startYRatio, endXRatio, endYRatio);
+    if (gesturePoints != nullptr && !gesturePoints->empty()) {
+        const SimulatorPageDescriptor* descriptor = FindPageDescriptor(session, pageId);
+        object.strokePoints = BuildGesturePagePoints(
+            *gesturePoints,
+            ResolvePageWidth(descriptor),
+            ResolvePageHeight(descriptor));
+        object.pointCount = object.strokePoints.size();
+        UpdateSyntheticBoundsFromStrokePoints(object, descriptor, object.strokeWidth);
+    }
     AccessCommittedObjectsForPage(session, pageId).push_back(object);
     session.undoStack.push_back({ pageId, object });
     session.redoStack.clear();
+    session.hasUnpersistedSyntheticMutation = true;
     engine.lastCommittedStrokeType = object.shapeType;
     return true;
 }
@@ -840,6 +1452,7 @@ bool UndoSyntheticCheckpoint(SimulatorEngineState& engine, SimulatorDocumentSess
     session.undoStack.pop_back();
     RemoveCommittedObjectById(AccessCommittedObjectsForPage(session, edit.pageId), edit.object.id);
     session.redoStack.push_back(edit);
+    session.hasUnpersistedSyntheticMutation = true;
     RefreshLastCommittedStrokeType(engine, session);
     return true;
 }
@@ -853,8 +1466,25 @@ bool RedoSyntheticCheckpoint(SimulatorEngineState& engine, SimulatorDocumentSess
     session.redoStack.pop_back();
     AccessCommittedObjectsForPage(session, edit.pageId).push_back(edit.object);
     session.undoStack.push_back(edit);
+    session.hasUnpersistedSyntheticMutation = true;
     engine.lastCommittedStrokeType = edit.object.shapeType;
     return true;
+}
+
+void AppendSimulatorFingerStrokeRatioPoint(SimulatorEngineState& engine, double xRatio, double yRatio)
+{
+    const double normalizedX = ClampUnitRatio(xRatio);
+    const double normalizedY = ClampUnitRatio(yRatio);
+    if (!engine.simulatorFingerStrokeRatios.empty()) {
+        const SimulatorStrokePoint& previous = engine.simulatorFingerStrokeRatios.back();
+        const double deltaX = previous.x - normalizedX;
+        const double deltaY = previous.y - normalizedY;
+        if (std::hypot(deltaX, deltaY) < 0.0025) {
+            engine.simulatorFingerStrokeRatios.back() = { normalizedX, normalizedY };
+            return;
+        }
+    }
+    engine.simulatorFingerStrokeRatios.push_back({ normalizedX, normalizedY });
 }
 
 void ResetSimulatorFingerStroke(SimulatorEngineState& engine)
@@ -862,6 +1492,7 @@ void ResetSimulatorFingerStroke(SimulatorEngineState& engine)
     engine.simulatorFingerStrokeActive = false;
     engine.simulatorFingerStrokeStartXRatio = engine.simulatorFingerStrokeLastXRatio;
     engine.simulatorFingerStrokeStartYRatio = engine.simulatorFingerStrokeLastYRatio;
+    engine.simulatorFingerStrokeRatios.clear();
     engine.activePointerCount = 0;
     engine.multitouchGestureActive = false;
 }
@@ -913,6 +1544,7 @@ void AppendSyntheticObject(std::ostringstream& builder, const SimulatorSynthetic
             << "\"shapeType\":\"" << EscapeJsonString(object.shapeType) << "\","
             << "\"tool\":\"" << EscapeJsonString(object.tool) << "\","
             << "\"colorHex\":\"" << EscapeJsonString(object.colorHex) << "\","
+            << "\"strokeWidth\":" << object.strokeWidth << ","
             << "\"selected\":false,"
             << "\"pointCount\":" << object.pointCount << ","
             << "\"pageIndex\":" << pageIndex << ","
@@ -1070,6 +1702,165 @@ void AppendCanonicalSceneFields(std::ostringstream& builder, const std::string& 
             << "\"checkpointCount\":" << checkpointCount << ","
             << "\"objectCount\":" << objectCount << ",";
     AppendScenePageFields(builder, session, pageIds, mode);
+}
+
+bool WriteTextFile(const std::string& path, const std::string& text)
+{
+    std::ofstream output(path, std::ios::out | std::ios::binary | std::ios::trunc);
+    if (!output.is_open()) {
+        return false;
+    }
+    output << text;
+    return output.good();
+}
+
+std::string BuildSyntheticObjectsFilePath(const SimulatorDocumentSession& session)
+{
+    return session.packagePath + "/" + kSimulatorStrokeStateFileName;
+}
+
+void TrackSyntheticObjectId(SimulatorDocumentSession& session, const std::string& objectId)
+{
+    const size_t dashIndex = objectId.rfind('-');
+    if (dashIndex == std::string::npos || dashIndex + 1 >= objectId.size()) {
+        return;
+    }
+    try {
+        session.nextSyntheticObjectId = std::max(session.nextSyntheticObjectId, std::stoi(objectId.substr(dashIndex + 1)) + 1);
+    } catch (...) {
+    }
+}
+
+std::string SerializeSyntheticObjectsJson(const SimulatorDocumentSession& session)
+{
+    std::ostringstream builder;
+    builder << "{\n  \"version\": 1,\n  \"objects\": [";
+    bool wroteObject = false;
+    for (const std::string& pageId : session.pages) {
+        const std::vector<SimulatorSyntheticObject>* objects = FindCommittedObjectsForPage(session, pageId);
+        if (objects == nullptr) {
+            continue;
+        }
+        for (const SimulatorSyntheticObject& object : *objects) {
+            if (wroteObject) {
+                builder << ",";
+            }
+            builder << "\n    {"
+                    << "\"id\":\"" << EscapeJsonString(object.id) << "\","
+                    << "\"pageId\":\"" << EscapeJsonString(object.pageId) << "\","
+                    << "\"nodeType\":\"" << EscapeJsonString(object.nodeType) << "\","
+                    << "\"shapeType\":\"" << EscapeJsonString(object.shapeType) << "\","
+                    << "\"tool\":\"" << EscapeJsonString(object.tool) << "\","
+                    << "\"colorHex\":\"" << EscapeJsonString(object.colorHex) << "\","
+                    << "\"strokeWidth\":" << object.strokeWidth << ","
+                    << "\"closed\":" << (object.closed ? "true" : "false") << ","
+                    << "\"pointCount\":" << object.pointCount << ","
+                    << "\"minX\":" << object.minX << ","
+                    << "\"minY\":" << object.minY << ","
+                    << "\"maxX\":" << object.maxX << ","
+                    << "\"maxY\":" << object.maxY
+                    << ",\"points\":[";
+            for (size_t pointIndex = 0; pointIndex < object.strokePoints.size(); ++pointIndex) {
+                if (pointIndex > 0) {
+                    builder << ",";
+                }
+                builder << "{"
+                        << "\"x\":" << object.strokePoints[pointIndex].x << ","
+                        << "\"y\":" << object.strokePoints[pointIndex].y
+                        << "}";
+            }
+            builder
+                    << "]"
+                    << "}";
+            wroteObject = true;
+        }
+    }
+    builder << "\n  ]\n}";
+    return builder.str();
+}
+
+void DeserializeSyntheticObjectsJson(const std::string& jsonText, SimulatorDocumentSession& session)
+{
+    session.committedObjectsByPage.clear();
+    session.nextSyntheticObjectId = 1;
+    session.hasUnpersistedSyntheticMutation = false;
+    const std::string objectsArray = ExtractJsonArrayBody(jsonText, "objects");
+    for (const std::string& objectText : SplitTopLevelJsonObjects(objectsArray)) {
+        SimulatorSyntheticObject object;
+        object.id = ExtractJsonStringValue(objectText, "id", "");
+        object.pageId = ExtractJsonStringValue(objectText, "pageId", ResolveSessionActivePageId(session));
+        object.nodeType = ExtractJsonStringValue(objectText, "nodeType", "ink-stroke");
+        object.shapeType = ExtractJsonStringValue(objectText, "shapeType", "freehand");
+        object.tool = ExtractJsonStringValue(objectText, "tool", "pen");
+        object.colorHex = ExtractJsonStringValue(objectText, "colorHex", "#1D2736");
+        object.strokeWidth = NormalizeBrushWidth(ExtractJsonNumberValue(objectText, "strokeWidth", kDefaultBrushWidth));
+        object.closed = objectText.find("\"closed\":true") != std::string::npos ||
+            objectText.find("\"closed\": true") != std::string::npos;
+        object.pointCount = static_cast<size_t>(std::max(0.0, ExtractJsonNumberValue(objectText, "pointCount", 0.0)));
+        object.minX = ExtractJsonNumberValue(objectText, "minX", 0.0);
+        object.minY = ExtractJsonNumberValue(objectText, "minY", 0.0);
+        object.maxX = ExtractJsonNumberValue(objectText, "maxX", object.minX);
+        object.maxY = ExtractJsonNumberValue(objectText, "maxY", object.minY);
+        const std::string pointsArray = ExtractJsonArrayBody(objectText, "points");
+        for (const std::string& pointText : SplitTopLevelJsonObjects(pointsArray)) {
+            const double x = ExtractJsonNumberValue(
+                pointText, "x", std::numeric_limits<double>::quiet_NaN());
+            const double y = ExtractJsonNumberValue(
+                pointText, "y", std::numeric_limits<double>::quiet_NaN());
+            if (std::isfinite(x) && std::isfinite(y)) {
+                object.strokePoints.push_back({ x, y });
+            }
+        }
+        if (object.id.empty()) {
+            object.id = "synthetic-" + object.pageId + "-" + std::to_string(session.nextSyntheticObjectId);
+        }
+        if (object.strokePoints.empty()) {
+            const int ordinal = session.nextSyntheticObjectId;
+            if (object.tool == "text") {
+                object.strokePoints = BuildTextBoxStrokePointsFromBounds(
+                    object.minX, object.minY, object.maxX, object.maxY);
+            } else if (object.tool == "highlighter") {
+                object.strokePoints = BuildHighlighterStrokePointsFromBounds(
+                    object.minX, object.minY, object.maxX, object.maxY, ordinal);
+            } else {
+                object.strokePoints = BuildSyntheticStrokePointsFromBounds(
+                    object.minX, object.minY, object.maxX, object.maxY, object.pointCount, ordinal);
+            }
+        }
+        if (!object.strokePoints.empty()) {
+            object.pointCount = object.strokePoints.size();
+            UpdateSyntheticBoundsFromStrokePoints(
+                object, FindPageDescriptor(session, object.pageId), object.strokeWidth);
+        }
+        session.committedObjectsByPage[object.pageId].push_back(object);
+        TrackSyntheticObjectId(session, object.id);
+    }
+}
+
+bool PersistSyntheticObjects(const SimulatorDocumentSession& session)
+{
+    if (session.packagePath.empty()) {
+        return true;
+    }
+    return WriteTextFile(BuildSyntheticObjectsFilePath(session), SerializeSyntheticObjectsJson(session));
+}
+
+void LoadSyntheticObjects(SimulatorDocumentSession& session)
+{
+    if (session.packagePath.empty()) {
+        session.committedObjectsByPage.clear();
+        session.nextSyntheticObjectId = 1;
+        session.hasUnpersistedSyntheticMutation = false;
+        return;
+    }
+    std::string contents;
+    if (!ReadBinaryFile(BuildSyntheticObjectsFilePath(session), contents).empty()) {
+        session.committedObjectsByPage.clear();
+        session.nextSyntheticObjectId = 1;
+        session.hasUnpersistedSyntheticMutation = false;
+        return;
+    }
+    DeserializeSyntheticObjectsJson(contents, session);
 }
 
 void AppendCapabilityFields(std::ostringstream& builder, const std::string& runtimeMode,
@@ -1279,9 +2070,10 @@ public:
         if (!initializedPageAwareSession) {
             InitializeCompatibilityPageSession(configJson, session);
         }
+        LoadSyntheticObjects(session);
         engine->documents[documentId] = session;
         engine->activeDocumentId = documentId;
-        engine->lastCommittedStrokeType = "none";
+        RefreshLastCommittedStrokeType(*engine, engine->documents[documentId]);
         return true;
     }
 
@@ -1321,8 +2113,16 @@ public:
         if (iterator == engine->documents.end()) {
             return false;
         }
-        iterator->second.checkpointCount += 1;
-        CommitSyntheticCheckpoint(*engine, iterator->second);
+        if (!iterator->second.hasUnpersistedSyntheticMutation) {
+            if (!CommitSyntheticCheckpoint(*engine, iterator->second)) {
+                return false;
+            }
+            iterator->second.checkpointCount += 1;
+        }
+        if (!PersistSyntheticObjects(iterator->second)) {
+            return false;
+        }
+        iterator->second.hasUnpersistedSyntheticMutation = false;
         return true;
     }
 
@@ -1360,6 +2160,21 @@ public:
             iterator->second.checkpointCount, syntheticObjectCount, 0, objectCount,
             engine->activeMode, iterator->second, reportedPageIds,
             includePdfLayer, includeInkLayer);
+        if (ShouldEmitPreviewRaster(targetDescriptor, syntheticObjectCount)) {
+            const int rasterWidth = std::max(1, width > 0 ? width :
+                static_cast<int>(std::lround(ResolvePageWidth(targetDescriptor))));
+            const int rasterHeight = std::max(1, height > 0 ? height :
+                static_cast<int>(std::lround(ResolvePageHeight(targetDescriptor))));
+            const std::string png = BuildPreviewPng(
+                iterator->second, targetPageId, targetDescriptor, rasterWidth, rasterHeight);
+            const std::string pngBase64 = EncodeBase64(png);
+            builder << ",\"raster\":{"
+                    << "\"mimeType\":\"" << kPngPreviewMimeType << "\","
+                    << "\"base64\":\"" << pngBase64 << "\","
+                    << "\"width\":" << rasterWidth << ","
+                    << "\"height\":" << rasterHeight
+                    << "}";
+        }
         builder
                 << "}";
         return builder.str();
@@ -1537,6 +2352,7 @@ public:
         ReindexPageDescriptors(iterator->second);
         iterator->second.activePageId = nextActivePageId;
         RefreshLastCommittedStrokeType(*engine, iterator->second);
+        PersistSyntheticObjects(iterator->second);
         return true;
     }
 
@@ -1596,6 +2412,8 @@ public:
             engine->simulatorFingerStrokeStartYRatio = normalizedY;
             engine->simulatorFingerStrokeLastXRatio = normalizedX;
             engine->simulatorFingerStrokeLastYRatio = normalizedY;
+            engine->simulatorFingerStrokeRatios.clear();
+            AppendSimulatorFingerStrokeRatioPoint(*engine, normalizedX, normalizedY);
             return true;
         }
 
@@ -1604,9 +2422,12 @@ public:
                 engine->simulatorFingerStrokeActive = true;
                 engine->simulatorFingerStrokeStartXRatio = normalizedX;
                 engine->simulatorFingerStrokeStartYRatio = normalizedY;
+                engine->simulatorFingerStrokeRatios.clear();
+                AppendSimulatorFingerStrokeRatioPoint(*engine, normalizedX, normalizedY);
             }
             engine->simulatorFingerStrokeLastXRatio = normalizedX;
             engine->simulatorFingerStrokeLastYRatio = normalizedY;
+            AppendSimulatorFingerStrokeRatioPoint(*engine, normalizedX, normalizedY);
             return true;
         }
 
@@ -1614,17 +2435,22 @@ public:
             if (!engine->simulatorFingerStrokeActive) {
                 engine->simulatorFingerStrokeStartXRatio = normalizedX;
                 engine->simulatorFingerStrokeStartYRatio = normalizedY;
+                engine->simulatorFingerStrokeRatios.clear();
+                AppendSimulatorFingerStrokeRatioPoint(*engine, normalizedX, normalizedY);
             }
             engine->simulatorFingerStrokeLastXRatio = normalizedX;
             engine->simulatorFingerStrokeLastYRatio = normalizedY;
+            AppendSimulatorFingerStrokeRatioPoint(*engine, normalizedX, normalizedY);
             const bool committed = engine->fingerWritingEnabled &&
                 CommitSyntheticGestureStroke(*engine, iterator->second,
                     engine->simulatorFingerStrokeStartXRatio,
                     engine->simulatorFingerStrokeStartYRatio,
                     engine->simulatorFingerStrokeLastXRatio,
-                    engine->simulatorFingerStrokeLastYRatio);
+                    engine->simulatorFingerStrokeLastYRatio,
+                    &engine->simulatorFingerStrokeRatios);
+            const bool persisted = !committed || PersistSyntheticObjects(iterator->second);
             ResetSimulatorFingerStroke(*engine);
-            return committed || !engine->fingerWritingEnabled;
+            return (committed && persisted) || !engine->fingerWritingEnabled;
         }
 
         ResetSimulatorFingerStroke(*engine);
@@ -1664,6 +2490,17 @@ public:
         return true;
     }
 
+    bool SetBrushWidth(const std::string& engineId, double width) override
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        SimulatorEngineState* engine = FindEngineLocked(engineId);
+        if (engine == nullptr || !std::isfinite(width) || width <= 0.0) {
+            return false;
+        }
+        engine->activeBrushWidth = width;
+        return true;
+    }
+
     bool Undo(const std::string& engineId) override
     {
         std::lock_guard<std::mutex> lock(mutex_);
@@ -1675,7 +2512,11 @@ public:
         if (iterator == engine->documents.end()) {
             return false;
         }
-        return UndoSyntheticCheckpoint(*engine, iterator->second);
+        const bool undone = UndoSyntheticCheckpoint(*engine, iterator->second);
+        if (undone) {
+            PersistSyntheticObjects(iterator->second);
+        }
+        return undone;
     }
 
     bool Redo(const std::string& engineId) override
@@ -1689,7 +2530,11 @@ public:
         if (iterator == engine->documents.end()) {
             return false;
         }
-        return RedoSyntheticCheckpoint(*engine, iterator->second);
+        const bool redone = RedoSyntheticCheckpoint(*engine, iterator->second);
+        if (redone) {
+            PersistSyntheticObjects(iterator->second);
+        }
+        return redone;
     }
 
     bool StartInputTraceRecording(const std::string& engineId, const std::string& tracePath) override
@@ -1795,6 +2640,7 @@ public:
                 << "\"activeBackend\":\"" << EscapeJsonString(engine->activeBackend) << "\","
                 << "\"activeMode\":\"" << EscapeJsonString(engine->activeMode) << "\","
                 << "\"activeColor\":\"" << EscapeJsonString(engine->activeColor) << "\","
+                << "\"activeBrushWidth\":" << engine->activeBrushWidth << ","
                 << "\"fingerWritingEnabled\":" << (engine->fingerWritingEnabled ? "true" : "false") << ","
                 << "\"xComponentId\":\"" << EscapeJsonString(engine->xComponentId) << "\","
                 << "\"surfaceId\":\"" << EscapeJsonString(surfaceId) << "\","

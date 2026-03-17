@@ -141,11 +141,12 @@ export interface SettingsShellSection {
   items: SettingsShellItem[];
 }
 
+export const BRUSH_RECENT_COLOR_LIMIT: number = 7;
+
 export const DEFAULT_LINE_WIDTH_PRESETS: LineWidthPreset[] = [
-  { id: 'fine', title: 'Fine', description: 'Tight writing strokes for compact notes.', width: 2.4 },
-  { id: 'medium', title: 'Medium', description: 'Balanced preset that matches the current default feel.', width: 3.2 },
-  { id: 'bold', title: 'Bold', description: 'Thicker preset for emphasis and diagram work.', width: 5.6 },
-  { id: 'marker', title: 'Marker', description: 'Wide preset for highlight-style strokes.', width: 9.5 }
+  { id: 'small', title: 'Small', description: 'Compact writing width for dense notes.', width: 2.4 },
+  { id: 'medium', title: 'Medium', description: 'Balanced default width for everyday writing.', width: 3.2 },
+  { id: 'large', title: 'Large', description: 'Thicker width for emphasis and diagrams.', width: 5.6 }
 ];
 
 export const PRESSURE_CURVE_PRESETS: Record<string, PressureCurvePoint[]> = {
@@ -263,17 +264,17 @@ function normalizePressureCurvePreset(value: PressureCurvePreset | undefined): P
 
 function normalizeRecentColors(colors: string[] | undefined): string[] {
   const normalized: string[] = [];
-  const sourceColors: string[] = Array.isArray(colors) ? colors : PALETTE_COLORS.slice(0, 5);
+  const sourceColors: string[] = Array.isArray(colors) ? colors : PALETTE_COLORS.slice(0, BRUSH_RECENT_COLOR_LIMIT);
   for (const color of sourceColors) {
     if (typeof color !== 'string' || color.length === 0 || normalized.includes(color)) {
       continue;
     }
     normalized.push(color);
-    if (normalized.length >= 8) {
+    if (normalized.length >= BRUSH_RECENT_COLOR_LIMIT) {
       break;
     }
   }
-  return normalized.length > 0 ? normalized : PALETTE_COLORS.slice(0, 5);
+  return normalized.length > 0 ? normalized : PALETTE_COLORS.slice(0, BRUSH_RECENT_COLOR_LIMIT);
 }
 
 function normalizeLineWidthPresets(presets: LineWidthPreset[] | undefined): LineWidthPreset[] {
@@ -302,7 +303,50 @@ function normalizeLineWidthPresets(presets: LineWidthPreset[] | undefined): Line
       width: preset.width
     });
   }
-  return normalized.length > 0 ? normalized : cloneLineWidthPresets(DEFAULT_LINE_WIDTH_PRESETS);
+  if (normalized.length === 0) {
+    return cloneLineWidthPresets(DEFAULT_LINE_WIDTH_PRESETS);
+  }
+
+  const sortedWidths: number[] = normalized
+    .map((preset) => preset.width)
+    .sort((left, right) => left - right);
+  const middleIndex: number = Math.floor((sortedWidths.length - 1) / 2);
+  const defaultSlots: LineWidthPreset[] = cloneLineWidthPresets(DEFAULT_LINE_WIDTH_PRESETS);
+
+  const resolveWidth = (preferredIds: string[], fallbackWidth: number): number => {
+    for (const preferredId of preferredIds) {
+      const matchedPreset: LineWidthPreset | undefined = normalized.find((preset) => preset.id === preferredId);
+      if (matchedPreset) {
+        return matchedPreset.width;
+      }
+    }
+    return fallbackWidth;
+  };
+
+  const smallWidth: number = resolveWidth(['small', 'fine'], sortedWidths[0] ?? defaultSlots[0].width);
+  const mediumWidth: number = resolveWidth(['medium'], sortedWidths[middleIndex] ?? defaultSlots[1].width);
+  const largeWidth: number = resolveWidth(['large', 'bold', 'marker'], sortedWidths[sortedWidths.length - 1] ?? defaultSlots[2].width);
+
+  return [
+    {
+      id: 'small',
+      title: defaultSlots[0].title,
+      description: defaultSlots[0].description,
+      width: smallWidth
+    },
+    {
+      id: 'medium',
+      title: defaultSlots[1].title,
+      description: defaultSlots[1].description,
+      width: mediumWidth
+    },
+    {
+      id: 'large',
+      title: defaultSlots[2].title,
+      description: defaultSlots[2].description,
+      width: largeWidth
+    }
+  ];
 }
 
 function normalizeLineWidthPresetId(
@@ -345,7 +389,7 @@ export function createDefaultAppSettings(): AppSettings {
     brush: {
       defaultTool: ToolType.PEN,
       defaultColor: PALETTE_COLORS[0],
-      recentColors: PALETTE_COLORS.slice(0, 5),
+      recentColors: PALETTE_COLORS.slice(0, BRUSH_RECENT_COLOR_LIMIT),
       defaultLineWidthPresetId: 'medium',
       lineWidthPresets: cloneLineWidthPresets(DEFAULT_LINE_WIDTH_PRESETS),
       pressureEnabled: true,

@@ -30,6 +30,7 @@ constexpr const char* kPdfPageNodeIdPrefix = "pdf-page-";
 constexpr const char* kPdfFragmentNodeIdPrefix = "pdf-fragment-";
 constexpr int kPreviewSchemaVersion = 0;
 constexpr int kPrimaryPageIndex = 0;
+constexpr float kDefaultBrushWidth = 3.2f;
 constexpr size_t kMaxTrackedStrokeSamples = 48;
 constexpr size_t kMaxUndoDepth = 20;
 constexpr float kMinPredictionSpeedPxPerMs = 0.05f;
@@ -126,6 +127,7 @@ struct StrokeRenderObject {
     std::vector<InkPointSnapshot> points;
     std::string tool = "pen";
     std::string colorHex = "#1D2736";
+    float strokeWidth = kDefaultBrushWidth;
     std::string shapeType = "freehand";
     bool selected = false;
 };
@@ -241,6 +243,7 @@ struct EngineState {
     std::string activeBackend = "opengles";
     std::string activeMode = "paged";
     std::string activeColor = "#1D2736";
+    float activeBrushWidth = kDefaultBrushWidth;
     bool fingerWritingEnabled = false;
     std::string lastInkTool = "pen";
     std::string xComponentId;
@@ -858,6 +861,17 @@ bool ToolProducesInk(const std::string& tool)
     return tool == "pen" || tool == "pencil" || tool == "highlighter";
 }
 
+float NormalizeBrushWidth(float width)
+{
+    return std::isfinite(width) && width > 0.0f ? width : kDefaultBrushWidth;
+}
+
+float ResolveToolBrushBaseWidth(const std::string& tool, float brushWidth)
+{
+    (void)tool;
+    return NormalizeBrushWidth(brushWidth);
+}
+
 bool ToolErasesObjects(const std::string& tool)
 {
     return tool == "eraser";
@@ -874,14 +888,9 @@ bool ToolMovesSelection(const std::string& tool)
 }
 
 float ComputeStrokeWidthPx(const EngineState& engine, const std::string& tool, const InkPointSnapshot& point,
-    bool predicted)
+    bool predicted, float brushWidth)
 {
-    float baseWidth = 3.2f;
-    if (tool == "pencil") {
-        baseWidth = 4.2f;
-    } else if (tool == "highlighter") {
-        baseWidth = 18.0f;
-    }
+    const float baseWidth = ResolveToolBrushBaseWidth(tool, brushWidth);
 
     float width = baseWidth;
     if (engine.pressureEnabled && (tool == "pen" || tool == "pencil")) {
@@ -1022,7 +1031,7 @@ Vec2f ResolvePencilAxis(const InkPointSnapshot& start, const InkPointSnapshot& e
 
 void AddPencilStripSegment(std::vector<RenderVertex>& vertices, const InkPointSnapshot& start,
     const InkPointSnapshot& end, const EngineState& engine, const std::string& colorHex, bool predicted,
-    float surfaceWidth, float surfaceHeight)
+    float brushWidth, float surfaceWidth, float surfaceHeight)
 {
     const Vec2f tangent = NormalizeVec({ end.x - start.x, end.y - start.y });
     if (VecLength(tangent) <= 0.0f) {
@@ -1032,8 +1041,8 @@ void AddPencilStripSegment(std::vector<RenderVertex>& vertices, const InkPointSn
     const float startTilt = ComputeTiltMagnitude(start);
     const float endTilt = ComputeTiltMagnitude(end);
     const float tiltMagnitude = (startTilt + endTilt) * 0.5f;
-    const float startBaseHalf = ComputeStrokeWidthPx(engine, "pencil", start, predicted) * 0.5f;
-    const float endBaseHalf = ComputeStrokeWidthPx(engine, "pencil", end, predicted) * 0.5f;
+    const float startBaseHalf = ComputeStrokeWidthPx(engine, "pencil", start, predicted, brushWidth) * 0.5f;
+    const float endBaseHalf = ComputeStrokeWidthPx(engine, "pencil", end, predicted, brushWidth) * 0.5f;
     const RgbaColor baseColor = ResolveStrokeColor("pencil", colorHex, predicted);
 
     if (tiltMagnitude < 0.18f) {
@@ -1055,8 +1064,8 @@ void AddPencilStripSegment(std::vector<RenderVertex>& vertices, const InkPointSn
     normal = ScaleVec(normal, heavySign);
 
     const float widthMultiplier = LerpFloat(1.0f, 2.4f, tiltMagnitude);
-    const float startFullWidth = std::max(1.0f, ComputeStrokeWidthPx(engine, "pencil", start, predicted) * widthMultiplier);
-    const float endFullWidth = std::max(1.0f, ComputeStrokeWidthPx(engine, "pencil", end, predicted) * widthMultiplier);
+    const float startFullWidth = std::max(1.0f, ComputeStrokeWidthPx(engine, "pencil", start, predicted, brushWidth) * widthMultiplier);
+    const float endFullWidth = std::max(1.0f, ComputeStrokeWidthPx(engine, "pencil", end, predicted, brushWidth) * widthMultiplier);
 
     const auto featherBoundary = [](float fullWidth) { return -fullWidth * 0.5f + fullWidth * 0.20f; };
     const auto coreBoundary = [&](float fullWidth) { return featherBoundary(fullWidth) + fullWidth * 0.35f; };
@@ -1085,11 +1094,11 @@ void AddPencilStripSegment(std::vector<RenderVertex>& vertices, const InkPointSn
 }
 
 void AddPencilPointStamp(std::vector<RenderVertex>& vertices, const InkPointSnapshot& point, const EngineState& engine,
-    const std::string& colorHex, bool predicted, float surfaceWidth, float surfaceHeight)
+    const std::string& colorHex, bool predicted, float brushWidth, float surfaceWidth, float surfaceHeight)
 {
     const float tiltMagnitude = ComputeTiltMagnitude(point);
     if (tiltMagnitude < 0.18f) {
-        const float radius = ComputeStrokeWidthPx(engine, "pencil", point, predicted) * 0.5f;
+        const float radius = ComputeStrokeWidthPx(engine, "pencil", point, predicted, brushWidth) * 0.5f;
         AddRect(vertices, point.x - radius, point.y - radius, point.x + radius, point.y + radius,
             ResolveStrokeColor("pencil", colorHex, predicted), surfaceWidth, surfaceHeight);
         return;
@@ -1101,7 +1110,7 @@ void AddPencilPointStamp(std::vector<RenderVertex>& vertices, const InkPointSnap
     }
     normal = NormalizeVec(normal);
     const Vec2f tangent = NormalizeVec(Perpendicular(normal));
-    const float baseWidth = ComputeStrokeWidthPx(engine, "pencil", point, predicted);
+    const float baseWidth = ComputeStrokeWidthPx(engine, "pencil", point, predicted, brushWidth);
     const float fullWidth = std::max(1.0f, baseWidth * LerpFloat(1.0f, 2.4f, tiltMagnitude));
     const float halfLength = std::max(baseWidth * 0.65f, 1.2f);
 
@@ -1139,7 +1148,7 @@ void AddPencilPointStamp(std::vector<RenderVertex>& vertices, const InkPointSnap
 
 void AddStrokeMesh(std::vector<RenderVertex>& vertices, const std::vector<InkPointSnapshot>& sourcePoints,
     const EngineState& engine, const std::string& tool, const std::string& colorHex, bool predicted,
-    float surfaceWidth, float surfaceHeight)
+    float brushWidth, float surfaceWidth, float surfaceHeight)
 {
     if (sourcePoints.empty()) {
         return;
@@ -1147,7 +1156,7 @@ void AddStrokeMesh(std::vector<RenderVertex>& vertices, const std::vector<InkPoi
 
     const std::vector<InkPointSnapshot> points = BuildSmoothedStroke(sourcePoints);
     if (points.size() == 1) {
-        const float radius = ComputeStrokeWidthPx(engine, tool, points.front(), predicted) * 0.5f;
+        const float radius = ComputeStrokeWidthPx(engine, tool, points.front(), predicted, brushWidth) * 0.5f;
         AddRect(vertices, points.front().x - radius, points.front().y - radius,
             points.front().x + radius, points.front().y + radius,
             ResolveStrokeColor(tool, colorHex, predicted), surfaceWidth, surfaceHeight);
@@ -1166,8 +1175,8 @@ void AddStrokeMesh(std::vector<RenderVertex>& vertices, const std::vector<InkPoi
 
         const float nx = -dy / length;
         const float ny = dx / length;
-        const float halfStart = ComputeStrokeWidthPx(engine, tool, start, predicted) * 0.5f;
-        const float halfEnd = ComputeStrokeWidthPx(engine, tool, end, predicted) * 0.5f;
+        const float halfStart = ComputeStrokeWidthPx(engine, tool, start, predicted, brushWidth) * 0.5f;
+        const float halfEnd = ComputeStrokeWidthPx(engine, tool, end, predicted, brushWidth) * 0.5f;
         const RgbaColor color = ResolveStrokeColor(tool, colorHex, predicted);
         AddGradientStripSegment(vertices, start, end, { nx, ny }, halfStart, -halfStart, halfEnd, -halfEnd,
             color, color, surfaceWidth, surfaceHeight);
@@ -1175,7 +1184,8 @@ void AddStrokeMesh(std::vector<RenderVertex>& vertices, const std::vector<InkPoi
 }
 
 void AddPencilStrokeMesh(std::vector<RenderVertex>& vertices, const std::vector<InkPointSnapshot>& sourcePoints,
-    const EngineState& engine, const std::string& colorHex, bool predicted, float surfaceWidth, float surfaceHeight)
+    const EngineState& engine, const std::string& colorHex, bool predicted, float brushWidth,
+    float surfaceWidth, float surfaceHeight)
 {
     if (sourcePoints.empty()) {
         return;
@@ -1183,7 +1193,7 @@ void AddPencilStrokeMesh(std::vector<RenderVertex>& vertices, const std::vector<
 
     const std::vector<InkPointSnapshot> points = BuildSmoothedStroke(sourcePoints);
     if (points.size() == 1) {
-        AddPencilPointStamp(vertices, points.front(), engine, colorHex, predicted, surfaceWidth, surfaceHeight);
+        AddPencilPointStamp(vertices, points.front(), engine, colorHex, predicted, brushWidth, surfaceWidth, surfaceHeight);
         return;
     }
 
@@ -1193,19 +1203,19 @@ void AddPencilStrokeMesh(std::vector<RenderVertex>& vertices, const std::vector<
         if (DistanceBetweenVec(PointPosition(start), PointPosition(end)) < 0.001f) {
             continue;
         }
-        AddPencilStripSegment(vertices, start, end, engine, colorHex, predicted, surfaceWidth, surfaceHeight);
+        AddPencilStripSegment(vertices, start, end, engine, colorHex, predicted, brushWidth, surfaceWidth, surfaceHeight);
     }
 }
 
 void AddToolStrokeMesh(std::vector<RenderVertex>& vertices, const std::vector<InkPointSnapshot>& sourcePoints,
     const EngineState& engine, const std::string& tool, const std::string& colorHex, bool predicted,
-    float surfaceWidth, float surfaceHeight)
+    float brushWidth, float surfaceWidth, float surfaceHeight)
 {
     if (tool == "pencil") {
-        AddPencilStrokeMesh(vertices, sourcePoints, engine, colorHex, predicted, surfaceWidth, surfaceHeight);
+        AddPencilStrokeMesh(vertices, sourcePoints, engine, colorHex, predicted, brushWidth, surfaceWidth, surfaceHeight);
         return;
     }
-    AddStrokeMesh(vertices, sourcePoints, engine, tool, colorHex, predicted, surfaceWidth, surfaceHeight);
+    AddStrokeMesh(vertices, sourcePoints, engine, tool, colorHex, predicted, brushWidth, surfaceWidth, surfaceHeight);
 }
 
 void AddInfiniteGrid(std::vector<RenderVertex>& vertices, float surfaceWidth, float surfaceHeight)
@@ -1545,10 +1555,10 @@ bool IsLineLike(const std::vector<InkPointSnapshot>& points)
 
 StrokeRenderObject BuildStrokeObject(
     const std::vector<InkPointSnapshot>& points, const std::string& tool, const std::string& colorHex,
-    const std::string& shapeType);
+    float strokeWidth, const std::string& shapeType);
 
 bool TryBuildArrowStroke(const std::vector<InkPointSnapshot>& inputPoints, const std::string& tool,
-    const std::string& colorHex, StrokeRenderObject& stroke)
+    const std::string& colorHex, float strokeWidth, StrokeRenderObject& stroke)
 {
     if (inputPoints.size() < 5) {
         return false;
@@ -1596,18 +1606,19 @@ bool TryBuildArrowStroke(const std::vector<InkPointSnapshot>& inputPoints, const
     }
 
     stroke = BuildStrokeObject(
-        BuildCanonicalArrowPoints(start, tip, wing, start.timeStamp), tool, colorHex, "arrow");
+        BuildCanonicalArrowPoints(start, tip, wing, start.timeStamp), tool, colorHex, strokeWidth, "arrow");
     return true;
 }
 
 StrokeRenderObject BuildStrokeObject(
     const std::vector<InkPointSnapshot>& points, const std::string& tool, const std::string& colorHex,
-    const std::string& shapeType)
+    float strokeWidth, const std::string& shapeType)
 {
     StrokeRenderObject stroke;
     stroke.points = points;
     stroke.tool = tool;
     stroke.colorHex = colorHex;
+    stroke.strokeWidth = NormalizeBrushWidth(strokeWidth);
     stroke.shapeType = shapeType;
     return stroke;
 }
@@ -1849,13 +1860,14 @@ void MoveSelectedStrokes(std::vector<StrokeRenderObject>& strokes, float dx, flo
 }
 
 StrokeRenderObject ApplyShapeRecognition(
-    const std::vector<InkPointSnapshot>& inputPoints, const std::string& tool, const std::string& colorHex, bool enabled)
+    const std::vector<InkPointSnapshot>& inputPoints, const std::string& tool, const std::string& colorHex,
+    float strokeWidth, bool enabled)
 {
     if (inputPoints.empty()) {
-        return BuildStrokeObject(inputPoints, tool, colorHex, "freehand");
+        return BuildStrokeObject(inputPoints, tool, colorHex, strokeWidth, "freehand");
     }
     if (!enabled || inputPoints.size() < 4) {
-        return BuildStrokeObject(inputPoints, tool, colorHex, "freehand");
+        return BuildStrokeObject(inputPoints, tool, colorHex, strokeWidth, "freehand");
     }
 
     const StrokeBounds bounds = ComputeStrokeBounds(inputPoints);
@@ -1869,17 +1881,17 @@ StrokeRenderObject ApplyShapeRecognition(
 
     if (!closed) {
         StrokeRenderObject arrowStroke;
-        if (TryBuildArrowStroke(inputPoints, tool, colorHex, arrowStroke)) {
+        if (TryBuildArrowStroke(inputPoints, tool, colorHex, strokeWidth, arrowStroke)) {
             return arrowStroke;
         }
     }
 
     if (!closed && IsLineLike(inputPoints)) {
-        return BuildStrokeObject(BuildCanonicalLinePoints(inputPoints), tool, colorHex, "line");
+        return BuildStrokeObject(BuildCanonicalLinePoints(inputPoints), tool, colorHex, strokeWidth, "line");
     }
 
     if (!closed || width < 22.0f || height < 22.0f || pathLength < 80.0f) {
-        return BuildStrokeObject(inputPoints, tool, colorHex, "freehand");
+        return BuildStrokeObject(inputPoints, tool, colorHex, strokeWidth, "freehand");
     }
 
     const std::vector<InkPointSnapshot> corners = ExtractStrokeCorners(inputPoints, true);
@@ -1891,19 +1903,22 @@ StrokeRenderObject ApplyShapeRecognition(
     // 中文注释：先识别圆/椭圆，避免圆形被角点噪声误判为多边形。
     if (corners.size() <= 2 && ellipseDeviation < 0.23f) {
         const std::string shapeType = aspectRatio <= 1.18f ? "circle" : "ellipse";
-        return BuildStrokeObject(BuildCanonicalEllipsePoints(bounds, seed, timestamp), tool, colorHex, shapeType);
+        return BuildStrokeObject(
+            BuildCanonicalEllipsePoints(bounds, seed, timestamp), tool, colorHex, strokeWidth, shapeType);
     }
 
     // 中文注释：矩形判定使用“角点数量 + 点到包围盒边缘距离”双条件，避免普通手写误吸附。
     if (corners.size() >= 4 && corners.size() <= 6 && edgeDistance <= rectangleThreshold) {
-        return BuildStrokeObject(BuildCanonicalRectanglePoints(bounds, seed, timestamp), tool, colorHex, "rectangle");
+        return BuildStrokeObject(
+            BuildCanonicalRectanglePoints(bounds, seed, timestamp), tool, colorHex, strokeWidth, "rectangle");
     }
 
     if (corners.size() >= 3 && corners.size() <= 4) {
-        return BuildStrokeObject(BuildCanonicalTrianglePoints(bounds, seed, timestamp), tool, colorHex, "triangle");
+        return BuildStrokeObject(
+            BuildCanonicalTrianglePoints(bounds, seed, timestamp), tool, colorHex, strokeWidth, "triangle");
     }
 
-    return BuildStrokeObject(inputPoints, tool, colorHex, "freehand");
+    return BuildStrokeObject(inputPoints, tool, colorHex, strokeWidth, "freehand");
 }
 
 void PushUndoSnapshot(EngineState& engine)
@@ -2282,6 +2297,7 @@ std::string SerializeStrokesJson(const std::vector<StrokeRenderObject>& strokes)
                 << "      \"objectId\": \"" << EscapeJsonString(stroke.objectId) << "\",\n"
                 << "      \"tool\": \"" << EscapeJsonString(stroke.tool) << "\",\n"
                 << "      \"colorHex\": \"" << EscapeJsonString(stroke.colorHex) << "\",\n"
+                << "      \"strokeWidth\": " << std::fixed << std::setprecision(3) << stroke.strokeWidth << ",\n"
                 << "      \"shapeType\": \"" << EscapeJsonString(stroke.shapeType) << "\",\n"
                 << "      \"points\": [";
         for (size_t pointIndex = 0; pointIndex < stroke.points.size(); ++pointIndex) {
@@ -2318,6 +2334,8 @@ std::vector<StrokeRenderObject> DeserializeStrokesJson(const std::string& jsonTe
         stroke.objectId = ExtractJsonStringValue(strokeObjectText, "objectId", "");
         stroke.tool = ExtractJsonStringValue(strokeObjectText, "tool", "pen");
         stroke.colorHex = ExtractJsonStringValue(strokeObjectText, "colorHex", "#1D2736");
+        stroke.strokeWidth = NormalizeBrushWidth(static_cast<float>(ExtractJsonNumberValue(
+            strokeObjectText, "strokeWidth", kDefaultBrushWidth)));
         stroke.shapeType = ExtractJsonStringValue(strokeObjectText, "shapeType", "freehand");
 
         const std::string pointsArray = ExtractJsonArrayBody(strokeObjectText, "points");
@@ -2929,6 +2947,7 @@ std::string BuildSceneSnapshotJson(const EngineState& engine, const DocumentSess
                 << "\"shapeType\":\"" << EscapeJsonString(stroke.shapeType) << "\","
                 << "\"tool\":\"" << EscapeJsonString(stroke.tool) << "\","
                 << "\"colorHex\":\"" << EscapeJsonString(stroke.colorHex) << "\","
+                << "\"strokeWidth\":" << std::fixed << std::setprecision(3) << stroke.strokeWidth << ","
                 << "\"selected\":" << (stroke.selected ? "true" : "false") << ","
                 << "\"pointCount\":" << stroke.points.size() << ","
                 << "\"pageIndex\":" << activePageIndex << ","
@@ -3729,6 +3748,20 @@ public:
         return true;
     }
 
+    bool SetBrushWidth(const std::string& engineId, double width)
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        EngineState* engine = FindEngineLocked(engineId);
+        if (engine == nullptr || !std::isfinite(width) || width <= 0.0) {
+            return false;
+        }
+        engine->activeBrushWidth = static_cast<float>(width);
+        if (SurfaceTelemetry* telemetry = FindSurfaceLocked(engine->xComponentId); telemetry != nullptr) {
+            RenderSurfaceLocked(*telemetry, engine);
+        }
+        return true;
+    }
+
     bool Undo(const std::string& engineId)
     {
         std::lock_guard<std::mutex> lock(mutex_);
@@ -3832,6 +3865,7 @@ public:
                 << "\"activeBackend\":\"" << engine->activeBackend << "\","
                 << "\"activeMode\":\"" << engine->activeMode << "\","
                 << "\"activeColor\":\"" << engine->activeColor << "\","
+                << "\"activeBrushWidth\":" << engine->activeBrushWidth << ","
                 << "\"xComponentId\":\"" << engine->xComponentId << "\","
                 << "\"surfaceId\":\"" << engine->surfaceId << "\","
                 << "\"checkpointCount\":" << checkpointCount << ","
@@ -4170,13 +4204,14 @@ private:
         AppendBackgroundVertices(vertices, *engine, surfaceWidth, surfaceHeight);
 
         for (const StrokeRenderObject& stroke : engine->committedStrokes) {
-            AddToolStrokeMesh(vertices, stroke.points, *engine, stroke.tool, stroke.colorHex, false,
+            AddToolStrokeMesh(vertices, stroke.points, *engine, stroke.tool, stroke.colorHex, false, stroke.strokeWidth,
                 surfaceWidth, surfaceHeight);
         }
 
         if (ToolProducesInk(engine->activeTool) && !telemetry.strokeSamples.empty()) {
             AddToolStrokeMesh(vertices, telemetry.strokeSamples, *engine, engine->activeTool, engine->activeColor,
-                false, surfaceWidth, surfaceHeight);
+                false, engine->activeBrushWidth,
+                surfaceWidth, surfaceHeight);
         }
 
         if (ToolProducesInk(engine->activeTool) && engine->predictionEnabled &&
@@ -4186,11 +4221,13 @@ private:
             predictedStroke.push_back(telemetry.strokeSamples.back());
             predictedStroke.insert(predictedStroke.end(), telemetry.predictedSamples.begin(), telemetry.predictedSamples.end());
             AddToolStrokeMesh(vertices, predictedStroke, *engine, engine->activeTool, engine->activeColor,
-                true, surfaceWidth, surfaceHeight);
+                true, engine->activeBrushWidth,
+                surfaceWidth, surfaceHeight);
         }
 
         if (ToolUsesLassoSelection(engine->activeTool) && !telemetry.strokeSamples.empty()) {
-            AddStrokeMesh(vertices, telemetry.strokeSamples, *engine, "pen", "#2A6AFB", true, surfaceWidth, surfaceHeight);
+            AddStrokeMesh(vertices, telemetry.strokeSamples, *engine, "pen", "#2A6AFB", true, kDefaultBrushWidth,
+                surfaceWidth, surfaceHeight);
         }
 
         if (HasSelectedStroke(engine->committedStrokes)) {
@@ -4534,7 +4571,8 @@ private:
             telemetry.strokeSamples.size() > 1) {
             PushUndoSnapshot(*engine);
             StrokeRenderObject stroke = ApplyShapeRecognition(
-                telemetry.strokeSamples, engine->activeTool, engine->activeColor, engine->shapeRecognitionEnabled);
+                telemetry.strokeSamples, engine->activeTool, engine->activeColor,
+                engine->activeBrushWidth, engine->shapeRecognitionEnabled);
             stroke.objectId = GenerateStrokeObjectId(*engine);
             engine->committedStrokes.push_back(stroke);
             RefreshLastCommittedStrokeType(*engine);
@@ -4951,7 +4989,8 @@ private:
             telemetry.strokeSamples.size() > 1) {
             PushUndoSnapshot(*engine);
             StrokeRenderObject stroke = ApplyShapeRecognition(
-                telemetry.strokeSamples, engine->activeTool, engine->activeColor, engine->shapeRecognitionEnabled);
+                telemetry.strokeSamples, engine->activeTool, engine->activeColor,
+                engine->activeBrushWidth, engine->shapeRecognitionEnabled);
             stroke.objectId = GenerateStrokeObjectId(*engine);
             engine->committedStrokes.push_back(stroke);
             RefreshLastCommittedStrokeType(*engine);

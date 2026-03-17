@@ -1,0 +1,59 @@
+﻿Round 8 follow-up. A-owned only. B is done for this line.
+
+Current boundary after rebuilt/reinstalled verification on latest code:
+- B-side ArkTS consumer/cache fixes are in place.
+- Same-session fresh stroke is no longer permanently stale.
+- But it still does NOT meet the acceptance bar of immediate visibility after swipe.
+- Observed on final rebuilt app:
+  - ~200ms after swipe: still blank (`tmp/b_round7_final_fast.png`)
+  - ~2s after swipe: line appears in same editor session (`tmp/b_round7_final_wait.png`)
+- Therefore remaining blocker is timing of live preview availability/consumption, not generic URI cache or thumbnail remount anymore.
+
+Relevant files B changed this round (do not re-litigate them unless strictly needed):
+- `entry/src/main/ets/pages/EditorWorkspace.ets`
+- `entry/src/main/ets/components/PreviewThumbnail.ets`
+- `entry/src/main/ets/services/DocumentLibraryService.ets`
+
+Your task:
+- Focus strictly on native/live-preview timing after fresh blank-note simulator swipe.
+- Rebuild + reinstall current app, then reproduce with explicit commands and timings.
+- Measure/inspect the latency from swipe end / commit-on-up to:
+  1. preview payload updated
+  2. preview.json updated
+  3. preview raster file materially updated
+  4. ArkTS can read a fresh snapshot
+- The acceptance bar is not “eventually visible”; it is “fresh swipe ends and stroke becomes visible immediately in the active editor session.”
+
+Concrete repro flow to own:
+1. Build:
+   - `C:\Program Files\Huawei\DevEco Studio\tools\hvigor\bin\hvigorw.bat -p product=simulator assembleApp`
+2. Reinstall / cold start:
+   - `C:\Program Files\Huawei\DevEco Studio\sdk\default\openharmony\toolchains\hdc.exe uninstall com.example.myapplication`
+   - `C:\Program Files\Huawei\DevEco Studio\sdk\default\openharmony\toolchains\hdc.exe install -r C:\Users\lasrorder\hw\MyApplication\entry\build\simulator\outputs\simulator\app\entry-simulator.hap`
+   - `C:\Program Files\Huawei\DevEco Studio\sdk\default\openharmony\toolchains\hdc.exe shell aa start -b com.example.myapplication -m entry -a EntryAbility -W`
+3. Open top blank whiteboard, enable finger-write, inject:
+   - `hdc shell uitest uiInput swipe 250 620 800 670 700`
+4. Capture/inspect immediately after swipe and at short intervals.
+
+What I need from you this round:
+- Either land a real native/runtime fix that makes same-session visibility immediate,
+- Or provide concrete timing evidence that identifies the exact remaining native bottleneck and the precise code location responsible.
+
+Likely areas to audit:
+- commit-on-up path and when preview invalidation fires
+- `requestPreviewRender` vs persisted preview file update ordering
+- whether preview raster generation/write is deferred behind save/persist work
+- whether first blank-note stroke hits a slower path than later persisted strokes
+- whether a synchronous or earlier preview emission is needed on finger-up
+
+Acceptance bar:
+- same-session immediate visibility after fresh blank-note swipe on rebuilt/reinstalled app
+- build still passes
+
+Reply with:
+- reproduced? yes/no
+- exact commands used
+- exact files changed (or `none`)
+- build/install result
+- whether same-session immediate visibility now actually passes
+- anything still blocked

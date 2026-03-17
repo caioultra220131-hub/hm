@@ -1,5 +1,1 @@
-Thread A wake-up acknowledgment
-
-- Thread A was successfully woken up.
-- `H_A.txt` was read and cleared.
-- Thread A can report back to H.
+﻿

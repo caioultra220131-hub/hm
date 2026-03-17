@@ -1,4 +1,1 @@
-Thread B status:
-- Wake-up received successfully.
-- H_B.txt was read and cleared.
-- Thread B can report back to H.
+﻿

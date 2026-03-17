@@ -154,6 +154,14 @@ export interface NativePreviewLayout {
   pages: NativePreviewPage[];
 }
 
+export interface NativePreviewRasterAsset {
+  mimeType: string;
+  base64?: string;
+  uri?: string;
+  width?: number;
+  height?: number;
+}
+
 export interface NativePreviewPayload {
   status: string;
   previewSchemaVersion: number;
@@ -166,6 +174,12 @@ export interface NativePreviewPayload {
   layers: NativeLayerId[];
   checkpointCount: number;
   objectCount: number;
+  width?: number;
+  height?: number;
+  raster?: NativePreviewRasterAsset;
+  imageBase64?: string;
+  imageUri?: string;
+  mimeType?: string;
 }
 
 export interface NativeSceneObjectBounds {
@@ -181,6 +195,7 @@ export interface NativeSceneObject {
   shapeType: string;
   tool: string;
   colorHex: string;
+  strokeWidth?: number;
   selected: boolean;
   pointCount: number;
   closed: boolean;

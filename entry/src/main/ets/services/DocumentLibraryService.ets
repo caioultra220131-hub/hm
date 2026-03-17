@@ -1,5 +1,6 @@
 import { relationalStore } from '@kit.ArkData';
 import { common } from '@kit.AbilityKit';
+import { util } from '@kit.ArkTS';
 import { fileIo, fileUri } from '@kit.CoreFileKit';
 import { getDocumentPageMetadataFromSettings } from '../models/AppSettingsModels';
 import {
@@ -12,7 +13,7 @@ import {
   NATIVE_PRIMARY_PAGE_ID,
   NativePreviewPayload
 } from '../models/NativeNoteContracts';
-import { DocumentPreviewSnapshot, PreviewNormalizationContext } from '../models/PreviewModels';
+import { DocumentPreviewSnapshot, PreviewNormalizationContext, PreviewRasterAsset } from '../models/PreviewModels';
 import {
   DEFAULT_FOLDERS,
   DEFAULT_TAGS,
@@ -1847,7 +1848,7 @@ export class DocumentLibraryService {
       DEFAULT_DOCUMENT_PAGE_METADATA
     );
     const rawPayload: string | Object | null | undefined = nativePreview ?? this.readPreviewPayloadText(document.previewPath);
-    return this.previewAdapter.normalizeRequestPreviewRenderPayload(
+    const snapshot: DocumentPreviewSnapshot = this.previewAdapter.normalizeRequestPreviewRenderPayload(
       rawPayload,
       this.buildPreviewNormalizationContext(
         document.documentType,
@@ -1860,6 +1861,7 @@ export class DocumentLibraryService {
         this.resolvePreviewFallbackPageIndex(document)
       )
     );
+    return this.materializePreviewRasterUri(document, snapshot);
   }
 
   private resolveDocumentPreviewSnapshot(
@@ -1886,8 +1888,85 @@ export class DocumentLibraryService {
         this.resolvePreviewFallbackPageIndex(document)
       )
     );
-    this.storePreviewSnapshotCache(document.previewPath, cacheKey, snapshot);
-    return snapshot;
+    const materializedSnapshot: DocumentPreviewSnapshot = this.materializePreviewRasterUri(document, snapshot);
+    this.storePreviewSnapshotCache(document.previewPath, cacheKey, materializedSnapshot);
+    return materializedSnapshot;
+  }
+
+  private materializePreviewRasterUri(
+    document: DocumentRecord,
+    snapshot: DocumentPreviewSnapshot
+  ): DocumentPreviewSnapshot {
+    const currentRaster: PreviewRasterAsset | undefined = snapshot.raster;
+    if (currentRaster === undefined) {
+      return snapshot;
+    }
+    const base64: string = currentRaster.base64?.trim() ?? '';
+    const rasterUri: string = currentRaster.uri?.trim() ?? '';
+    if (base64.length === 0 && rasterUri.length === 0) {
+      return snapshot;
+    }
+    const mimeType: string = currentRaster.mimeType?.trim().toLowerCase() ?? 'image/png';
+    const extension: string = mimeType === 'image/jpeg' ? 'jpg' : mimeType === 'image/svg+xml' ? 'svg' : 'png';
+    const generatedAt: number = Math.max(0, Math.trunc(snapshot.generatedAt ?? 0));
+    const objectCount: number = Math.max(0, Math.trunc(snapshot.objectCount ?? 0));
+    const rasterPath: string = `${document.packagePath}/preview-raster-${generatedAt}-${objectCount}.${extension}`;
+    const encodedPayload: string = base64.startsWith('data:') ? (base64.split(',', 2)[1] ?? '') : base64;
+    try {
+      if (encodedPayload.length > 0) {
+        const decodedBytes: Uint8Array = new util.Base64Helper().decodeSync(encodedPayload);
+        this.writeBinaryFile(rasterPath, decodedBytes);
+      } else {
+        const resolvedSourcePath: string = this.tryResolveUriToPath(rasterUri);
+        const resolvedTargetPath: string = this.tryResolveUriToPath(fileUri.getUriFromPath(rasterPath));
+        const normalizedTargetPath: string = resolvedTargetPath.length > 0 ? resolvedTargetPath : rasterPath;
+        if (resolvedSourcePath.length === 0) {
+          this.copyBinaryFile(rasterUri, rasterPath);
+        } else if (resolvedSourcePath !== normalizedTargetPath) {
+          this.copyBinaryFile(resolvedSourcePath, rasterPath);
+        }
+      }
+      const nextRaster: PreviewRasterAsset = {
+        mimeType: currentRaster.mimeType,
+        base64: currentRaster.base64,
+        uri: fileUri.getUriFromPath(rasterPath),
+        width: currentRaster.width,
+        height: currentRaster.height
+      };
+      return {
+        schemaVersion: snapshot.schemaVersion,
+        previewSchemaVersion: snapshot.previewSchemaVersion,
+        generatedAt: snapshot.generatedAt,
+        summary: snapshot.summary,
+        nativeSummary: snapshot.nativeSummary,
+        previewLabel: snapshot.previewLabel,
+        type: snapshot.type,
+        source: snapshot.source,
+        previewStatus: snapshot.previewStatus,
+        status: snapshot.status,
+        targetMode: snapshot.targetMode,
+        coverPageId: snapshot.coverPageId,
+        pageIds: snapshot.pageIds,
+        layers: snapshot.layers,
+        coordinateSpace: snapshot.coordinateSpace,
+        targetBounds: snapshot.targetBounds,
+        layout: snapshot.layout,
+        checkpointCount: snapshot.checkpointCount,
+        objectCount: snapshot.objectCount,
+        pageIndex: snapshot.pageIndex,
+        documentMode: snapshot.documentMode,
+        renderBackend: snapshot.renderBackend,
+        nativeStatus: snapshot.nativeStatus,
+        renderWidth: snapshot.renderWidth,
+        renderHeight: snapshot.renderHeight,
+        raster: nextRaster,
+        pageContract: snapshot.pageContract,
+        errorMessage: snapshot.errorMessage,
+        extension: snapshot.extension
+      };
+    } catch (_) {
+      return snapshot;
+    }
   }
 
   private buildPreviewSnapshotCacheKey(previewPath: string, updatedAt: number, coverVersion: number): string {
@@ -2837,6 +2916,35 @@ export class DocumentLibraryService {
       }
     } catch (error) {
       throw this.wrapFileError('DocumentLibraryService.writeTextFile', 'write', path, error as Object);
+    }
+  }
+
+  private writeBinaryFile(path: string, content: Uint8Array): void {
+    try {
+      const parentPath: string = this.getParentPath(path);
+      if (parentPath.length > 0) {
+        this.ensureDir(parentPath);
+      }
+      let stream: fileIo.Stream;
+      try {
+        stream = fileIo.createStreamSync(path, 'w');
+      } catch (error) {
+        throw this.wrapFileError('DocumentLibraryService.writeBinaryFile.createStreamSync', 'createStreamSync', path, error as Object);
+      }
+      try {
+        const buffer: ArrayBuffer = content.buffer.slice(content.byteOffset, content.byteOffset + content.byteLength);
+        stream.writeSync(buffer, {
+          offset: 0,
+          length: content.byteLength
+        });
+        stream.flushSync();
+      } catch (error) {
+        throw this.wrapFileError('DocumentLibraryService.writeBinaryFile.writeSync', 'writeSync', path, error as Object);
+      } finally {
+        stream.closeSync();
+      }
+    } catch (error) {
+      throw this.wrapFileError('DocumentLibraryService.writeBinaryFile', 'write', path, error as Object);
     }
   }
 

@@ -10,6 +10,7 @@ import {
   NativePreviewLayout,
   NativePreviewPage,
   NativePreviewPayload,
+  NativePreviewRasterAsset,
   NativeSceneObject,
   NativeSceneSnapshot
 } from '../models/NativeNoteContracts';
@@ -38,6 +39,7 @@ interface NativeEntryModule {
   setBackend(engineId: string, backend: string): boolean;
   setDocumentMode(engineId: string, mode: string): boolean;
   setBrushColor(engineId: string, colorHex: string): boolean;
+  setBrushWidth(engineId: string, width: number): boolean;
   undo(engineId: string): boolean;
   redo(engineId: string): boolean;
   startInputTraceRecording(engineId: string, tracePath?: string): boolean;
@@ -68,6 +70,7 @@ export interface NativeDebugState {
   activeBackend: string;
   activeMode: string;
   activeColor: string;
+  activeBrushWidth: number;
   xComponentId: string;
   surfaceId: string;
   checkpointCount: number;
@@ -173,6 +176,20 @@ function readNumberValue(source: JsonMap, key: string, fallback: number = 0): nu
     }
   }
   return fallback;
+}
+
+function readOptionalNumberValue(source: JsonMap, key: string): number | undefined {
+  const value: JsonValue | undefined = source[key];
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return value;
+  }
+  if (typeof value === 'string') {
+    const parsed: number = Number.parseFloat(value);
+    if (Number.isFinite(parsed)) {
+      return parsed;
+    }
+  }
+  return undefined;
 }
 
 function readBooleanValue(source: JsonMap, key: string, fallback: boolean = false): boolean {
@@ -326,6 +343,43 @@ function normalizePreviewLayers(value: JsonValue | undefined, fallbackObjectCoun
   return layers;
 }
 
+function parsePreviewRaster(value: JsonValue | undefined, source: JsonMap): NativePreviewRasterAsset | undefined {
+  const rasterSource: JsonMap | null = readObjectValue(value);
+  const base64: string = readStringValue(rasterSource ?? source, 'base64', '') ||
+    readStringValue(rasterSource ?? source, 'imageBase64', '') ||
+    readStringValue(source, 'imageBase64', '') ||
+    readStringValue(source, 'pngBase64', '') ||
+    readStringValue(source, 'previewBase64', '');
+  const uri: string = readStringValue(rasterSource ?? source, 'uri', '') ||
+    readStringValue(rasterSource ?? source, 'imageUri', '') ||
+    readStringValue(source, 'imageUri', '');
+  const mimeType: string = readStringValue(rasterSource ?? source, 'mimeType', '') ||
+    readStringValue(source, 'mimeType', '');
+  if (base64.length === 0 && uri.length === 0) {
+    return undefined;
+  }
+  const raster: NativePreviewRasterAsset = {
+    mimeType: mimeType.length > 0 ? mimeType : 'image/png'
+  };
+  if (base64.length > 0) {
+    raster.base64 = base64;
+  }
+  if (uri.length > 0) {
+    raster.uri = uri;
+  }
+  const width: number | undefined = readOptionalNumberValue(rasterSource ?? source, 'width') ??
+    readOptionalNumberValue(rasterSource ?? source, 'pixelWidth');
+  const height: number | undefined = readOptionalNumberValue(rasterSource ?? source, 'height') ??
+    readOptionalNumberValue(rasterSource ?? source, 'pixelHeight');
+  if (width !== undefined) {
+    raster.width = width;
+  }
+  if (height !== undefined) {
+    raster.height = height;
+  }
+  return raster;
+}
+
 function parsePreviewPayload(source: JsonMap, fallbackPageIndex: number): NativePreviewPayload {
   const pageIndex: number = Math.trunc(readNumberValue(source, 'pageIndex', fallbackPageIndex));
   const objectCount: number = Math.max(
@@ -333,7 +387,10 @@ function parsePreviewPayload(source: JsonMap, fallbackPageIndex: number): Native
     Math.trunc(readNumberValue(source, 'objectCount', readNumberValue(source, 'strokeCount', 0)))
   );
   const layout: NativePreviewLayout | undefined = parsePreviewLayout(source['layout']);
-  return {
+  const width: number | undefined = readOptionalNumberValue(source, 'width') ?? readOptionalNumberValue(source, 'renderWidth');
+  const height: number | undefined = readOptionalNumberValue(source, 'height') ?? readOptionalNumberValue(source, 'renderHeight');
+  const raster: NativePreviewRasterAsset | undefined = parsePreviewRaster(source['raster'], source);
+  const payload: NativePreviewPayload = {
     status: readStringValue(source, 'status', 'ready'),
     previewSchemaVersion: Math.trunc(readNumberValue(source, 'previewSchemaVersion', 0)),
     pageIndex,
@@ -346,6 +403,23 @@ function parsePreviewPayload(source: JsonMap, fallbackPageIndex: number): Native
     checkpointCount: Math.max(0, Math.trunc(readNumberValue(source, 'checkpointCount', 0))),
     objectCount
   };
+  if (width !== undefined) {
+    payload.width = width;
+  }
+  if (height !== undefined) {
+    payload.height = height;
+  }
+  if (raster !== undefined) {
+    payload.raster = raster;
+    if (raster.base64 !== undefined) {
+      payload.imageBase64 = raster.base64;
+    }
+    if (raster.uri !== undefined) {
+      payload.imageUri = raster.uri;
+    }
+    payload.mimeType = raster.mimeType;
+  }
+  return payload;
 }
 
 function buildStatsFallbackPreview(source: JsonMap, fallbackPageIndex: number): NativePreviewPayload {
@@ -381,6 +455,7 @@ function parseSceneObject(value: JsonValue | undefined): NativeSceneObject | nul
     shapeType: readStringValue(source, 'shapeType', 'freehand'),
     tool: readStringValue(source, 'tool', 'pen'),
     colorHex: readStringValue(source, 'colorHex', '#1D2736'),
+    strokeWidth: readOptionalNumberValue(source, 'strokeWidth'),
     selected: readBooleanValue(source, 'selected', false),
     pointCount: Math.max(0, Math.trunc(readNumberValue(source, 'pointCount', 0))),
     closed: readBooleanValue(source, 'closed', false),
@@ -460,6 +535,7 @@ export function parseNativeDebugStateJson(rawText: string): NativeDebugState | n
     activeBackend: readStringValue(parsed, 'activeBackend', ''),
     activeMode: readStringValue(parsed, 'activeMode', ''),
     activeColor: readStringValue(parsed, 'activeColor', ''),
+    activeBrushWidth: readNumberValue(parsed, 'activeBrushWidth', 3.2),
     xComponentId: readStringValue(parsed, 'xComponentId', ''),
     surfaceId: readStringValue(parsed, 'surfaceId', ''),
     checkpointCount: Math.trunc(readNumberValue(parsed, 'checkpointCount', 0)),
@@ -655,6 +731,10 @@ export class NativeNoteEngine {
 
   setBrushColor(engineId: string, colorHex: string): boolean {
     return nativeBridge.setBrushColor(engineId, colorHex);
+  }
+
+  setBrushWidth(engineId: string, width: number): boolean {
+    return nativeBridge.setBrushWidth(engineId, width);
   }
 
   undo(engineId: string): boolean {

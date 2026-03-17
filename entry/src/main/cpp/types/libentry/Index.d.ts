@@ -18,6 +18,7 @@ declare const entry: {
   setBackend: (engineId: string, backend: string) => boolean;
   setDocumentMode: (engineId: string, mode: string) => boolean;
   setBrushColor: (engineId: string, colorHex: string) => boolean;
+  setBrushWidth: (engineId: string, width: number) => boolean;
   undo: (engineId: string) => boolean;
   redo: (engineId: string) => boolean;
   disposeDocument: (engineId: string, documentId: string) => boolean;

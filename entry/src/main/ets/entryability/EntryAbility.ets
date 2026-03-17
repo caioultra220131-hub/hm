@@ -28,6 +28,20 @@ export default class EntryAbility extends UIAbility {
         return;
       }
       hilog.info(DOMAIN, 'testTag', 'Succeeded in loading the content.');
+      windowStage.getMainWindow((errInner, mainWindow: window.Window) => {
+        if (errInner.code) {
+          hilog.error(DOMAIN, 'testTag', 'Failed to get main window. Cause: %{public}s', JSON.stringify(errInner));
+          return;
+        }
+        setTimeout(() => {
+          try {
+            mainWindow.setWindowLayoutFullScreen(true);
+            mainWindow.setWindowSystemBarEnable([]);
+          } catch (e) {
+            hilog.error(DOMAIN, 'testTag', 'Failed to set fullscreen. Cause: %{public}s', JSON.stringify(e));
+          }
+        }, 100);
+      });
     });
   }
 

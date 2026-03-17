@@ -1,76 +1,69 @@
 # Context Handoff
 
-Date: 2026-03-11
+Date: 2026-03-13
 
 ## Current Objective
 
-There is no active smoke blocker right now.
+There is no active blocker right now.
 
-The current source of truth is:
+The accepted editor / immersive / autosave / finger / scale chain is already merged into local `main`.
 
-- local branch: `main`
-- current head: `0fbc585` `Fix Select PDF picker failure`
-- included feature commit: `362076b` `Implement M2 paged PDF and HYBRID import flow`
+Current branch state:
 
-Do not continue from the A/B worktrees. They are still parked at `e82869b` and are no longer authoritative for this round.
+- local `main`: `eeed52c3cc474a0f58a7f39322d596b45a715947` `Merge branch 'codex/bugfix/page-scale-stability-b' into main`
+- merged-in accepted lineage already on `main`: `89228da` -> `c8a9543` / `82cab12` -> `ad84b8a` / `b2e83ce` -> `20ba9a4` -> `aca47d9` -> merge commits `558e688` and `eeed52c`
 
-## Accepted Scope On Main
+Treat local `main` as the authoritative editor baseline unless a future task explicitly says to validate another active branch.
 
-The current local `main` already contains the accepted M2 pass for:
+## Accepted Scope On Current Baseline
 
-- imported `PDF` paged document creation
-- imported `HYBRID` paged document creation
-- page-aware `open -> select page -> save -> back -> reopen`
-- home preview metadata following the active page
-- invalid PDF import cleanup without bad document rows or half-written packages
-- no observed regression in the accepted M1 blank paged flow
+The accepted chain now present on `main` covers:
 
-The acceptance record has been updated in:
+- default single-finger vertical scroll without requiring the hand tool
+- overflow-state free X/Y pan
+- finger-writing mode and simulator-side finger validation path
+- finger coordinate alignment between touch location and visible canvas placement
+- page-scale stability across active-page changes
+- immersive single-layer canvas shell
+- minimal rail with collapse/reopen, search, and filter
+- page HUD that appears during interaction and supports jump input
+- floating toolbar snap behavior
+- white rail/action surface and top action group placement
+- quiet content-driven autosave with no always-visible autosave chip
 
-- [docs/native-note-simulator-smoke-results.md](C:/Users/lasrorder/hw/MyApplication/docs/native-note-simulator-smoke-results.md)
+## Latest Accepted Test Result
 
-## Verified End State
+Latest confirmed baseline:
 
-Final confirmed results for this round:
+- `main`
+- HEAD commit `eeed52c3cc474a0f58a7f39322d596b45a715947`
 
-- `PDF` import: passed
-- `HYBRID` import: passed
-- active-page preview metadata: passed
-- invalid PDF cleanup path: passed
+Latest confirmed behavior:
 
-Important note:
+- no default autosave status chip on the main editor surface
+- autosave only after real content mutation settles
+- pure scroll/zoom/pan/tool/rail UI interactions do not trigger save
+- content still persists after back/reopen
 
-- one interim `HYBRID` failure was a false negative caused by stale test click coordinates after the Create panel layout shifted
-- live `dumpLayout` verification proved the CTA itself was functional
-- the final rerun passed after clicking the real-time CTA bounds
+## Non-Blocking Residual Note
 
-## Current Head-Thread Conclusion
+One path was not fully re-enacted in the final quiet-autosave verification:
 
-This round is accepted on local `main`.
+- dirty-content add-page / switch-page UI path
 
-Do not reopen M2 implementation work unless:
-
-- a new regression is reproduced on `main`, or
-- a deliberate hardening patch is opened as a new task
-
-## Current Residual Risk
-
-There is one non-blocking code-level hardening risk left:
-
-- `refreshPreview()` can still reuse stale stored preview `pageIndex/pageId` when no fresh native preview payload is merged
-- this did not fail in the accepted end-to-end flow, because the final accepted flow successfully updated preview metadata to `pageIndex = 1` and `coverPageId = "page-1"`
-- treat this as a follow-up hardening item, not as a blocker for the accepted M2 pass
+No blocker was reported for that path, and the flush-guard patch was added specifically for it. Treat this as a non-blocking follow-up observation, not as an active failure.
 
 ## Routing Rules If Work Reopens
 
-- Route to A only for native/page-aware/helper/stub regressions.
-- Route to B for ArkTS import/create/editor/home preview hardening.
-- Route to test only after a new patch lands on `main`.
+- Route to A for simulator/native bridge, finger telemetry, coordinate mapping, and validation-path regressions.
+- Route to B for editor UI, rail, toolbar, autosave, page HUD, and ArkTS-side interaction polish.
+- Route to Test only after a new patch lands on the active branch being validated.
 
 ## Reopen Rules
 
-If this work is reopened:
+If this editor work reopens:
 
-1. branch from `main`, not from `codex/feature/pdf-prep-a` or `codex/feature/pdf-ask-prep-b`
-2. keep imported `HYBRID` pages as full-page `pdf` pages unless doing a coordinated contract migration
-3. write any new acceptance decision back to [docs/native-note-simulator-smoke-results.md](C:/Users/lasrorder/hw/MyApplication/docs/native-note-simulator-smoke-results.md)
+1. branch from the current active baseline, which is now `main`, unless a newer branch is explicitly designated
+2. preserve the accepted finger-writing / coordinate-alignment / scale-stability chain unless a new regression proves otherwise
+3. keep the immersive shell and minimal rail direction unless the task explicitly replaces that UX
+4. validate against the current active head, not against stale feature worktrees or pre-merge assumptions

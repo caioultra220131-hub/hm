@@ -1,3 +1,6 @@
+import { util } from '@kit.ArkTS';
+import { fileUri } from '@kit.CoreFileKit';
+import { image } from '@kit.ImageKit';
 import { NativeGuidePrimitive, NativePageContract, NativeRatioBounds } from '../models/NativeNoteContracts';
 import { DocumentPreviewSnapshot } from '../models/PreviewModels';
 
@@ -61,7 +64,48 @@ function toPixelHeight(height: number, ratioHeight: number): number {
 
 function resolveRasterUri(previewSnapshot: DocumentPreviewSnapshot | undefined): string {
   const uri: string | undefined = previewSnapshot?.raster?.uri;
-  return typeof uri === 'string' ? uri.trim() : '';
+  if (typeof uri === 'string' && uri.trim().length > 0) {
+    const trimmedUri: string = uri.trim();
+    if (!trimmedUri.startsWith('file://')) {
+      return trimmedUri;
+    }
+    try {
+      const resolvedPath: string = new fileUri.FileUri(trimmedUri).path;
+      return resolvedPath.trim().length > 0 ? resolvedPath.trim() : trimmedUri;
+    } catch (_) {
+      return trimmedUri;
+    }
+  }
+  const base64: string | undefined = previewSnapshot?.raster?.base64;
+  if (typeof base64 !== 'string') {
+    return '';
+  }
+  const trimmedBase64: string = base64.trim();
+  if (trimmedBase64.length === 0) {
+    return '';
+  }
+  if (trimmedBase64.startsWith('data:')) {
+    return trimmedBase64;
+  }
+  const mimeType: string = previewSnapshot?.raster?.mimeType?.trim().length
+    ? previewSnapshot.raster?.mimeType as string
+    : 'image/png';
+  return `data:${mimeType};base64,${trimmedBase64}`;
+}
+
+function resolveRasterBase64(previewSnapshot: DocumentPreviewSnapshot | undefined): string {
+  const base64: string | undefined = previewSnapshot?.raster?.base64;
+  if (typeof base64 !== 'string') {
+    return '';
+  }
+  const trimmedBase64: string = base64.trim();
+  if (trimmedBase64.length === 0) {
+    return '';
+  }
+  if (trimmedBase64.startsWith('data:')) {
+    return trimmedBase64.split(',', 2)[1] ?? '';
+  }
+  return trimmedBase64;
 }
 
 function buildGuideFrame(contract: NativePageContract, width: number, height: number): PreviewRectNode {
@@ -319,9 +363,72 @@ export struct PreviewThumbnail {
   fallbackSummary: string = '';
   thumbnailWidth: number = 128;
   thumbnailHeight: number = 172;
+  @State private rasterPixelMap: image.PixelMap | undefined = undefined;
+  @State private rasterPixelMapKey: string = '';
+
+  private renderSignature(): string {
+    const generatedAt: number = Math.trunc(this.previewSnapshot?.generatedAt ?? 0);
+    const objectCount: number = Math.trunc(this.previewSnapshot?.objectCount ?? 0);
+    const pageIndex: number = Math.trunc(this.previewSnapshot?.pageIndex ?? -1);
+    const source: string = this.previewSnapshot?.source ?? '';
+    const status: string = this.previewSnapshot?.previewStatus ?? '';
+    const rasterKey: string = this.rasterKey();
+    return `page:${pageIndex}:generated:${generatedAt}:objects:${objectCount}:source:${source}:status:${status}:raster:${rasterKey}`;
+  }
 
   private rasterUri(): string {
     return resolveRasterUri(this.previewSnapshot);
+  }
+
+  private rasterBase64(): string {
+    return resolveRasterBase64(this.previewSnapshot);
+  }
+
+  private rasterKey(): string {
+    const generatedAt: number = Math.trunc(this.previewSnapshot?.generatedAt ?? 0);
+    const objectCount: number = Math.trunc(this.previewSnapshot?.objectCount ?? 0);
+    const uri: string = this.rasterUri();
+    if (uri.length > 0) {
+      return `uri:${uri}:${generatedAt}:${objectCount}`;
+    }
+    const base64: string = this.rasterBase64();
+    return base64.length > 0 ? `base64:${base64.length}:${generatedAt}:${objectCount}` : '';
+  }
+
+  private async ensureRasterPixelMap(): Promise<void> {
+    const nextKey: string = this.rasterKey();
+    if (nextKey.length === 0) {
+      this.rasterPixelMap = undefined;
+      this.rasterPixelMapKey = '';
+      return;
+    }
+    if (nextKey === this.rasterPixelMapKey && this.rasterPixelMap !== undefined) {
+      return;
+    }
+    this.rasterPixelMapKey = nextKey;
+    this.rasterPixelMap = undefined;
+    try {
+      let imageSource: image.ImageSource;
+      const rasterBase64: string = this.rasterBase64();
+      if (rasterBase64.length > 0) {
+        const decodedBytes: Uint8Array = new util.Base64Helper().decodeSync(rasterBase64);
+        const decodedBuffer: ArrayBuffer = decodedBytes.buffer.slice(
+          decodedBytes.byteOffset,
+          decodedBytes.byteOffset + decodedBytes.byteLength
+        );
+        imageSource = image.createImageSource(decodedBuffer);
+      } else {
+        imageSource = image.createImageSource(this.rasterUri());
+      }
+      const pixelMap: image.PixelMap = await imageSource.createPixelMap();
+      if (this.rasterPixelMapKey === nextKey) {
+        this.rasterPixelMap = pixelMap;
+      }
+    } catch (_) {
+      if (this.rasterPixelMapKey === nextKey) {
+        this.rasterPixelMap = undefined;
+      }
+    }
   }
 
   private rectNodes(): PreviewRectNode[] {
@@ -340,61 +447,77 @@ export struct PreviewThumbnail {
     return resolvePageAccent(this.previewSnapshot);
   }
 
+  aboutToAppear(): void {
+    this.ensureRasterPixelMap();
+  }
+
   build() {
     Stack({ alignContent: Alignment.TopStart }) {
-      Row()
+      ForEach([this.renderSignature()], (_renderKey: string) => {
+        Stack({ alignContent: Alignment.TopStart }) {
+          Row()
+            .width(this.thumbnailWidth)
+            .height(this.thumbnailHeight)
+            .backgroundColor(this.pageFill())
+            .borderRadius(16)
+            .border({ width: 1, color: this.pageAccent() })
+
+          if (this.rasterPixelMap !== undefined) {
+            Image(this.rasterPixelMap)
+              .width(this.thumbnailWidth)
+              .height(this.thumbnailHeight)
+              .borderRadius(16)
+              .objectFit(ImageFit.Cover)
+          } else {
+            ForEach(this.rectNodes(), (node: PreviewRectNode) => {
+              Row()
+                .width(node.width)
+                .height(node.height)
+                .backgroundColor(node.fill)
+                .opacity(node.opacity)
+                .borderRadius(node.radius ?? 0)
+                .border({
+                  width: node.borderWidth ?? 0,
+                  color: node.borderColor ?? 'transparent'
+                })
+                .position({ x: node.x, y: node.y })
+            }, (node: PreviewRectNode): string => node.id)
+
+            ForEach(this.textNodes(), (node: PreviewTextNode) => {
+              Text(node.text)
+                .fontSize(node.fontSize)
+                .fontColor(node.color)
+                .opacity(node.opacity)
+                .maxLines(1)
+                .position({ x: node.x, y: node.y })
+            }, (node: PreviewTextNode): string => node.id)
+
+            if (this.rectNodes().length === 0 && this.textNodes().length === 0) {
+              Column() {
+                Text(this.fallbackSummary.length > 0 ? this.fallbackSummary : 'Preview unavailable')
+                  .fontSize(11)
+                  .fontColor('#667085')
+                  .maxLines(4)
+              }
+              .width(this.thumbnailWidth - 28)
+              .height(this.thumbnailHeight - 28)
+              .justifyContent(FlexAlign.Center)
+              .alignItems(HorizontalAlign.Start)
+              .position({ x: 14, y: 14 })
+            }
+          }
+        }
         .width(this.thumbnailWidth)
         .height(this.thumbnailHeight)
-        .backgroundColor(this.pageFill())
-        .borderRadius(16)
-        .border({ width: 1, color: this.pageAccent() })
-
-      if (this.rasterUri().length > 0) {
-        Image(this.rasterUri())
-          .width(this.thumbnailWidth)
-          .height(this.thumbnailHeight)
-          .borderRadius(16)
-          .objectFit(ImageFit.Cover)
-      } else {
-        ForEach(this.rectNodes(), (node: PreviewRectNode) => {
-          Row()
-            .width(node.width)
-            .height(node.height)
-            .backgroundColor(node.fill)
-            .opacity(node.opacity)
-            .borderRadius(node.radius ?? 0)
-            .border({
-              width: node.borderWidth ?? 0,
-              color: node.borderColor ?? 'transparent'
-            })
-            .position({ x: node.x, y: node.y })
-        }, (node: PreviewRectNode): string => node.id)
-
-        ForEach(this.textNodes(), (node: PreviewTextNode) => {
-          Text(node.text)
-            .fontSize(node.fontSize)
-            .fontColor(node.color)
-            .opacity(node.opacity)
-            .maxLines(1)
-            .position({ x: node.x, y: node.y })
-        }, (node: PreviewTextNode): string => node.id)
-
-        if (this.rectNodes().length === 0 && this.textNodes().length === 0) {
-          Column() {
-            Text(this.fallbackSummary.length > 0 ? this.fallbackSummary : 'Preview unavailable')
-              .fontSize(11)
-              .fontColor('#667085')
-              .maxLines(4)
-          }
-          .width(this.thumbnailWidth - 28)
-          .height(this.thumbnailHeight - 28)
-          .justifyContent(FlexAlign.Center)
-          .alignItems(HorizontalAlign.Start)
-          .position({ x: 14, y: 14 })
-        }
-      }
+        .onAppear(() => {
+          this.ensureRasterPixelMap();
+        })
+      }, (renderKey: string): string => renderKey)
     }
     .width(this.thumbnailWidth)
     .height(this.thumbnailHeight)
+    .onAppear(() => {
+      this.ensureRasterPixelMap();
+    })
   }
 }
