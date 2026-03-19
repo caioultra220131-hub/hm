@@ -10,7 +10,12 @@
   "modules": {
     ".": {
       "name": "",
-      "dependencies": {},
+      "dependencies": {
+        "painting_color_selector": {
+          "specifier": "file:market_components/painting_color_selector/painting_color_selector",
+          "version": "file:market_components/painting_color_selector/painting_color_selector"
+        }
+      },
       "devDependencies": {
         "@ohos/hypium": {
           "specifier": "1.0.24",
@@ -35,9 +40,40 @@
       "devDependencies": {},
       "dynamicDependencies": {},
       "maskedByOverrideDependencyMap": false
+    },
+    "market_components/painting_color_selector/painting_color_selector": {
+      "name": "painting_color_selector",
+      "dependencies": {
+        "@keke/color-picker": {
+          "specifier": "1.0.4",
+          "version": "1.0.4"
+        }
+      },
+      "devDependencies": {},
+      "dynamicDependencies": {},
+      "maskedByOverrideDependencyMap": false
     }
   },
   "packages": {
+    "painting_color_selector@file:market_components/painting_color_selector/painting_color_selector": {
+      "storePath": "market_components/painting_color_selector/painting_color_selector",
+      "dependencies": {
+        "@keke/color-picker": "1.0.4"
+      },
+      "dynamicDependencies": {},
+      "dev": false,
+      "dynamic": false,
+      "maskedByOverrideDependencyMap": false
+    },
+    "@keke/color-picker@1.0.4": {
+      "integrity": "sha512-0cH0Ix3EaoqK2nMxcAZAAyzK2G2oPo6A2KzFpUAgmqI9+Ap04Qy2Z+ALdBgdkmvwhCgJxEKGH8txxudmBfppMw==",
+      "storePath": "oh_modules/.ohpm/@keke+color-picker@1.0.4",
+      "dependencies": {},
+      "dynamicDependencies": {},
+      "dev": false,
+      "dynamic": false,
+      "maskedByOverrideDependencyMap": false
+    },
     "@ohos/hypium@1.0.24": {
       "integrity": "sha512-3dCqc+BAR5LqEGG2Vtzi8O3r7ci/3fYU+FWjwvUobbfko7DUnXGOccaror0yYuUhJfXzFK0aZNMGSnXaTwEnbw==",
       "storePath": "oh_modules/.ohpm/@ohos+hypium@1.0.24",

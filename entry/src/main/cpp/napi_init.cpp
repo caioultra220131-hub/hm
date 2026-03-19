@@ -153,6 +153,7 @@ struct DocumentSession {
     std::string packagePath;
     std::string openConfigJson;
     int checkpointCount = 0;
+    bool strokesInPageSpace = false;
     bool pageAware = false;
     std::vector<std::string> pages;
     std::vector<PageDescriptor> pageDescriptors;
@@ -2287,7 +2288,7 @@ InputStrokeTrace DeserializeInputTraceJson(const std::string& jsonText)
 std::string SerializeStrokesJson(const std::vector<StrokeRenderObject>& strokes)
 {
     std::ostringstream builder;
-    builder << "{\n  \"version\": 2,\n  \"strokes\": [";
+    builder << "{\n  \"version\": 2,\n  \"coordinateSpace\": \"page\",\n  \"strokes\": [";
     for (size_t strokeIndex = 0; strokeIndex < strokes.size(); ++strokeIndex) {
         const StrokeRenderObject& stroke = strokes[strokeIndex];
         if (strokeIndex > 0) {
@@ -2378,12 +2379,19 @@ bool PersistDocumentStrokes(const DocumentSession& session, const std::vector<St
     return WriteTextFile(BuildStrokesFilePath(session), SerializeStrokesJson(strokes));
 }
 
-std::vector<StrokeRenderObject> LoadDocumentStrokes(const DocumentSession& session)
+std::vector<StrokeRenderObject> LoadDocumentStrokes(const DocumentSession& session, bool* strokesInPageSpace = nullptr)
 {
+    if (strokesInPageSpace != nullptr) {
+        *strokesInPageSpace = false;
+    }
     if (session.packagePath.empty()) {
         return {};
     }
-    return DeserializeStrokesJson(ReadTextFile(BuildStrokesFilePath(session)));
+    const std::string jsonText = ReadTextFile(BuildStrokesFilePath(session));
+    if (strokesInPageSpace != nullptr) {
+        *strokesInPageSpace = ExtractJsonStringValue(jsonText, "coordinateSpace", "") == "page";
+    }
+    return DeserializeStrokesJson(jsonText);
 }
 
 std::string ExtractJsonObjectText(const std::string& text, const std::string& key)
@@ -2671,6 +2679,7 @@ void SyncCommittedStrokesToActivePage(EngineState& engine, DocumentSession& sess
 
 void LoadCommittedStrokesFromActivePage(EngineState& engine, DocumentSession& session)
 {
+    EnsureSessionStrokesInPageSpace(engine, session);
     const std::string activePageId = ResolveSessionActivePageId(session);
     session.activePageId = activePageId;
     auto iterator = session.pageStrokes.find(activePageId);
@@ -2707,6 +2716,108 @@ bool IsClosedStrokePath(const StrokeRenderObject& stroke)
 bool HasPageBounds(const PageDescriptor* descriptor)
 {
     return descriptor != nullptr && descriptor->contract.widthPt > 0.0 && descriptor->contract.heightPt > 0.0;
+}
+
+DocumentSession* FindActiveSession(EngineState& engine)
+{
+    if (engine.activeDocumentId.empty()) {
+        return nullptr;
+    }
+    auto iterator = engine.documents.find(engine.activeDocumentId);
+    return iterator != engine.documents.end() ? &iterator->second : nullptr;
+}
+
+const DocumentSession* FindActiveSession(const EngineState& engine)
+{
+    if (engine.activeDocumentId.empty()) {
+        return nullptr;
+    }
+    auto iterator = engine.documents.find(engine.activeDocumentId);
+    return iterator != engine.documents.end() ? &iterator->second : nullptr;
+}
+
+const PageDescriptor* FindActivePageDescriptor(const EngineState& engine)
+{
+    const DocumentSession* session = FindActiveSession(engine);
+    if (session == nullptr) {
+        return nullptr;
+    }
+    return FindPageDescriptor(*session, ResolveSessionActivePageId(*session));
+}
+
+InkPointSnapshot NormalizePointToPageSpace(const InkPointSnapshot& point, const EngineState* engine)
+{
+    if (engine == nullptr || engine->width <= 0 || engine->height <= 0) {
+        return point;
+    }
+    const PageDescriptor* descriptor = FindActivePageDescriptor(*engine);
+    if (!HasPageBounds(descriptor)) {
+        return point;
+    }
+    InkPointSnapshot normalized = point;
+    normalized.x = static_cast<float>(std::clamp(
+        (static_cast<double>(point.x) / static_cast<double>(engine->width)) * descriptor->contract.widthPt,
+        0.0,
+        descriptor->contract.widthPt));
+    normalized.y = static_cast<float>(std::clamp(
+        (static_cast<double>(point.y) / static_cast<double>(engine->height)) * descriptor->contract.heightPt,
+        0.0,
+        descriptor->contract.heightPt));
+    normalized.windowX = normalized.x;
+    normalized.windowY = normalized.y;
+    normalized.displayX = normalized.x;
+    normalized.displayY = normalized.y;
+    return normalized;
+}
+
+std::vector<InkPointSnapshot> ProjectPointsToSurfaceSpace(const std::vector<InkPointSnapshot>& points,
+    const PageDescriptor* descriptor, float surfaceWidth, float surfaceHeight)
+{
+    if (!HasPageBounds(descriptor) || surfaceWidth <= 0.0f || surfaceHeight <= 0.0f) {
+        return points;
+    }
+    const double scaleX = static_cast<double>(surfaceWidth) / descriptor->contract.widthPt;
+    const double scaleY = static_cast<double>(surfaceHeight) / descriptor->contract.heightPt;
+    std::vector<InkPointSnapshot> projected = points;
+    for (InkPointSnapshot& point : projected) {
+        point.x = static_cast<float>(point.x * scaleX);
+        point.y = static_cast<float>(point.y * scaleY);
+    }
+    return projected;
+}
+
+void NormalizeStrokeCollectionToPageSpace(std::vector<StrokeRenderObject>& strokes,
+    const PageDescriptor* descriptor, float sourceWidth, float sourceHeight)
+{
+    if (!HasPageBounds(descriptor) || sourceWidth <= 0.0f || sourceHeight <= 0.0f) {
+        return;
+    }
+    const double scaleX = descriptor->contract.widthPt / static_cast<double>(sourceWidth);
+    const double scaleY = descriptor->contract.heightPt / static_cast<double>(sourceHeight);
+    for (StrokeRenderObject& stroke : strokes) {
+        for (InkPointSnapshot& point : stroke.points) {
+            point.x = static_cast<float>(std::clamp(point.x * scaleX, 0.0, descriptor->contract.widthPt));
+            point.y = static_cast<float>(std::clamp(point.y * scaleY, 0.0, descriptor->contract.heightPt));
+            point.windowX = point.x;
+            point.windowY = point.y;
+            point.displayX = point.x;
+            point.displayY = point.y;
+        }
+    }
+}
+
+void EnsureSessionStrokesInPageSpace(EngineState& engine, DocumentSession& session)
+{
+    if (session.strokesInPageSpace || engine.width <= 0 || engine.height <= 0) {
+        return;
+    }
+    const float sourceWidth = static_cast<float>(engine.width);
+    const float sourceHeight = static_cast<float>(engine.height);
+    for (auto& entry : session.pageStrokes) {
+        const PageDescriptor* descriptor = FindPageDescriptor(session, entry.first);
+        NormalizeStrokeCollectionToPageSpace(entry.second, descriptor, sourceWidth, sourceHeight);
+    }
+    session.strokesInPageSpace = true;
 }
 
 std::string BuildPageBackgroundId(const PageDescriptor* descriptor)
@@ -3310,26 +3421,7 @@ void AppendBackgroundVertices(std::vector<RenderVertex>& vertices, const EngineS
 {
     if (engine.activeMode == "paged") {
         AddRect(vertices, 0.0f, 0.0f, surfaceWidth, surfaceHeight,
-            ParseColorHex(engine.activeBackend == "skia" ? "#E7EDF5" : "#E9EFF7"), surfaceWidth, surfaceHeight);
-
-        const float safeWidth = surfaceWidth - 96.0f;
-        const float safeHeight = surfaceHeight - 48.0f;
-        const float pageWidth = std::min(safeWidth, safeHeight / 1.38f);
-        const float pageHeight = pageWidth * 1.38f;
-        const float left = (surfaceWidth - pageWidth) * 0.5f;
-        const float top = (surfaceHeight - pageHeight) * 0.5f;
-        AddRect(vertices, left + 12.0f, top + 14.0f, left + pageWidth + 12.0f, top + pageHeight + 14.0f,
-            ParseColorHex("#93A3B8", 0.10f), surfaceWidth, surfaceHeight);
-        AddRect(vertices, left, top, left + pageWidth, top + pageHeight,
-            ParseColorHex("#FFFDF8"), surfaceWidth, surfaceHeight);
-        AddRect(vertices, left, top, left + pageWidth, top + 2.0f,
-            ParseColorHex("#D5DCE7"), surfaceWidth, surfaceHeight);
-        AddRect(vertices, left, top + pageHeight - 2.0f, left + pageWidth, top + pageHeight,
-            ParseColorHex("#D5DCE7"), surfaceWidth, surfaceHeight);
-        AddRect(vertices, left, top, left + 2.0f, top + pageHeight,
-            ParseColorHex("#D5DCE7"), surfaceWidth, surfaceHeight);
-        AddRect(vertices, left + pageWidth - 2.0f, top, left + pageWidth, top + pageHeight,
-            ParseColorHex("#D5DCE7"), surfaceWidth, surfaceHeight);
+            ParseColorHex("#FFFFFF"), surfaceWidth, surfaceHeight);
     } else {
         AddRect(vertices, 0.0f, 0.0f, surfaceWidth, surfaceHeight,
             ParseColorHex(engine.activeBackend == "skia" ? "#EEF4FB" : "#F4F7FB"), surfaceWidth, surfaceHeight);
@@ -3388,7 +3480,7 @@ public:
         }
 
         const std::string activePageId = ResolveSessionActivePageId(session);
-        session.pageStrokes[activePageId] = LoadDocumentStrokes(session);
+        session.pageStrokes[activePageId] = LoadDocumentStrokes(session, &session.strokesInPageSpace);
         engine->documents[documentId] = session;
         engine->activeDocumentId = documentId;
         engine->nextObjectCounter = 1;
@@ -3419,6 +3511,10 @@ public:
                 engine->width = static_cast<int>(telemetry->width);
                 engine->height = static_cast<int>(telemetry->height);
             }
+            if (DocumentSession* session = FindActiveSession(*engine); session != nullptr) {
+                EnsureSessionStrokesInPageSpace(*engine, *session);
+                LoadCommittedStrokesFromActivePage(*engine, *session);
+            }
             RenderSurfaceLocked(*telemetry, engine);
         }
         return true;
@@ -3434,6 +3530,10 @@ public:
         engine->width = width;
         engine->height = height;
         engine->density = density;
+        if (DocumentSession* session = FindActiveSession(*engine); session != nullptr) {
+            EnsureSessionStrokesInPageSpace(*engine, *session);
+            LoadCommittedStrokesFromActivePage(*engine, *session);
+        }
         if (SurfaceTelemetry* telemetry = FindSurfaceLocked(engine->xComponentId); telemetry != nullptr) {
             RenderSurfaceLocked(*telemetry, engine);
         }
@@ -3704,6 +3804,12 @@ public:
         (void)pageYRatio;
         (void)pointerCount;
         return false;
+    }
+
+    std::string GetSimulatorPrediction(const std::string& engineId) override
+    {
+        (void)engineId;
+        return R"({"status":"unsupported-runtime","suppressed":false,"cpuBusyRatio":0,"points":[]})";
     }
 
     bool SetBackend(const std::string& engineId, const std::string& backend)
@@ -4199,17 +4305,22 @@ private:
 
         const float surfaceWidth = static_cast<float>(telemetry.width);
         const float surfaceHeight = static_cast<float>(telemetry.height);
+        const PageDescriptor* activeDescriptor = FindActivePageDescriptor(*engine);
         std::vector<RenderVertex> vertices;
         vertices.reserve(8192);
         AppendBackgroundVertices(vertices, *engine, surfaceWidth, surfaceHeight);
 
         for (const StrokeRenderObject& stroke : engine->committedStrokes) {
-            AddToolStrokeMesh(vertices, stroke.points, *engine, stroke.tool, stroke.colorHex, false, stroke.strokeWidth,
+            const std::vector<InkPointSnapshot> projectedStroke = ProjectPointsToSurfaceSpace(
+                stroke.points, activeDescriptor, surfaceWidth, surfaceHeight);
+            AddToolStrokeMesh(vertices, projectedStroke, *engine, stroke.tool, stroke.colorHex, false, stroke.strokeWidth,
                 surfaceWidth, surfaceHeight);
         }
 
         if (ToolProducesInk(engine->activeTool) && !telemetry.strokeSamples.empty()) {
-            AddToolStrokeMesh(vertices, telemetry.strokeSamples, *engine, engine->activeTool, engine->activeColor,
+            const std::vector<InkPointSnapshot> projectedSamples = ProjectPointsToSurfaceSpace(
+                telemetry.strokeSamples, activeDescriptor, surfaceWidth, surfaceHeight);
+            AddToolStrokeMesh(vertices, projectedSamples, *engine, engine->activeTool, engine->activeColor,
                 false, engine->activeBrushWidth,
                 surfaceWidth, surfaceHeight);
         }
@@ -4220,18 +4331,30 @@ private:
             predictedStroke.reserve(telemetry.predictedSamples.size() + 1);
             predictedStroke.push_back(telemetry.strokeSamples.back());
             predictedStroke.insert(predictedStroke.end(), telemetry.predictedSamples.begin(), telemetry.predictedSamples.end());
-            AddToolStrokeMesh(vertices, predictedStroke, *engine, engine->activeTool, engine->activeColor,
+            const std::vector<InkPointSnapshot> projectedPredictedStroke = ProjectPointsToSurfaceSpace(
+                predictedStroke, activeDescriptor, surfaceWidth, surfaceHeight);
+            AddToolStrokeMesh(vertices, projectedPredictedStroke, *engine, engine->activeTool, engine->activeColor,
                 true, engine->activeBrushWidth,
                 surfaceWidth, surfaceHeight);
         }
 
         if (ToolUsesLassoSelection(engine->activeTool) && !telemetry.strokeSamples.empty()) {
-            AddStrokeMesh(vertices, telemetry.strokeSamples, *engine, "pen", "#2A6AFB", true, kDefaultBrushWidth,
+            const std::vector<InkPointSnapshot> projectedLasso = ProjectPointsToSurfaceSpace(
+                telemetry.strokeSamples, activeDescriptor, surfaceWidth, surfaceHeight);
+            AddStrokeMesh(vertices, projectedLasso, *engine, "pen", "#2A6AFB", true, kDefaultBrushWidth,
                 surfaceWidth, surfaceHeight);
         }
 
         if (HasSelectedStroke(engine->committedStrokes)) {
-            const StrokeBounds selectedBounds = ComputeSelectedBounds(engine->committedStrokes);
+            StrokeBounds selectedBounds = ComputeSelectedBounds(engine->committedStrokes);
+            if (HasPageBounds(activeDescriptor) && surfaceWidth > 0.0f && surfaceHeight > 0.0f) {
+                const double scaleX = static_cast<double>(surfaceWidth) / activeDescriptor->contract.widthPt;
+                const double scaleY = static_cast<double>(surfaceHeight) / activeDescriptor->contract.heightPt;
+                selectedBounds.minX = static_cast<float>(selectedBounds.minX * scaleX);
+                selectedBounds.maxX = static_cast<float>(selectedBounds.maxX * scaleX);
+                selectedBounds.minY = static_cast<float>(selectedBounds.minY * scaleY);
+                selectedBounds.maxY = static_cast<float>(selectedBounds.maxY * scaleY);
+            }
             AddOutlineRect(vertices,
                 selectedBounds.minX - 10.0f,
                 selectedBounds.minY - 10.0f,
@@ -4267,6 +4390,10 @@ private:
         if (EngineState* engine = FindBoundEngineLocked(telemetry); engine != nullptr) {
             engine->width = static_cast<int>(telemetry.width);
             engine->height = static_cast<int>(telemetry.height);
+            if (DocumentSession* session = FindActiveSession(*engine); session != nullptr) {
+                EnsureSessionStrokesInPageSpace(*engine, *session);
+                LoadCommittedStrokesFromActivePage(*engine, *session);
+            }
             RenderSurfaceLocked(telemetry, engine);
         }
     }
@@ -4289,6 +4416,10 @@ private:
         if (EngineState* engine = FindBoundEngineLocked(telemetry); engine != nullptr) {
             engine->width = static_cast<int>(telemetry.width);
             engine->height = static_cast<int>(telemetry.height);
+            if (DocumentSession* session = FindActiveSession(*engine); session != nullptr) {
+                EnsureSessionStrokesInPageSpace(*engine, *session);
+                LoadCommittedStrokesFromActivePage(*engine, *session);
+            }
             RenderSurfaceLocked(telemetry, engine);
         }
     }
@@ -4470,7 +4601,7 @@ private:
             return;
         }
 
-        const InkPointSnapshot& currentPoint = sample.point;
+        const InkPointSnapshot currentPoint = NormalizePointToPageSpace(sample.point, engine);
         const bool isStylusInput = IsStylusTool(sample.toolType);
         const bool isFingerWritingInput = IsFingerWritingInput(engine, sample.toolType);
         const bool isWritingInput = isStylusInput || isFingerWritingInput;

@@ -12,6 +12,7 @@ import {
   NativePreviewPayload,
   NativePreviewRasterAsset,
   NativeSceneObject,
+  NativeScenePoint,
   NativeSceneSnapshot
 } from '../models/NativeNoteContracts';
 
@@ -36,6 +37,7 @@ interface NativeEntryModule {
     pageYRatio: number,
     pointerCount: number
   ): boolean;
+  getSimulatorPrediction(engineId: string): string;
   setBackend(engineId: string, backend: string): boolean;
   setDocumentMode(engineId: string, mode: string): boolean;
   setBrushColor(engineId: string, colorHex: string): boolean;
@@ -127,6 +129,13 @@ export interface TraceActionResult {
   status: string;
   path?: string;
   sampleCount?: number;
+}
+
+export interface NativeSimulatorPrediction {
+  status: string;
+  suppressed: boolean;
+  cpuBusyRatio: number;
+  points: NativeScenePoint[];
 }
 
 export type NativePdfPageCountStatus =
@@ -449,6 +458,17 @@ function parseSceneObject(value: JsonValue | undefined): NativeSceneObject | nul
   const pageIndex: number | null | undefined = parsePageIndex(source['pageIndex']);
   const pageIdFallback: string = pageIndex !== undefined && pageIndex !== null ? buildPageId(pageIndex) : '';
   const bounds: NativePreviewBounds = parseBounds(source['bounds']) ?? { minX: 0, minY: 0, maxX: 0, maxY: 0 };
+  const points: NativeScenePoint[] = [];
+  readArrayValue(source['points']).forEach((entry: JsonValue) => {
+    const pointSource: JsonMap | null = readObjectValue(entry);
+    if (!pointSource) {
+      return;
+    }
+    points.push({
+      x: readNumberValue(pointSource, 'x', 0),
+      y: readNumberValue(pointSource, 'y', 0)
+    });
+  });
   return {
     id: readStringValue(source, 'id', ''),
     nodeType,
@@ -460,6 +480,7 @@ function parseSceneObject(value: JsonValue | undefined): NativeSceneObject | nul
     pointCount: Math.max(0, Math.trunc(readNumberValue(source, 'pointCount', 0))),
     closed: readBooleanValue(source, 'closed', false),
     bounds,
+    points: points.length > 0 ? points : undefined,
     layer: normalizeLayerId(source['layer'], nodeType.includes('pdf') ? 'pdf' : 'ink'),
     pageIndex,
     pageId: readStringValue(source, 'pageId', pageIdFallback) || undefined
@@ -601,6 +622,31 @@ export function parseNativeDebugStateJson(rawText: string): NativeDebugState | n
   };
 }
 
+export function parseNativeSimulatorPredictionJson(rawText: string): NativeSimulatorPrediction | null {
+  const parsed: JsonMap | null = readJsonMap(rawText);
+  if (!parsed) {
+    return null;
+  }
+  const pointValues: JsonValue[] = readArrayValue(parsed['points']);
+  const points: NativeScenePoint[] = [];
+  pointValues.forEach((value: JsonValue) => {
+    const pointObject: JsonMap | null = readObjectValue(value);
+    if (!pointObject) {
+      return;
+    }
+    points.push({
+      x: readNumberValue(pointObject, 'x', 0),
+      y: readNumberValue(pointObject, 'y', 0)
+    });
+  });
+  return {
+    status: readStringValue(parsed, 'status', 'unknown'),
+    suppressed: readBooleanValue(parsed, 'suppressed', false),
+    cpuBusyRatio: readNumberValue(parsed, 'cpuBusyRatio', 0),
+    points
+  };
+}
+
 export function parseNativePdfPageCountResultJson(rawText: string): NativePdfPageCountResult | null {
   const parsed: JsonMap | null = readJsonMap(rawText);
   if (!parsed) {
@@ -719,6 +765,14 @@ export class NativeNoteEngine {
     pointerCount: number
   ): boolean {
     return nativeBridge.injectSimulatorFingerEvent(engineId, action, pageXRatio, pageYRatio, pointerCount);
+  }
+
+  getSimulatorPrediction(engineId: string): NativeSimulatorPrediction | null {
+    const rawText: string = nativeBridge.getSimulatorPrediction(engineId);
+    if (!rawText) {
+      return null;
+    }
+    return parseNativeSimulatorPredictionJson(rawText);
   }
 
   setBackend(engineId: string, backend: RenderBackend): boolean {

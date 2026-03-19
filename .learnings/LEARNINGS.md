@@ -136,6 +136,150 @@ When reusing `run-thread-work.ps1`, keep the `Codex` window filter, prefix/sideb
 
 ---
 
+## [LRN-20260319-014] 竖向工具栏第二列不能使用 100% 宽度
+
+### Trigger
+用户再次指出竖向工具栏时，属性栏“还是一大块”，明确要求“只要两列，全部竖向排列”。
+
+### Details
+在竖向工具栏外层是 `Row(primaryColumn, secondaryColumn)` 的结构下，第二列如果继续使用 `width('100%')`，它会按外层容器宽度扩张，视觉上就会变成一整块属性卡，即使内部已经改成了竖排项也仍然不对。正确做法是给第二列显式的窄列宽度，并让内容按这条窄列排布。
+
+### Suggested Action
+以后处理竖向双列工具栏时，先单独定义 secondary column 的明确宽度，再决定内部排版；不要把双列布局里的第二列写成 `100%`。
+
+### Metadata
+- Source: user_feedback
+- Related Files: entry/src/main/ets/pages/EditorWorkspace.ets
+- Tags: correction, vertical-toolbar, width, ui
+
+---
+
+## [LRN-20260319-015] 竖向工具栏的颜色区应优先使用单列竖排
+
+### Trigger
+用户提供了参考图，明确要求“竖着排列”，箭头直接指向工具栏旁边的颜色列。
+
+### Details
+在竖向工具栏里，即使第二列整体已经是竖向布局，颜色芯片如果仍然按一行或两行横排显示，视觉上仍然和参考图不一致。用户预期的是颜色作为单独的一列，从上到下排列，和工具列并排。
+
+### Suggested Action
+以后实现竖向模式时，颜色面板默认先按单列竖排做；只有用户明确要求更多颜色同时可见时，再考虑多行横排。
+
+### Metadata
+- Source: user_feedback
+- Related Files: entry/src/main/ets/pages/EditorWorkspace.ets
+- Tags: correction, vertical-toolbar, colors, ui
+
+---
+
+## [LRN-20260319-016] 粗细预设优先使用纯图形黑色示意线
+
+### Trigger
+用户明确要求“把笔迹粗细的文字和数字描述去除，用黑色展示”，并指出横向工具栏里选中态的白色示意线不对。
+
+### Details
+粗细预设如果同时显示名称、数值和示意线，会让工具栏信息密度过高。对于这种笔记类书写工具，用户更希望直接用纯图形粗细条识别预设，并且示意线颜色保持黑色一致，不要随着选中态变成白色或跟随当前颜色。
+
+### Suggested Action
+以后处理粗细预设时，默认优先采用纯图形粗细条，除非用户明确要求显示名称或数值；示意线应保持黑色一致，选中态只通过背景和边框表达。
+
+### Metadata
+- Source: user_feedback
+- Related Files: entry/src/main/ets/pages/EditorWorkspace.ets
+- Tags: correction, width-presets, ui, visual-density
+
+---
+
+## [LRN-20260319-017] 竖向工具栏的粗细预设应使用单列窄按钮
+
+### Trigger
+用户在颜色列改成竖排后，继续指出“这三个笔迹也竖向展示”，并给出参考图说明粗细预设也应沿竖向工具栏方向收成单列。
+
+### Details
+竖向工具栏里，粗细预设如果仍然占满第二列宽度，会继续看起来像横向属性卡的残留。正确视觉应是三个窄按钮按单列堆叠，和颜色列同方向排列。
+
+### Suggested Action
+以后在竖向模式下，粗细预设默认使用固定窄宽度的单列按钮；不要让它们占满第二列。
+
+### Metadata
+- Source: user_feedback
+- Related Files: entry/src/main/ets/pages/EditorWorkspace.ets
+- Tags: correction, width-presets, vertical-toolbar, ui
+
+---
+
+## [LRN-20260319-018] 用户说“竖向展示”时，若明确提到可滑动，应实现纵向滚动容器
+
+### Trigger
+用户在粗细预设已经改成单列后，继续用截图标注“竖向展示，可以上下滑动”，说明他们要的不只是单列摆放，还要这个区域本身可纵向滑动。
+
+### Details
+对这类浮动工具栏来说，“竖向展示”可能包含两个层面：一是元素方向改成纵向；二是容器成为纵向滚动区。只做第一步会被认为还没对齐用户意图。
+
+### Suggested Action
+以后当用户在竖向工具栏场景里同时提到“上下滑动/可滑动”时，直接将对应区域实现为固定高度的纵向 `Scroll` 容器，而不是只改排列方向。
+
+### Metadata
+- Source: user_feedback
+- Related Files: entry/src/main/ets/pages/EditorWorkspace.ets
+- Tags: correction, vertical-scroll, toolbar, ui
+
+---
+
+## [LRN-20260319-019] “整个属性栏可以上下滑动”表示第二列整体是纵向 Scroll，不是局部子区块滚动
+
+### Trigger
+用户明确纠正：“不是只要笔迹栏可以上下滑动，我要的是整个属性栏可以上下滑动，竖着！”
+
+### Details
+把某个局部区域单独做成可滚动并不能满足这种需求。用户要求的是竖向工具栏的整个第二列属性面板作为一个整体纵向滚动，里面的颜色、粗细等模块都属于同一个滚动上下文。
+
+### Suggested Action
+以后遇到“整个属性栏上下滑动”这类表达时，直接把第二列实现为 `Scroll(Column)`，不要拆成多个各自滚动的子面板。
+
+### Metadata
+- Source: user_feedback
+- Related Files: entry/src/main/ets/pages/EditorWorkspace.ets
+- Tags: correction, property-panel, vertical-scroll, ui
+
+---
+
+## [LRN-20260319-020] 用户说“太长了，缩短”且用水平标线时，优先理解为横向长度过长
+
+### Trigger
+用户在最新截图里用一条水平红线标出竖向工具栏顶部宽度，并写“太长了，缩短”。
+
+### Details
+这种标注更可能是在说横向长度/宽度过长，而不是在说整体高度过高。如果此时继续只改高度，会偏离问题本身。
+
+### Suggested Action
+以后遇到“太长了，缩短”并伴随水平标线时，先检查容器宽度、内部横向留白和按钮宽度，而不是默认理解为高度问题。
+
+### Metadata
+- Source: user_feedback
+- Related Files: entry/src/main/ets/pages/EditorWorkspace.ets
+- Tags: correction, ui, width, interpretation
+
+---
+
+## [LRN-20260319-021] 用户说“展示部分也要竖着展示”时，通常指按钮本体和示意图都改为竖向风格
+
+### Trigger
+在粗细预设已经改成竖线示意后，用户继续发图指出仍然不对。
+
+### Details
+只把内部示意线从横线改成竖线还不够；如果按钮本体仍然是横向长条，用户依然会认为它是横向展示。需要把按钮本体也收成窄竖向按钮，整体视觉才会被理解为“竖着展示”。
+
+### Suggested Action
+以后遇到“展示部分也要竖着展示”这类反馈时，检查并同时调整按钮外形、容器宽度和内部示意图，不要只改内部图形方向。
+
+### Metadata
+- Source: user_feedback
+- Related Files: entry/src/main/ets/pages/EditorWorkspace.ets
+- Tags: correction, width-presets, visual-direction, ui
+
+---
+
 ## [LRN-20260313-002] correction
 
 **Logged**: 2026-03-13T00:44:07.2555775+08:00
@@ -588,3 +732,276 @@ For simulator-stub regressions driven by `hdc uitest uiInput swipe`, verify the 
 - Tags: harmony, simulator, hdc, gesture-path, verification
 
 ---
+## [LRN-20260319-001] correction
+
+**Logged**: 2026-03-19T13:41:37.3190564+08:00
+**Priority**: high
+**Status**: pending
+**Area**: ui-layout
+
+### Summary
+For this editor, the writing page must use a full-width left-anchored model, not a centered card model, otherwise rail toggles and zoom changes produce visible horizontal jumps and fake canvas margins.
+
+### Details
+I initially adjusted the page width cap and action-group placement incrementally, but the user clarified the real requirement: the writing area should default to the screen edge, stick to the rail edge when the rail is open, and remove the yellow card-like canvas background entirely. The correct fix is structural: use the writing viewport width as the base page width, anchor `x` to the left edge instead of recomputing center offsets, clamp horizontal pan as a left-anchored range, and remove outer shell/card chrome that creates artificial margins.
+
+### Suggested Action
+When a layout complaint mentions rail toggles shifting the page or zoom feeling inconsistent, check first whether the page model is centered-card based. If so, switch to a left-anchored full-width layout before making cosmetic spacing tweaks.
+
+### Metadata
+- Source: user_feedback
+- Related Files: entry/src/main/ets/pages/EditorWorkspace.ets
+- Tags: correction, layout, rail, zoom, editor
+
+---
+
+## [LRN-20260319-003] correction
+
+**Logged**: 2026-03-19T15:52:30
+**Priority**: high
+**Status**: pending
+**Area**: frontend
+
+### Summary
+ETS rail layout changes alone were insufficient; weak-native-shell stroke input was still stored in surface coordinates, so rail collapse and debug zoom appeared visually unchanged.
+
+### Details
+User reported that rail collapse and debug zoom still showed the same blank-right-area behavior after multiple ETS-side fixes. The correct root cause was in native input handling inside entry/src/main/cpp/napi_init.cpp: render had started projecting points as page-space, but touch input still entered the pipeline as surface-space. The fix is to normalize input samples to page coordinates before selection, erasing, stroke capture, and commit logic.
+
+### Suggested Action
+When paged rendering depends on viewport size, verify input, storage, and render all use the same coordinate space before adjusting shell layout further.
+
+### Metadata
+- Source: user_feedback
+- Related Files: entry/src/main/cpp/napi_init.cpp, entry/src/main/ets/pages/EditorWorkspace.ets
+- Tags: harmonyos, native-shell, coordinate-space, rail, zoom
+- See Also: LRN-20260319-002
+
+---
+## [LRN-20260319-004] correction
+
+**Logged**: 2026-03-19T16:14:47.8679776+08:00
+**Priority**: high
+**Status**: pending
+**Area**: frontend
+
+### Summary
+On the Harmony x86_64 simulator, rail-collapse and debug-zoom regressions may be caused by the `simulator-stub` preview layer reusing a stale `PreviewThumbnail` size, even when the outer writing page has already resized correctly.
+
+### Details
+After the user reported that the problem still existed, layout dumps showed the outer writing viewport and page shell expanding from 2074 to 2560 when the rail collapsed, but the inner preview subtree stayed at 2074. The runtime was `simulator-stub` (`stubReason=x86_64-simulator-uses-weak-native-shell`), so native surface fixes could not explain the on-screen result. The actual issue was that `previewThumbnailRenderKey()` only depended on snapshot freshness, not the rendered page width/height, so `PreviewThumbnail` was reused across rail and zoom changes and visually looked like it only moved instead of resizing.
+
+### Suggested Action
+For simulator-stub editor rendering, include the current rendered width and height in preview component keys or otherwise force the preview layer to rebuild when viewport size or page scale changes.
+
+### Metadata
+- Source: user_feedback
+- Related Files: entry/src/main/ets/pages/EditorWorkspace.ets, entry/src/main/ets/components/PreviewThumbnail.ets
+- Tags: correction, simulator-stub, preview, rail, zoom
+- See Also: LRN-20260319-003, LRN-20260316-003
+
+---
+
+## [LRN-20260319-005] best_practice
+
+**Logged**: 2026-03-19T00:00:00+08:00
+**Priority**: medium
+**Status**: pending
+**Area**: frontend
+
+### Summary
+ArkTS ??? UI Builder ????? `Stack` ?? `Blank()`?????? `Array.from` ??????
+
+### Details
+??? `EditorWorkspace.ets` ???????????ArkTS ????????`Blank` ????? `Row/Column/Flex` ??? `Array.from({ length }, ...)` ? ArkTS ????? `arkts-no-inferred-generic-params` ? `arkts-no-any-unknown`?????????? `Stack` ??? `Column(){}` ????????????????? `for` ???? `number[]`?
+
+### Suggested Action
+??? ArkTS Builder ???? `Column(){}`/`Row(){}` ???????????????????????????
+
+### Metadata
+- Source: error
+- Related Files: entry/src/main/ets/pages/EditorWorkspace.ets
+- Tags: arkts, ui-builder, compile, custom-color
+
+---
+
+## [LRN-20260319-006] correction
+
+**Logged**: 2026-03-19T17:35:00+08:00
+**Priority**: high
+**Status**: pending
+**Area**: frontend
+
+### Summary
+For this editor, the custom color entry must use a continuous visible picker, not a stepped matrix or chip-based approximation.
+
+### Details
+I first replaced the broken custom-color popup with a stable but discrete selector made of recent chips, a tone matrix, and hue stops. The user clarified that this was still the wrong interaction model: they wanted the Huawei-style continuous HSB picker they had shown in the screenshot, or a ready-made official component. The correct fix path here is to integrate the official `painting_color_selector` component rather than iterating further on a homegrown stepped picker.
+
+### Suggested Action
+When the user references a concrete picker interaction like continuous hue/saturation/value dragging, do not substitute a discrete approximation even if it is visually cleaner or faster to ship. Prefer an existing official component when one is available and matches the required interaction model.
+
+### Metadata
+- Source: user_feedback
+- Related Files: entry/src/main/ets/pages/EditorWorkspace.ets, market_components/painting_color_selector/painting_color_selector
+- Tags: correction, color-picker, component-integration, ux
+
+---
+## [LRN-20260319-007] implementation
+
+**Logged**: 2026-03-19T20:05:00+08:00
+**Priority**: medium
+**Status**: pending
+**Area**: frontend
+
+### Summary
+The Huawei `painting_color_selector` component must stay mounted during color sampling; hide it visually instead of unmounting it.
+
+### Details
+The component stores its snapshot pixel map on the component instance and updates sampled colors through `@Monitor('touchX','touchY')`. If the host closes or unmounts the dialog when entering sampling mode, the component instance is destroyed and live sampling stops. The correct approach is to keep the dialog session alive, move the panel off-screen or make it invisible during sampling, and let the full-screen sampling overlay own touch input until release.
+
+### Suggested Action
+When integrating host-side color sampling UX around this component, keep `showCustomColorDialog` true, toggle a separate sampling mode flag, and only hide the visible panel. Do not unmount the `ColorSelector` instance until sampling is complete.
+
+### Metadata
+- Source: implementation
+- Related Files: entry/src/main/ets/pages/EditorWorkspace.ets, market_components/painting_color_selector/painting_color_selector/src/main/ets/comp/ColorSelector.ets
+- Tags: color-picker, sampling, component-lifecycle, arkui
+
+---
+## [LRN-20260319-008] correction
+
+**Logged**: 2026-03-19T21:55:00+08:00
+**Priority**: high
+**Status**: pending
+**Area**: frontend
+
+### Summary
+When compacting the floating toolbar, reducing internal density is not enough; the horizontal shell width and the primary-row button count must both shrink.
+
+### Details
+The user corrected that they wanted the toolbar narrower, not shorter. I had previously compressed labels and vertical spacing while leaving the horizontal shell at a width still dictated by the primary row (drag handle + tool buttons + more + finger). That produced a visually wide card even though controls were denser. The correct fix path is to reduce the horizontal outer width and reflow the primary row so it contains fewer buttons per row.
+
+### Suggested Action
+For horizontal toolbar compaction, measure the widest row first, then change outer width constants and row composition together. Do not treat text removal or vertical compression as a substitute for actual width reduction.
+
+### Metadata
+- Source: user_feedback
+- Related Files: entry/src/main/ets/pages/EditorWorkspace.ets
+- Tags: correction, toolbar, width, layout
+
+---
+## [LRN-20260319-009] correction
+
+**Logged**: 2026-03-19T22:05:00+08:00
+**Priority**: high
+**Status**: pending
+**Area**: frontend
+
+### Summary
+For the horizontal editor toolbar, the user wants an exact two-row structure, not a denser multi-row layout.
+
+### Details
+After shrinking widths, I still introduced a third row by splitting extra tools and width presets into separate lines. The user corrected that the horizontal layout requirement is structural: one row for tools and one row for properties, no more. The correct implementation is to collapse horizontal expanded state into exactly two rows even if that means removing some low-priority controls from the horizontal surface.
+
+### Suggested Action
+When the user specifies a row count for a compact layout, treat that as a hard structural requirement. Remove or defer secondary controls instead of preserving them through additional rows.
+
+### Metadata
+- Source: user_feedback
+- Related Files: entry/src/main/ets/pages/EditorWorkspace.ets
+- Tags: correction, toolbar, horizontal-layout, ux
+
+---
+## [LRN-20260319-010] correction
+
+**Logged**: 2026-03-19T22:18:00+08:00
+**Priority**: high
+**Status**: pending
+**Area**: frontend
+
+### Summary
+For the horizontal editor toolbar, preserve horizontal scrolling and tool reachability before optimizing size.
+
+### Details
+I over-focused on shrinking the floating toolbar shell and removed horizontal scrolling, which made several tools unreachable and broke the intended interaction. The user clarified that the target was to reduce the vertical height of the two-row horizontal layout, not to cut width at the expense of access. The correct fix is to keep the toolbar and property rows horizontally scrollable and only trim button size, spacing, and vertical padding.
+
+### Suggested Action
+When compacting a horizontally scrollable toolbar, treat scrollability and full tool access as non-negotiable. Reduce row height only after confirming all tools and properties remain reachable.
+
+### Metadata
+- Source: user_feedback
+- Related Files: entry/src/main/ets/pages/EditorWorkspace.ets
+- Tags: correction, toolbar, scrolling, accessibility
+
+---
+## [LRN-20260319-011] correction
+
+**Logged**: 2026-03-19T22:32:00+08:00
+**Priority**: high
+**Status**: pending
+**Area**: frontend
+
+### Summary
+For this toolbar, width adjustment controls must not remain permanently visible in the property row.
+
+### Details
+The user clarified that the property row should not always contain a width slider. Instead, the normal state should show width presets, and only a second tap on the currently selected preset should enter a dedicated adjustment sub-state inside the same property row. They also explicitly wanted the width value text rendered in black for readability.
+
+### Suggested Action
+Model preset selection and preset adjustment as two separate UI states. Keep the property row compact by default and only swap in the slider when the user explicitly re-enters width adjustment for the selected preset.
+
+### Metadata
+- Source: user_feedback
+- Related Files: entry/src/main/ets/pages/EditorWorkspace.ets
+- Tags: correction, width-control, toolbar, readability
+
+---
+## [LRN-20260319-012] correction
+
+**Logged**: 2026-03-19T22:44:00+08:00
+**Priority**: high
+**Status**: pending
+**Area**: frontend
+
+### Summary
+The vertical toolbar layout must not use a large fixed-height property card; it should remain a true two-column vertical arrangement.
+
+### Details
+After earlier fixes, the horizontal toolbar behavior was closer, but the user showed that the left-docked vertical mode still rendered the property area as a large fixed-height block beside the tool column. They explicitly wanted only two columns, both vertically arranged. The correct fix is to remove the tall property card structure, keep the secondary column segmented, and use width-adjust substate only when re-tapping the selected width preset.
+
+### Suggested Action
+For docked vertical editor toolbars, keep the primary tool column and secondary property column visually independent and vertically segmented. Avoid fixed-height scroll cards unless overflow is proven necessary.
+
+### Metadata
+- Source: user_feedback
+- Related Files: entry/src/main/ets/pages/EditorWorkspace.ets
+- Tags: correction, vertical-toolbar, layout, width-adjustment
+
+---
+## [LRN-20260319-013] correction
+
+**Logged**: 2026-03-19T22:52:00+08:00
+**Priority**: high
+**Status**: pending
+**Area**: frontend
+
+### Summary
+For the left-docked editor toolbar, the property column must be visually narrow even when its content is functionally correct.
+
+### Details
+After fixing the vertical property column behavior, the user screenshot still showed the secondary column reading as a large panel because color chips stayed on one row and width presets used long label buttons. The correct direction is to compress the visual width of the secondary column: split colors into multiple rows, convert width presets to compact buttons, and remove auxiliary hint text from the vertical property column.
+
+### Suggested Action
+When the user asks for a strict two-column vertical toolbar, optimize visual narrowness, not just interaction logic. Prefer short labels and multi-row chip groups over long horizontal runs inside the secondary column.
+
+### Metadata
+- Source: user_feedback
+- Related Files: entry/src/main/ets/pages/EditorWorkspace.ets
+- Tags: correction, vertical-toolbar, compactness, ui
+
+---
+- [2026-03-19] LRN-20260319-022: �ڸ���������������ģʽ��û�˵������չʾ��ʱ��ͨ��ָ�ؼ�����ҲҪխ������/���У������ǽ����Ѷ������Ƭ����ѵ�����Ҫͬʱ����ܿ��ȡ��ڶ�����С����ǯ�ơ��Լ��ؼ������Ŀ��߱ȡ�
+- [2026-03-19] LRN-20260319-023: ʹ�� painting_color_selector ʱ������ͼ��������� await getComponentSnapshot(... waitUntilRenderFinished: true) ���л���ɫģʽ���󻭲��ϻ�������Կ�������������������Ӧ�ȴ�����ɫģʽ������壬���첽ȡ���գ����� touchX/touchY ������ readPixelsSync ����Լ 16ms ������
+
+- [2026-03-19] �û�ָ���������ȡ��ɫ�󣬻��ǻῨ�������������Ŀ���ɫ�ڼ������ɫ�����Ϊ��͸�����ǲ����ģ�͸������Կ���ͣ���ڽ������ﲢ�̵����������¿������������޸�ʱӦ����ɫģʽ����ȫ��������壬�������Ƴ� market ���������� pixelMap/getComponentSnapshot/readPixelsSync ·����ֻ����������ȡɫ�߼���

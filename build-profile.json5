@@ -58,6 +58,24 @@
           ]
         }
       ]
+    },
+    {
+      "name": "painting_color_selector",
+      "srcPath": "./market_components/painting_color_selector/painting_color_selector",
+      "targets": [
+        {
+          "name": "default",
+          "applyToProducts": [
+            "default"
+          ]
+        },
+        {
+          "name": "simulator",
+          "applyToProducts": [
+            "simulator"
+          ]
+        }
+      ]
     }
   ]
 }

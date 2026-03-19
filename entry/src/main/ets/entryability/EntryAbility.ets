@@ -1,6 +1,7 @@
 import { AbilityConstant, ConfigurationConstant, UIAbility, Want } from '@kit.AbilityKit';
 import { hilog } from '@kit.PerformanceAnalysisKit';
 import { window } from '@kit.ArkUI';
+import { ColorGlobalContext } from 'painting_color_selector';
 
 const DOMAIN = 0x0000;
 
@@ -28,6 +29,11 @@ export default class EntryAbility extends UIAbility {
         return;
       }
       hilog.info(DOMAIN, 'testTag', 'Succeeded in loading the content.');
+      try {
+        ColorGlobalContext.initUIContext(windowStage.getMainWindowSync().getUIContext());
+      } catch (contextErr) {
+        hilog.error(DOMAIN, 'testTag', 'Failed to init color picker UI context. Cause: %{public}s', JSON.stringify(contextErr));
+      }
       windowStage.getMainWindow((errInner, mainWindow: window.Window) => {
         if (errInner.code) {
           hilog.error(DOMAIN, 'testTag', 'Failed to get main window. Cause: %{public}s', JSON.stringify(errInner));

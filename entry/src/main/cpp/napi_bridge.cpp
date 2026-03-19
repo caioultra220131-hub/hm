@@ -214,6 +214,17 @@ static napi_value InjectSimulatorFingerEvent(napi_env env, napi_callback_info in
     return CreateBoolean(env, ok);
 }
 
+static napi_value GetSimulatorPrediction(napi_env env, napi_callback_info info)
+{
+    size_t argc = 1;
+    napi_value args[1] = { nullptr };
+    napi_get_cb_info(env, info, &argc, args, nullptr, nullptr);
+    std::string response = argc == 1
+        ? GetNoteEngineRuntime().GetSimulatorPrediction(GetStringArg(env, args[0]))
+        : R"({"status":"invalid-args","suppressed":false,"cpuBusyRatio":0,"points":[]})";
+    return CreateString(env, response);
+}
+
 static napi_value SetBackend(napi_env env, napi_callback_info info)
 {
     size_t argc = 2;
@@ -347,6 +358,8 @@ static napi_value Init(napi_env env, napi_value exports)
         { "setTool", nullptr, SetTool, nullptr, nullptr, nullptr, napi_default, nullptr },
         { "setFingerWritingEnabled", nullptr, SetFingerWritingEnabled, nullptr, nullptr, nullptr, napi_default, nullptr },
         { "injectSimulatorFingerEvent", nullptr, InjectSimulatorFingerEvent, nullptr, nullptr, nullptr,
+            napi_default, nullptr },
+        { "getSimulatorPrediction", nullptr, GetSimulatorPrediction, nullptr, nullptr, nullptr,
             napi_default, nullptr },
         { "setBackend", nullptr, SetBackend, nullptr, nullptr, nullptr, napi_default, nullptr },
         { "setDocumentMode", nullptr, SetDocumentMode, nullptr, nullptr, nullptr, napi_default, nullptr },

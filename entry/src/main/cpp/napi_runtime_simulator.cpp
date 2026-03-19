@@ -37,6 +37,21 @@ constexpr double kMinSyntheticStrokeWidthPt = 96.0;
 constexpr double kMinSyntheticStrokeHeightPt = 42.0;
 constexpr const char* kSimulatorStrokeStateFileName = "simulator-strokes.json";
 constexpr const char* kPngPreviewMimeType = "image/png";
+constexpr double kSimulatorPredictionMinSpeedPtPerMs = 0.08;
+constexpr int64_t kSimulatorPredictionStableHorizonsMs[2] = { 4, 8 };
+constexpr int64_t kSimulatorPredictionUnstableHorizonsMs[2] = { 2, 4 };
+constexpr double kSimulatorPredictionStableMaxDistancePt = 26.0;
+constexpr double kSimulatorPredictionUnstableMaxDistancePt = 12.0;
+constexpr double kSimulatorPredictionMinSegmentDtMs = 2.0;
+constexpr double kSimulatorPredictionMaxSegmentDtMs = 10.0;
+constexpr double kSimulatorPredictionMaxSegmentDistancePt = 22.0;
+constexpr double kSimulatorPredictionSpeedJumpThreshold = 2.2;
+constexpr double kSimulatorPredictionAngleThresholdDegrees = 55.0;
+constexpr double kSimulatorPredictionRollbackDistancePt = 6.0;
+constexpr double kSimulatorPredictionRollbackBlend = 0.35;
+constexpr int64_t kSimulatorPredictionCpuSampleIntervalMs = 750;
+constexpr int64_t kSimulatorPredictionCpuCooldownMs = 1500;
+constexpr double kSimulatorPredictionCpuBusyThreshold = 0.82;
 
 struct SimulatorPageContractDescriptor {
     double widthPt = 0.0;
@@ -57,6 +72,7 @@ struct SimulatorPageDescriptor {
 struct SimulatorStrokePoint {
     double x = 0.0;
     double y = 0.0;
+    int64_t timeMs = 0;
 };
 
 struct SimulatorSyntheticObject {
@@ -150,6 +166,13 @@ struct SimulatorEngineState {
     double simulatorFingerStrokeLastXRatio = 0.5;
     double simulatorFingerStrokeLastYRatio = 0.5;
     std::vector<SimulatorStrokePoint> simulatorFingerStrokeRatios;
+    std::vector<SimulatorStrokePoint> simulatorPredictedStrokeRatios;
+    std::vector<SimulatorStrokePoint> simulatorPreviousPredictedStrokeRatios;
+    uint64_t predictionLastCpuTotalTicks = 0;
+    uint64_t predictionLastCpuIdleTicks = 0;
+    int64_t predictionLastCpuSampleTimeMs = 0;
+    int64_t predictionSuppressedUntilMs = 0;
+    double predictionCpuBusyRatio = 0.0;
     std::unordered_map<std::string, SimulatorDocumentSession> documents;
 };
 
@@ -640,6 +663,267 @@ double ResolvePageWidth(const SimulatorPageDescriptor* descriptor)
 double ResolvePageHeight(const SimulatorPageDescriptor* descriptor)
 {
     return HasPageBounds(descriptor) ? descriptor->contract.heightPt : kFallbackPageHeightPt;
+}
+
+struct PredictionVec2 {
+    double x = 0.0;
+    double y = 0.0;
+};
+
+double PredictionVecLength(const PredictionVec2& value)
+{
+    return std::hypot(value.x, value.y);
+}
+
+PredictionVec2 ScalePredictionVec(const PredictionVec2& value, double scale)
+{
+    return { value.x * scale, value.y * scale };
+}
+
+PredictionVec2 AddPredictionVec(const PredictionVec2& left, const PredictionVec2& right)
+{
+    return { left.x + right.x, left.y + right.y };
+}
+
+PredictionVec2 NormalizePredictionVec(const PredictionVec2& value)
+{
+    const double length = PredictionVecLength(value);
+    if (length <= std::numeric_limits<double>::epsilon()) {
+        return {};
+    }
+    return ScalePredictionVec(value, 1.0 / length);
+}
+
+double DotPredictionVec(const PredictionVec2& left, const PredictionVec2& right)
+{
+    return left.x * right.x + left.y * right.y;
+}
+
+PredictionVec2 ClampPredictionVecLength(const PredictionVec2& value, double maxLength)
+{
+    const double length = PredictionVecLength(value);
+    if (length <= maxLength || length <= std::numeric_limits<double>::epsilon()) {
+        return value;
+    }
+    return ScalePredictionVec(value, maxLength / length);
+}
+
+PredictionVec2 StrokePointToPageVec(const SimulatorStrokePoint& point, double pageWidth, double pageHeight)
+{
+    return { ClampUnitRatio(point.x) * pageWidth, ClampUnitRatio(point.y) * pageHeight };
+}
+
+bool TryReadSystemCpuTicks(uint64_t& totalTicks, uint64_t& idleTicks)
+{
+    std::ifstream file("/proc/stat");
+    if (!file.is_open()) {
+        return false;
+    }
+    std::string cpuLabel;
+    uint64_t user = 0;
+    uint64_t nice = 0;
+    uint64_t system = 0;
+    uint64_t idle = 0;
+    uint64_t iowait = 0;
+    uint64_t irq = 0;
+    uint64_t softirq = 0;
+    uint64_t steal = 0;
+    uint64_t guest = 0;
+    uint64_t guestNice = 0;
+    file >> cpuLabel >> user >> nice >> system >> idle >> iowait >> irq >> softirq >> steal >> guest >> guestNice;
+    if (cpuLabel != "cpu") {
+        return false;
+    }
+    idleTicks = idle + iowait;
+    totalTicks = user + nice + system + idle + iowait + irq + softirq + steal + guest + guestNice;
+    return totalTicks > 0;
+}
+
+void ResetSimulatorPrediction(SimulatorEngineState& engine)
+{
+    engine.simulatorPredictedStrokeRatios.clear();
+    engine.simulatorPreviousPredictedStrokeRatios.clear();
+    engine.predictedPointCount = 0;
+}
+
+bool UpdateSimulatorPredictionCpuBudget(SimulatorEngineState& engine, int64_t nowMs)
+{
+    if (nowMs - engine.predictionLastCpuSampleTimeMs < kSimulatorPredictionCpuSampleIntervalMs) {
+        return nowMs < engine.predictionSuppressedUntilMs;
+    }
+    uint64_t totalTicks = 0;
+    uint64_t idleTicks = 0;
+    if (!TryReadSystemCpuTicks(totalTicks, idleTicks)) {
+        return nowMs < engine.predictionSuppressedUntilMs;
+    }
+    if (engine.predictionLastCpuTotalTicks > 0 && totalTicks > engine.predictionLastCpuTotalTicks) {
+        const uint64_t totalDelta = totalTicks - engine.predictionLastCpuTotalTicks;
+        const uint64_t idleDelta = idleTicks - engine.predictionLastCpuIdleTicks;
+        if (totalDelta > 0) {
+            const double idleRatio = static_cast<double>(std::min(idleDelta, totalDelta)) /
+                static_cast<double>(totalDelta);
+            engine.predictionCpuBusyRatio = std::clamp(1.0 - idleRatio, 0.0, 1.0);
+            if (engine.predictionCpuBusyRatio >= kSimulatorPredictionCpuBusyThreshold) {
+                engine.predictionSuppressedUntilMs = nowMs + kSimulatorPredictionCpuCooldownMs;
+            }
+        }
+    }
+    engine.predictionLastCpuTotalTicks = totalTicks;
+    engine.predictionLastCpuIdleTicks = idleTicks;
+    engine.predictionLastCpuSampleTimeMs = nowMs;
+    return nowMs < engine.predictionSuppressedUntilMs;
+}
+
+std::vector<SimulatorStrokePoint> BuildSimulatorPredictionTail(
+    const std::vector<SimulatorStrokePoint>& realSamples,
+    double pageWidth,
+    double pageHeight,
+    const std::vector<SimulatorStrokePoint>& previousPredictedSamples)
+{
+    if (realSamples.size() < 2 || pageWidth <= 0.0 || pageHeight <= 0.0) {
+        return {};
+    }
+
+    struct VelocitySample {
+        PredictionVec2 velocity;
+        double speed = 0.0;
+    };
+
+    const SimulatorStrokePoint& last = realSamples.back();
+    std::vector<VelocitySample> segments;
+    segments.reserve(3);
+
+    for (size_t index = realSamples.size() - 1; index > 0 && segments.size() < 3; --index) {
+        const SimulatorStrokePoint& end = realSamples[index];
+        const SimulatorStrokePoint& start = realSamples[index - 1];
+        const double deltaTimeMs = std::clamp(
+            static_cast<double>(end.timeMs - start.timeMs),
+            kSimulatorPredictionMinSegmentDtMs,
+            kSimulatorPredictionMaxSegmentDtMs);
+        PredictionVec2 delta = {
+            (ClampUnitRatio(end.x) - ClampUnitRatio(start.x)) * pageWidth,
+            (ClampUnitRatio(end.y) - ClampUnitRatio(start.y)) * pageHeight
+        };
+        delta = ClampPredictionVecLength(delta, kSimulatorPredictionMaxSegmentDistancePt);
+        const PredictionVec2 velocity = ScalePredictionVec(delta, 1.0 / deltaTimeMs);
+        const double speed = PredictionVecLength(velocity);
+        if (speed < kSimulatorPredictionMinSpeedPtPerMs) {
+            continue;
+        }
+        segments.push_back({ velocity, speed });
+    }
+
+    if (segments.empty()) {
+        return {};
+    }
+
+    static constexpr double kVelocityWeights[3] = { 0.55, 0.30, 0.15 };
+    PredictionVec2 fusedVelocity {};
+    double totalWeight = 0.0;
+    for (size_t index = 0; index < segments.size(); ++index) {
+        fusedVelocity = AddPredictionVec(fusedVelocity, ScalePredictionVec(segments[index].velocity, kVelocityWeights[index]));
+        totalWeight += kVelocityWeights[index];
+    }
+    if (totalWeight > 0.0) {
+        fusedVelocity = ScalePredictionVec(fusedVelocity, 1.0 / totalWeight);
+    }
+
+    const double fusedSpeed = PredictionVecLength(fusedVelocity);
+    if (fusedSpeed < kSimulatorPredictionMinSpeedPtPerMs) {
+        return {};
+    }
+
+    bool unstable = false;
+    if (segments.size() >= 2) {
+        const PredictionVec2 newestDirection = NormalizePredictionVec(segments[0].velocity);
+        const PredictionVec2 olderDirection = NormalizePredictionVec(segments[1].velocity);
+        if (PredictionVecLength(newestDirection) > 0.0 && PredictionVecLength(olderDirection) > 0.0) {
+            const double cosine = std::clamp(DotPredictionVec(newestDirection, olderDirection), -1.0, 1.0);
+            const double angleDegrees = std::acos(cosine) * (180.0 / kPi);
+            unstable = angleDegrees > kSimulatorPredictionAngleThresholdDegrees;
+        }
+        if (!unstable && segments[1].speed > kSimulatorPredictionMinSpeedPtPerMs) {
+            const double speedRatio = std::max(segments[0].speed, segments[1].speed) /
+                std::max(kSimulatorPredictionMinSpeedPtPerMs, std::min(segments[0].speed, segments[1].speed));
+            unstable = speedRatio > kSimulatorPredictionSpeedJumpThreshold;
+        }
+    }
+
+    const int64_t* horizons = unstable ? kSimulatorPredictionUnstableHorizonsMs : kSimulatorPredictionStableHorizonsMs;
+    const double maxDistance = unstable ? kSimulatorPredictionUnstableMaxDistancePt : kSimulatorPredictionStableMaxDistancePt;
+    const PredictionVec2 lastPagePosition = StrokePointToPageVec(last, pageWidth, pageHeight);
+    auto createPredictedPoint = [&](int64_t horizonMs) {
+        PredictionVec2 offset = ScalePredictionVec(fusedVelocity, static_cast<double>(horizonMs));
+        offset = ClampPredictionVecLength(offset, maxDistance);
+        if (unstable) {
+            offset = ScalePredictionVec(offset, 0.65);
+        }
+        const PredictionVec2 predictedPagePosition = AddPredictionVec(lastPagePosition, offset);
+        return SimulatorStrokePoint {
+            ClampUnitRatio(predictedPagePosition.x / pageWidth),
+            ClampUnitRatio(predictedPagePosition.y / pageHeight),
+            last.timeMs + horizonMs
+        };
+    };
+
+    std::vector<SimulatorStrokePoint> nextTail = {
+        createPredictedPoint(horizons[0]),
+        createPredictedPoint(horizons[1])
+    };
+
+    if (previousPredictedSamples.empty()) {
+        return nextTail;
+    }
+
+    const size_t limit = std::min(nextTail.size(), previousPredictedSamples.size());
+    for (size_t index = 0; index < limit; ++index) {
+        PredictionVec2 blendSource = StrokePointToPageVec(previousPredictedSamples[index], pageWidth, pageHeight);
+        if (unstable) {
+            const PredictionVec2 unstableTarget = StrokePointToPageVec(last, pageWidth, pageHeight);
+            blendSource = AddPredictionVec(
+                ScalePredictionVec(unstableTarget, 0.55),
+                ScalePredictionVec(blendSource, 0.45));
+        }
+        const PredictionVec2 nextTarget = StrokePointToPageVec(nextTail[index], pageWidth, pageHeight);
+        const double distance = PredictionVecLength({
+            nextTarget.x - blendSource.x,
+            nextTarget.y - blendSource.y
+        });
+        if (distance > kSimulatorPredictionRollbackDistancePt) {
+            const PredictionVec2 blended = AddPredictionVec(
+                ScalePredictionVec(blendSource, 1.0 - kSimulatorPredictionRollbackBlend),
+                ScalePredictionVec(nextTarget, kSimulatorPredictionRollbackBlend));
+            nextTail[index].x = ClampUnitRatio(blended.x / pageWidth);
+            nextTail[index].y = ClampUnitRatio(blended.y / pageHeight);
+        }
+    }
+
+    return nextTail;
+}
+
+void UpdateSimulatorPrediction(
+    SimulatorEngineState& engine,
+    const SimulatorPageDescriptor* descriptor)
+{
+    engine.simulatorPredictedStrokeRatios.clear();
+    engine.predictedPointCount = 0;
+    if (!engine.predictionEnabled || !engine.fingerWritingEnabled || !engine.simulatorFingerStrokeActive ||
+        descriptor == nullptr) {
+        engine.simulatorPreviousPredictedStrokeRatios.clear();
+        return;
+    }
+    const int64_t nowMs = CurrentTimeMillis();
+    if (UpdateSimulatorPredictionCpuBudget(engine, nowMs)) {
+        engine.simulatorPreviousPredictedStrokeRatios.clear();
+        return;
+    }
+    engine.simulatorPredictedStrokeRatios = BuildSimulatorPredictionTail(
+        engine.simulatorFingerStrokeRatios,
+        ResolvePageWidth(descriptor),
+        ResolvePageHeight(descriptor),
+        engine.simulatorPreviousPredictedStrokeRatios);
+    engine.predictedPointCount = engine.simulatorPredictedStrokeRatios.size();
+    engine.simulatorPreviousPredictedStrokeRatios = engine.simulatorPredictedStrokeRatios;
 }
 
 std::string ResolveSyntheticTool(const SimulatorEngineState& engine)
@@ -1475,16 +1759,17 @@ void AppendSimulatorFingerStrokeRatioPoint(SimulatorEngineState& engine, double 
 {
     const double normalizedX = ClampUnitRatio(xRatio);
     const double normalizedY = ClampUnitRatio(yRatio);
+    const int64_t timeMs = CurrentTimeMillis();
     if (!engine.simulatorFingerStrokeRatios.empty()) {
         const SimulatorStrokePoint& previous = engine.simulatorFingerStrokeRatios.back();
         const double deltaX = previous.x - normalizedX;
         const double deltaY = previous.y - normalizedY;
         if (std::hypot(deltaX, deltaY) < 0.0025) {
-            engine.simulatorFingerStrokeRatios.back() = { normalizedX, normalizedY };
+            engine.simulatorFingerStrokeRatios.back() = { normalizedX, normalizedY, timeMs };
             return;
         }
     }
-    engine.simulatorFingerStrokeRatios.push_back({ normalizedX, normalizedY });
+    engine.simulatorFingerStrokeRatios.push_back({ normalizedX, normalizedY, timeMs });
 }
 
 void ResetSimulatorFingerStroke(SimulatorEngineState& engine)
@@ -1493,6 +1778,7 @@ void ResetSimulatorFingerStroke(SimulatorEngineState& engine)
     engine.simulatorFingerStrokeStartXRatio = engine.simulatorFingerStrokeLastXRatio;
     engine.simulatorFingerStrokeStartYRatio = engine.simulatorFingerStrokeLastYRatio;
     engine.simulatorFingerStrokeRatios.clear();
+    ResetSimulatorPrediction(engine);
     engine.activePointerCount = 0;
     engine.multitouchGestureActive = false;
 }
@@ -1551,7 +1837,17 @@ void AppendSyntheticObject(std::ostringstream& builder, const SimulatorSynthetic
             << "\"pageId\":\"" << EscapeJsonString(object.pageId) << "\","
             << "\"closed\":" << (object.closed ? "true" : "false") << ",";
     AppendSyntheticObjectBounds(builder, object);
-    builder << ",\"layer\":\"ink\""
+    builder << ",\"points\":[";
+    for (size_t pointIndex = 0; pointIndex < object.strokePoints.size(); ++pointIndex) {
+        if (pointIndex > 0) {
+            builder << ",";
+        }
+        builder << "{"
+                << "\"x\":" << object.strokePoints[pointIndex].x << ","
+                << "\"y\":" << object.strokePoints[pointIndex].y
+                << "}";
+    }
+    builder << "],\"layer\":\"ink\""
             << "}";
 }
 
@@ -2394,6 +2690,8 @@ public:
         if (iterator == engine->documents.end()) {
             return false;
         }
+        const std::string activePageId = ResolveSessionActivePageId(iterator->second);
+        const SimulatorPageDescriptor* activeDescriptor = FindPageDescriptor(iterator->second, activePageId);
 
         const std::string normalizedAction = action == "down" || action == "move" || action == "up" || action == "cancel"
             ? action
@@ -2414,6 +2712,7 @@ public:
             engine->simulatorFingerStrokeLastYRatio = normalizedY;
             engine->simulatorFingerStrokeRatios.clear();
             AppendSimulatorFingerStrokeRatioPoint(*engine, normalizedX, normalizedY);
+            UpdateSimulatorPrediction(*engine, activeDescriptor);
             return true;
         }
 
@@ -2428,6 +2727,7 @@ public:
             engine->simulatorFingerStrokeLastXRatio = normalizedX;
             engine->simulatorFingerStrokeLastYRatio = normalizedY;
             AppendSimulatorFingerStrokeRatioPoint(*engine, normalizedX, normalizedY);
+            UpdateSimulatorPrediction(*engine, activeDescriptor);
             return true;
         }
 
@@ -2455,6 +2755,34 @@ public:
 
         ResetSimulatorFingerStroke(*engine);
         return true;
+    }
+
+    std::string GetSimulatorPrediction(const std::string& engineId) override
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        SimulatorEngineState* engine = FindEngineLocked(engineId);
+        if (engine == nullptr) {
+            return R"({"status":"missing-engine","suppressed":false,"cpuBusyRatio":0,"points":[]})";
+        }
+        const bool suppressed = CurrentTimeMillis() < engine->predictionSuppressedUntilMs;
+        std::ostringstream builder;
+        builder << "{"
+                << "\"status\":\"ok\","
+                << "\"suppressed\":" << (suppressed ? "true" : "false") << ","
+                << "\"cpuBusyRatio\":" << engine->predictionCpuBusyRatio << ","
+                << "\"points\":[";
+        for (size_t index = 0; index < engine->simulatorPredictedStrokeRatios.size(); ++index) {
+            if (index > 0) {
+                builder << ",";
+            }
+            const SimulatorStrokePoint& point = engine->simulatorPredictedStrokeRatios[index];
+            builder << "{"
+                    << "\"x\":" << ClampUnitRatio(point.x) << ","
+                    << "\"y\":" << ClampUnitRatio(point.y)
+                    << "}";
+        }
+        builder << "]}";
+        return builder.str();
     }
 
     bool SetBackend(const std::string& engineId, const std::string& backend) override

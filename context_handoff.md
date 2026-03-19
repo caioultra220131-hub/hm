@@ -1,69 +1,159 @@
 # Context Handoff
 
-Date: 2026-03-13
+Date: 2026-03-19
 
 ## Current Objective
 
-There is no active blocker right now.
+Prepare the local `main` workspace for release readiness without losing the recent editor changes.
 
-The accepted editor / immersive / autosave / finger / scale chain is already merged into local `main`.
+The active code path now includes:
 
-Current branch state:
+- toolbar and property-panel redesign work in the editor
+- custom color dialog and eyedropper flow
+- simulator finger-writing improvements and prediction bridge
+- native/ETS plumbing for simulator prediction and brush sync
 
-- local `main`: `eeed52c3cc474a0f58a7f39322d596b45a715947` `Merge branch 'codex/bugfix/page-scale-stability-b' into main`
-- merged-in accepted lineage already on `main`: `89228da` -> `c8a9543` / `82cab12` -> `ad84b8a` / `b2e83ce` -> `20ba9a4` -> `aca47d9` -> merge commits `558e688` and `eeed52c`
+The immediate unresolved product question is whether the newest eyedropper fix fully removes the freeze on tap. The latest package was built, installed, and started, but that exact build has not been re-verified by the user yet.
 
-Treat local `main` as the authoritative editor baseline unless a future task explicitly says to validate another active branch.
+## Current Branch / Workspace State
 
-## Accepted Scope On Current Baseline
+- branch: `main`
+- HEAD: `0dc93a40f6048856e94f3558e9ffa6f3e2eccf20`
+- worktree is dirty
 
-The accepted chain now present on `main` covers:
+Current dirty state categories:
 
-- default single-finger vertical scroll without requiring the hand tool
-- overflow-state free X/Y pan
-- finger-writing mode and simulator-side finger validation path
-- finger coordinate alignment between touch location and visible canvas placement
-- page-scale stability across active-page changes
-- immersive single-layer canvas shell
-- minimal rail with collapse/reopen, search, and filter
-- page HUD that appears during interaction and supports jump input
-- floating toolbar snap behavior
-- white rail/action surface and top action group placement
-- quiet content-driven autosave with no always-visible autosave chip
+1. real source changes
+- `entry/src/main/ets/pages/EditorWorkspace.ets`
+- `entry/src/main/ets/services/NativeNoteEngine.ets`
+- `entry/src/main/cpp/napi_bridge.cpp`
+- `entry/src/main/cpp/napi_init.cpp`
+- `entry/src/main/cpp/napi_runtime_simulator.cpp`
+- `entry/src/main/cpp/note_engine_runtime.h`
+- `entry/src/main/cpp/types/libentry/Index.d.ts`
+- `entry/src/main/ets/entryability/EntryAbility.ets`
+- `entry/src/main/ets/models/NativeNoteContracts.ets`
+- `build-profile.json5`
+- `oh-package.json5`
+- `oh-package-lock.json5`
 
-## Latest Accepted Test Result
+2. mixed staged/unstaged file
+- `entry/src/main/ets/pages/EditorWorkspace.ets` is `MM`
+- staged portion is older canvas action group positioning work
+- unstaged portion contains most of the recent editor / color / toolbar work
 
-Latest confirmed baseline:
+3. tracked build garbage
+- `.hvigor/*`
+- `oh_modules/.ohpm/lock.json5`
+- these are tracked in git today, so every build dirties the repo
 
-- `main`
-- HEAD commit `eeed52c3cc474a0f58a7f39322d596b45a715947`
+4. local process notes
+- `.learnings/ERRORS.md`
+- `.learnings/LEARNINGS.md`
 
-Latest confirmed behavior:
+## Latest Functional Changes
 
-- no default autosave status chip on the main editor surface
-- autosave only after real content mutation settles
-- pure scroll/zoom/pan/tool/rail UI interactions do not trigger save
-- content still persists after back/reopen
+### Editor / Toolbar
 
-## Non-Blocking Residual Note
+Main file:
+- `entry/src/main/ets/pages/EditorWorkspace.ets`
 
-One path was not fully re-enacted in the final quiet-autosave verification:
+Recent scope includes:
 
-- dirty-content add-page / switch-page UI path
+- horizontal and vertical toolbar/property-panel restructuring
+- vertical property column behavior
+- width preset interaction changes
+- Chinese copy cleanup in visible editor strings
+- page rail and action-group placement changes
 
-No blocker was reported for that path, and the flush-guard patch was added specifically for it. Treat this as a non-blocking follow-up observation, not as an active failure.
+### Custom Color / Eyedropper
 
-## Routing Rules If Work Reopens
+Files:
+- `entry/src/main/ets/pages/EditorWorkspace.ets`
+- `market_components/painting_color_selector/painting_color_selector/src/main/ets/comp/ColorSelector.ets`
 
-- Route to A for simulator/native bridge, finger telemetry, coordinate mapping, and validation-path regressions.
-- Route to B for editor UI, rail, toolbar, autosave, page HUD, and ArkTS-side interaction polish.
-- Route to Test only after a new patch lands on the active branch being validated.
+Current implementation direction:
 
-## Reopen Rules
+- official color selector component is integrated via `market_components`
+- host page owns the actual sampling behavior
+- on entering sampling mode, the custom color dialog is no longer merely transparent; it is not built while sampling is active
+- the official component no longer keeps its old `pixelMap / getComponentSnapshot / readPixelsSync` sampling path
 
-If this editor work reopens:
+Risk note:
 
-1. branch from the current active baseline, which is now `main`, unless a newer branch is explicitly designated
-2. preserve the accepted finger-writing / coordinate-alignment / scale-stability chain unless a new regression proves otherwise
-3. keep the immersive shell and minimal rail direction unless the task explicitly replaces that UX
-4. validate against the current active head, not against stale feature worktrees or pre-merge assumptions
+- the latest fix was installed, but user has not yet confirmed whether tapping the eyedropper still freezes
+
+### Simulator Writing / Prediction
+
+Files:
+- `entry/src/main/ets/services/NativeNoteEngine.ets`
+- `entry/src/main/cpp/napi_bridge.cpp`
+- `entry/src/main/cpp/napi_init.cpp`
+- `entry/src/main/cpp/napi_runtime_simulator.cpp`
+- `entry/src/main/cpp/note_engine_runtime.h`
+- `entry/src/main/cpp/types/libentry/Index.d.ts`
+
+Current scope includes:
+
+- simulator finger-event injection path
+- simulator prediction bridge
+- transient predicted stroke rendering path
+- brush color / width synchronization to runtime
+
+## Component Source Status
+
+The release-relevant component source remains local and should be preserved:
+
+- `market_components/painting_color_selector/painting_color_selector`
+
+Non-essential component artifacts already removed:
+
+- `market_components/painting_color_selector1.0.0.zip`
+- component `screenshots/`
+- component `src/test/`
+- component `src/ohosTest/`
+
+## Build / Install Status
+
+Latest command path used successfully:
+
+- build: `hvigor assembleHap --mode module -p product=simulator --analyze=normal --parallel --incremental`
+- install: `hdc -t 127.0.0.1:5555 install -r entry/build/simulator/outputs/simulator/entry-simulator-unsigned.hap`
+- start: `hdc -t 127.0.0.1:5555 shell aa start -a EntryAbility -b com.example.myapplication`
+
+Latest state:
+
+- build succeeded
+- install succeeded
+- start succeeded
+
+## Build Garbage Explanation
+
+The main recurring git noise is generated by normal local build tooling:
+
+- `hvigor` writes `.hvigor/cache`, `.hvigor/dependencyMap`, `.hvigor/outputs`, `.hvigor/report`
+- `ohpm install` updates `oh-package-lock.json5`, `oh_modules/.ohpm/lock.json5`, and dependency mirrors under `oh_modules`
+
+This repo currently tracks `.hvigor/*`, so ordinary builds create tracked modifications instead of ignored cache churn.
+
+## Immediate Next Steps
+
+Recommended order if work resumes:
+
+1. verify the newest eyedropper build on device/simulator
+- specifically test tap on eyedropper and confirm no freeze
+
+2. clean repo for release
+- decide whether to stop tracking `.hvigor/*`
+- decide whether `oh_modules` should remain tracked as-is
+- separate real source edits from build garbage
+
+3. normalize git state before release work
+- split `EditorWorkspace.ets` staged vs unstaged changes
+- keep release-relevant source only
+
+## Do Not Assume
+
+- do not assume the latest eyedropper fix is user-verified
+- do not assume the current dirty state is safe to commit as one change
+- do not delete `market_components/painting_color_selector/painting_color_selector`; it is part of the active build

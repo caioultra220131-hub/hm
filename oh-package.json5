@@ -2,6 +2,7 @@
   "modelVersion": "6.0.1",
   "description": "Please describe the basic information.",
   "dependencies": {
+    "painting_color_selector": "file:./market_components/painting_color_selector/painting_color_selector"
   },
   "devDependencies": {
     "@ohos/hypium": "1.0.24",

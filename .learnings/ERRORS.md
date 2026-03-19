@@ -97,8 +97,7 @@ Using a hard-coded user-profile HarmonyOS SDK path for `hdc.exe` failed because 
 
 ### Error
 ```text
-& : 无法将“C:\Users\lasrorder\AppData\Local\Huawei\Sdk\openharmony\10\toolchains\hdc.exe”项识别为 cmdlet、函数、脚本文件或可运行程序的名称。
-```
+& : 无法将“C:\Users\lasrorder\AppData\Local\Huawei\Sdk\openharmony\10\toolchains\hdc.exe”项识别�?cmdlet、函数、脚本文件或可运行程序的名称�?```
 
 ### Context
 - Command attempted: `& 'C:\Users\lasrorder\AppData\Local\Huawei\Sdk\openharmony\10\toolchains\hdc.exe' list targets`
@@ -126,8 +125,7 @@ The H-thread dispatch guide points to a root `README.md`, but the actual wake-up
 
 ### Error
 ```text
-Get-Content : 找不到路径“C:\Users\lasrorder\hw\MyApplication\README.md”，因为该路径不存在。
-```
+Get-Content : 找不到路径“C:\Users\lasrorder\hw\MyApplication\README.md”，因为该路径不存在�?```
 
 ### Context
 - Command attempted: `Get-Content -Path 'C:\Users\lasrorder\hw\MyApplication\README.md'`
@@ -155,8 +153,7 @@ The thread-dispatch docs require `run-thread-work.ps1`, but no such script exist
 
 ### Error
 ```text
-Get-Content : 找不到路径“C:\Users\lasrorder\hw\MyApplication\run-thread-work.ps1”，因为该路径不存在。
-```
+Get-Content : 找不到路径“C:\Users\lasrorder\hw\MyApplication\run-thread-work.ps1”，因为该路径不存在�?```
 
 ### Context
 - Command attempted: `Get-Content -Raw 'C:\Users\lasrorder\hw\MyApplication\run-thread-work.ps1'`
@@ -266,8 +263,7 @@ When validating the embed composer on simulator, do not assume `uiInput drag` ca
 **Area**: config
 
 ### Summary
-在独立 worktree 中二次执行 `assembleApp` 时，Hvigor 可能命中损坏的外部 project cache，导致复跑失败，即使前一次构建已经成功。
-
+在独�?worktree 中二次执�?`assembleApp` 时，Hvigor 可能命中损坏的外�?project cache，导致复跑失败，即使前一次构建已经成功�?
 ### Error
 ```text
 ERROR: 00308003 Operation Error
@@ -283,8 +279,7 @@ Error Message: ENOENT: no such file C:\Users\lasrorder\.hvigor\project_caches\a7
 - The failure only appeared on a follow-up rerun used to capture the final log tail.
 
 ### Suggested Fix
-如果第一次构建已经成功，不要为了截取尾日志立刻重复执行 `assembleApp`。若必须复跑并出现该错误，先清理对应的 `C:\Users\lasrorder\.hvigor\project_caches\...\workspace` 缓存，再重新构建。
-
+如果第一次构建已经成功，不要为了截取尾日志立刻重复执�?`assembleApp`。若必须复跑并出现该错误，先清理对应�?`C:\Users\lasrorder\.hvigor\project_caches\...\workspace` 缓存，再重新构建�?
 ### Metadata
 - Reproducible: yes
 - Related Files: C:\Users\lasrorder\.hvigor\project_caches\a70d15d4daf7838e259339491f07bc55fcb270e720c867ae7668204fb44abf38\workspace
@@ -412,9 +407,7 @@ Attempted to verify simulator connectivity for manual uiInput reproduction, but 
 
 ### Error
 ```text
-Get-Command : 无法将“hdc”项识别为 cmdlet、函数、脚本文件或可运行程序的名称。
-hdc : 无法将“hdc”项识别为 cmdlet、函数、脚本文件或可运行程序的名称。
-```
+Get-Command : 无法将“hdc”项识别�?cmdlet、函数、脚本文件或可运行程序的名称�?hdc : 无法将“hdc”项识别�?cmdlet、函数、脚本文件或可运行程序的名称�?```
 
 ### Context
 - Operation attempted: confirm simulator connectivity before trying a real `uiInput` blank-note finger-write repro
@@ -427,5 +420,129 @@ Expose `hdc` on PATH for Codex shell sessions, or provide the absolute `hdc.exe`
 ### Metadata
 - Reproducible: yes
 - Related Files: C:\Users\lasrorder\hw\MyApplication\AGENTS.md
+
+---
+## [ERR-20260319-001] hdc-simulator-target-unavailable
+
+**Logged**: 2026-03-19T13:41:37.3190564+08:00
+**Priority**: medium
+**Status**: pending
+**Area**: tooling
+
+### Summary
+`hdc` could not see any simulator target even though the simulator window was open, so the built `hap` could not be installed or launched from the CLI.
+
+### Error
+```text
+[Empty]
+[Fail]Not match target founded, check connect-key please
+[Fail]ExecuteCommand need connect-key? please confirm a device by help info
+[Fail]Connect failed
+```
+
+### Context
+- Build status: `hvigor` compile succeeded locally before install attempt
+- Commands attempted:
+  - `hdc list targets`
+  - `hdc -t 127.0.0.1:5555 install -r <hap>`
+  - `hdc -t 127.0.0.1:5555 shell aa start -a EntryAbility -b com.example.myapplication`
+  - `hdc tconn 127.0.0.1:5555`
+- Result: no available target was registered with `hdc`
+
+### Suggested Fix
+Before install/start automation, verify the simulator is actually connected to `hdc` with `hdc list targets`. If empty, reconnect the simulator from DevEco Studio or re-establish the simulator's `hdc` bridge before retrying install commands.
+
+### Metadata
+- Reproducible: unknown
+- Related Files: entry/build/simulator/outputs/simulator/entry-simulator-unsigned.hap
+
+---
+
+## [ERR-20260319-002] playwright-browser-launch-conflict
+
+**Logged**: 2026-03-19T17:17:30.4173281+08:00
+**Priority**: medium
+**Status**: pending
+**Area**: tooling
+
+### Summary
+Playwright MCP failed to relaunch Chrome because the persistent browser profile was already locked by an existing session.
+
+### Error
+`	ext
+Error: browserType.launchPersistentContext: Failed to launch the browser process.
+`
+
+### Context
+- Operation attempted: reopen the logged-in Huawei developer product page after the user completed login
+- Browser log indicated the Chrome profile under AppData\\Local\\ms-playwright\\mcp-chrome was already open in another browser session
+- This blocked continued DOM inspection through the MCP browser tools
+
+### Suggested Fix
+When Playwright MCP reports a persistent profile launch conflict, prefer closing the stale MCP browser context first or switch to direct HTTP/API inspection rather than retrying the same launch.
+
+### Metadata
+- Reproducible: intermittent
+- Related Files: .learnings/ERRORS.md
+
+---
+
+## [ERR-20260319-003] ohpm-install-sandbox-network-block
+
+**Logged**: 2026-03-19T17:36:00+08:00
+**Priority**: medium
+**Status**: pending
+**Area**: tooling
+
+### Summary
+`ohpm install` can fail inside the Codex sandbox with `connect EACCES` even when the registry package exists and the same command succeeds once rerun with escalated network access.
+
+### Error
+```text
+ohpm WARN: EACCES exception found while fetch package "@keke/color-picker" from "https://ohpm.openharmony.cn/ohpm/", exception: request to https://ohpm.openharmony.cn/ohpm/@keke/color-picker failed, reason: connect EACCES 117.78.15.107:443
+ohpm ERROR: Run install command failed
+Error: 00617101 Fetch Pkg Info Failed
+Error Message: FetchPackageInfo: "@keke/color-picker" failed
+```
+
+### Context
+- Operation attempted: install the Huawei `painting_color_selector` component dependency tree from the project root
+- The failing dependency was `@keke/color-picker@1.0.4`, referenced by the downloaded component module
+- The same `ohpm install` command succeeded immediately after rerunning outside the sandbox with approved escalation
+
+### Suggested Fix
+When `ohpm` reports `connect EACCES` to the Harmony registry from this environment, treat it as a sandbox network restriction first. Retry the same install command with escalated permissions instead of assuming the package is missing.
+
+### Metadata
+- Reproducible: yes
+- Related Files: oh-package.json5, market_components/painting_color_selector/painting_color_selector/oh-package.json5
+
+---
+## [ERR-20260319-001] subagent-capacity-limit-during-validation
+
+**Logged**: 2026-03-19T00:00:00+08:00
+**Priority**: medium
+**Status**: pending
+**Area**: tooling
+
+### Summary
+Validation subagent creation failed because the session had already reached the active agent limit, and one existing agent was also unavailable for fresh work.
+
+### Error
+`	ext
+collab spawn failed: agent thread limit reached (max 6)
+`
+
+### Context
+- Operation attempted: spawn a dedicated testing/review agent after implementation
+- Existing agent Mill had already failed earlier with a usage/capacity issue
+- Fallback used: continue validation in the head thread and reuse an existing responsive agent when possible
+
+### Suggested Fix
+Before spawning a new validation agent, check whether an existing agent can be reused or whether inactive agents should be closed first.
+
+### Metadata
+- Reproducible: intermittently
+- Related Files: .learnings/ERRORS.md
 
 ---

@@ -1,6 +1,8 @@
 # 临时文件
 tmp/
+tmp-*
 *.log
+.hvigor/report/report-*.json
 
 # 构建产物
 entry/build/

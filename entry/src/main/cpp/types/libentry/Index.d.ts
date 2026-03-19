@@ -15,6 +15,7 @@ declare const entry: {
     pageYRatio: number,
     pointerCount: number
   ) => boolean;
+  getSimulatorPrediction: (engineId: string) => string;
   setBackend: (engineId: string, backend: string) => boolean;
   setDocumentMode: (engineId: string, mode: string) => boolean;
   setBrushColor: (engineId: string, colorHex: string) => boolean;

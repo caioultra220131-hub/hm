@@ -189,6 +189,11 @@ export interface NativeSceneObjectBounds {
   maxY: number;
 }
 
+export interface NativeScenePoint {
+  x: number;
+  y: number;
+}
+
 export interface NativeSceneObject {
   id: string;
   nodeType: string;
@@ -200,6 +205,7 @@ export interface NativeSceneObject {
   pointCount: number;
   closed: boolean;
   bounds: NativeSceneObjectBounds;
+  points?: NativeScenePoint[];
   layer: NativeLayerId;
   pageIndex?: number | null;
   pageId?: string;
